@@ -29,6 +29,36 @@ fn string_literal(s: &str) -> String {
     }
 }
 
+/// Strip value modifiers (`lib.mkDefault`, `lib.mkForce`, `lib.mkOverride <n>`)
+/// so the control compares and edits the value that is actually assigned.
+fn unwrap_modifiers(text: &str) -> String {
+    let mut t = text.trim();
+    loop {
+        let rest = t
+            .strip_prefix("lib.mkDefault")
+            .or_else(|| t.strip_prefix("lib.mkForce"))
+            .or_else(|| {
+                t.strip_prefix("lib.mkOverride").map(|r| {
+                    r.trim_start()
+                        .trim_start_matches(|c: char| c.is_ascii_digit())
+                })
+            });
+        match rest.map(str::trim) {
+            Some(r) if !r.is_empty() => t = r,
+            _ => break,
+        }
+    }
+    t.to_string()
+}
+
+/// Nix truthiness: only `false`, `null`, and the numeric zero forms are falsy.
+fn truthy(value: &str) -> bool {
+    !matches!(
+        unwrap_modifiers(value).trim(),
+        "false" | "null" | "0" | "0.0"
+    )
+}
+
 /// A dropdown or radio choice: numbers and booleans stay verbsatim, anything
 /// else is quoted, because `choices` in the DSL are lists of strings.
 fn choice_literal(raw: &str) -> String {
@@ -113,10 +143,17 @@ fn canonical_list(original: &str, packages: bool) -> Option<String> {
     }
 }
 
+/// The module names a module control holds. A list literal yields its elements;
+/// a bare single reference (e.g. `self.modules.homeManager.foo`) yields that one
+/// expression.
+fn module_items(text: &str) -> Option<Vec<String>> {
+    value::list_items(text).or_else(|| value::single_expr(text).map(|e| vec![e]))
+}
+
 /// Canonical form of a module list. The editor stores each item with its scope
 /// prefix stripped, so strip the same prefix before re-serializing.
 fn canonical_module_list(original: &str, prefix: &str) -> Option<String> {
-    let items = value::list_items(original)?;
+    let items = module_items(original)?;
     let names: Vec<String> = items
         .iter()
         .map(|item| {
@@ -345,7 +382,25 @@ impl Editor {
     /// Whether the editor still holds the original value, ignoring formatting
     /// differences, so an untouched control never triggers a rewrite.
     pub fn unchanged(&self, original: &str) -> bool {
+        let original = unwrap_modifiers(original);
+        let original = original.as_str();
         match self {
+            Editor::Switch(w) => w.is_active() == truthy(original),
+            Editor::Spin(w) => match original.trim().parse::<f64>() {
+                Ok(v) => (w.value() - v).abs() < 1e-9,
+                Err(_) => self.to_nix().trim() == original.trim(),
+            },
+            Editor::Slider(w) => match original.trim().parse::<f64>() {
+                Ok(v) => (w.value() - v).abs() < 1e-9,
+                Err(_) => self.to_nix().trim() == original.trim(),
+            },
+            Editor::Text(w) => w.text() == entry_text(original),
+            Editor::Path(w) => w.text() == entry_text(original),
+            Editor::Multiline { view, .. } => {
+                let buffer = view.buffer();
+                let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false);
+                text.as_str() == parse_string_literal(original)
+            }
             Editor::List { packages, .. } => match canonical_list(original, *packages) {
                 Some(canonical) => self.to_nix().trim() == canonical.trim(),
                 None => self.to_nix().trim() == original.trim(),
@@ -392,7 +447,8 @@ impl Editor {
 /// shape of the current value.
 pub fn build(record: &Record, type_str: Option<&str>, ctx: &BuildContext) -> Editor {
     let spec = &record.spec;
-    let value_text = &record.value;
+    let value_text = unwrap_modifiers(&record.value);
+    let value_text = value_text.as_str();
     match choose_widget(record, type_str) {
         WidgetKind::Switch => Editor::Switch(build_switch(value_text)),
         WidgetKind::Dropdown | WidgetKind::Radio => {
@@ -537,7 +593,7 @@ fn enum_choices(type_str: &str) -> Option<Vec<String>> {
 
 fn build_switch(value_text: &str) -> gtk::Switch {
     let switch = gtk::Switch::new();
-    switch.set_active(value_text.trim() == "true");
+    switch.set_active(truthy(value_text));
     switch.set_halign(gtk::Align::Start);
     switch
 }
@@ -882,7 +938,7 @@ fn build_module_list(
     }
 
     let mut prefix = String::new();
-    for item in value::list_items(value_text).unwrap_or_default() {
+    for item in module_items(value_text).unwrap_or_default() {
         let raw = item.trim();
         let name = prefixes
             .iter()
@@ -1132,6 +1188,44 @@ mod tests {
             canonical_module_list("[ common ]", ""),
             Some("[ common ]".to_string())
         );
+    }
+
+    #[test]
+    fn unwraps_value_modifiers() {
+        assert_eq!(unwrap_modifiers("lib.mkDefault true"), "true");
+        assert_eq!(unwrap_modifiers("lib.mkForce pkgs.git"), "pkgs.git");
+        assert_eq!(unwrap_modifiers("lib.mkOverride 70 [ \"a\" ]"), "[ \"a\" ]");
+        assert_eq!(unwrap_modifiers("  true  "), "true");
+        assert_eq!(unwrap_modifiers("lib.mkDefault"), "lib.mkDefault");
+    }
+
+    #[test]
+    fn reads_nix_truthiness() {
+        assert!(truthy("true"));
+        assert!(truthy("1"));
+        assert!(truthy("lib.mkDefault true"));
+        assert!(truthy("pkgs.linuxPackages_latest"));
+        assert!(!truthy("false"));
+        assert!(!truthy("0"));
+        assert!(!truthy("null"));
+    }
+
+    #[test]
+    fn canonicalises_single_module_reference() {
+        let original = "self.modules.homeManager.homeconfig-den";
+        assert_eq!(
+            canonical_module_list(original, "self.modules.homeManager."),
+            Some("[ self.modules.homeManager.homeconfig-den ]".to_string())
+        );
+        assert_eq!(
+            module_items("[ a b ]"),
+            Some(vec!["a".to_string(), "b".to_string()])
+        );
+        assert_eq!(
+            module_items("self.modules.nixos.foo"),
+            Some(vec!["self.modules.nixos.foo".to_string()])
+        );
+        assert_eq!(module_items("1 + 2"), None);
     }
 
     #[test]

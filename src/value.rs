@@ -98,6 +98,18 @@ pub fn list_items(text: &str) -> Option<Vec<String>> {
     )
 }
 
+/// Source text of a bare reference, when the value is a single identifier or
+/// attribute selection rather than a list.
+pub fn single_expr(text: &str) -> Option<String> {
+    let expr = parse_expr(text)?;
+    match expr {
+        Expr::Ident(_) | Expr::Select(_) => {
+            Some(expr.syntax().text().to_string().trim().to_string())
+        }
+        _ => None,
+    }
+}
+
 pub fn serialize_list(items: &[String]) -> String {
     if items.is_empty() {
         "[]".to_string()
