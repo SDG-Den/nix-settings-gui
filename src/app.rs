@@ -1519,6 +1519,8 @@ fn open_add_file(app: &Rc<App>, tx: &Tx) {
 
     let filename = gtk::Entry::new();
     filename.set_text("module.nix");
+    let module_name = gtk::Entry::new();
+    module_name.set_placeholder_text(Some("flake.modules.<kind>.<name>"));
     let directory = gtk::Entry::new();
     directory.set_text(&app.base.borrow());
     directory.set_hexpand(true);
@@ -1536,8 +1538,10 @@ fn open_add_file(app: &Rc<App>, tx: &Tx) {
     grid.attach(&kind, 1, 0, 1, 1);
     grid.attach(&gtk::Label::new(Some("Filename")), 0, 1, 1, 1);
     grid.attach(&filename, 1, 1, 1, 1);
-    grid.attach(&gtk::Label::new(Some("Directory")), 0, 2, 1, 1);
-    grid.attach(&directory_row, 1, 2, 1, 1);
+    grid.attach(&gtk::Label::new(Some("Module name")), 0, 2, 1, 1);
+    grid.attach(&module_name, 1, 2, 1, 1);
+    grid.attach(&gtk::Label::new(Some("Directory")), 0, 3, 1, 1);
+    grid.attach(&directory_row, 1, 3, 1, 1);
 
     dialog.content_area().append(&grid);
 
@@ -1547,8 +1551,9 @@ fn open_add_file(app: &Rc<App>, tx: &Tx) {
         dialog.connect_response(move |dialog, response| {
             if response == gtk::ResponseType::Accept {
                 let kind_id = kind.active_id().unwrap_or_else(|| "nixos".into());
+                let module_name = module_name.text().to_string();
                 let path = Path::new(&directory.text()).join(filename.text());
-                match write_template(&kind_id, &path) {
+                match write_template(&kind_id, &module_name, &path) {
                     Ok(()) => {
                         app.status.set_text(&format!("Created {}", path.display()));
                         let base = app.base.borrow().clone();
@@ -1570,23 +1575,41 @@ fn open_add_file(app: &Rc<App>, tx: &Tx) {
     dialog.present();
 }
 
-fn write_template(kind: &str, path: &Path) -> Result<(), String> {
+fn write_template(kind: &str, module_name: &str, path: &Path) -> Result<(), String> {
     let displayname = path
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "New menu".into());
-    let signature = match kind {
-        "raw" => "{ ... }:",
-        "home" => "{ config, pkgs, ... }:",
-        _ => "{ config, pkgs, ... }:",
-    };
-    let template = format!(
-        "/* @menu\n   displayname = \"{displayname}\";\n   order = 1000;\n*/\n\n{signature}\n\n{{\n}}\n"
-    );
+    let template = template_for(&displayname, kind, module_name, path);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     std::fs::write(path, template).map_err(|e| e.to_string())
+}
+
+/// Build a new module file. Raw files are plain functions for non-flake-parts
+/// use; NixOS and home-manager files wrap their body in the flake-parts
+/// `flake.modules.<kind>.<name>` container. The module name falls back to the
+/// file stem when the user leaves it blank.
+fn template_for(displayname: &str, kind: &str, module_name: &str, path: &Path) -> String {
+    let header = format!("/* @menu\n   displayname = \"{displayname}\";\n   order = 1000;\n*/\n\n");
+    let name = if module_name.trim().is_empty() {
+        path.file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "module".into())
+    } else {
+        module_name.trim().to_string()
+    };
+    let body = match kind {
+        "raw" => "{ ... }:\n\n{\n}\n".to_string(),
+        "home" => format!(
+            "{{ self, inputs, ... }}:\n\n{{\n\nflake.modules.homeManager.{name} = {{ pkgs, ... }}: {{\n\n}};\n}}\n"
+        ),
+        _ => format!(
+            "{{ self, inputs, ... }}:\n\n{{\n\nflake.modules.nixos.{name} = {{ pkgs, ... }}: {{\n\n}};\n}}\n"
+        ),
+    };
+    format!("{header}{body}")
 }
 
 fn open_add_option(app: &Rc<App>, file: &str, origin: &str) {
@@ -2053,5 +2076,25 @@ mod tests {
     fn offsets_scroll_above_the_target() {
         assert_eq!(scroll_offset(120.0), 108.0);
         assert_eq!(scroll_offset(0.0), -12.0);
+    }
+
+    #[test]
+    fn writes_kind_specific_templates() {
+        let path = Path::new("/tmp/leaf.nix");
+
+        let raw = template_for("leaf", "raw", "", path);
+        assert!(raw.contains("{ ... }:"));
+        assert!(raw.ends_with("{\n}\n"));
+        assert!(!raw.contains("flake.modules"));
+
+        let nixos = template_for("leaf", "nixos", "audio", path);
+        assert!(nixos.contains("{ self, inputs, ... }:"));
+        assert!(nixos.contains("flake.modules.nixos.audio = { pkgs, ... }:"));
+
+        let home = template_for("leaf", "home", "shell", path);
+        assert!(home.contains("flake.modules.homeManager.shell = { pkgs, ... }:"));
+
+        let fallback = template_for("leaf", "nixos", "   ", path);
+        assert!(fallback.contains("flake.modules.nixos.leaf = { pkgs, ... }:"));
     }
 }
