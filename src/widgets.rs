@@ -86,18 +86,13 @@ fn serialize_packages(entries: &[String]) -> String {
     }
 }
 
-/// Serialize a module list. When the value already sits in a `with
-/// flake.modules.<kind>;` scope the bare names are written; otherwise each name
-/// is fully qualified.
-fn serialize_modules(names: &[String], kind: ModuleKind, qualified: bool) -> String {
-    let items: Vec<String> = if qualified {
-        names
-            .iter()
-            .map(|n| format!("{}.{}", kind.prefix(), n.trim()))
-            .collect()
-    } else {
-        names.iter().map(|n| n.trim().to_string()).collect()
-    };
+/// Serialize a module list, prefixing each name with the scope qualifier the
+/// value already used (e.g. `self.modules.nixos.`), or none for bare names.
+fn serialize_modules(names: &[String], prefix: &str) -> String {
+    let items: Vec<String> = names
+        .iter()
+        .map(|n| format!("{prefix}{}", n.trim()))
+        .collect();
     value::serialize_list(&items)
 }
 
@@ -138,11 +133,20 @@ pub enum ModuleKind {
 }
 
 impl ModuleKind {
-    fn prefix(self) -> &'static str {
+    fn scope(self) -> &'static str {
         match self {
-            ModuleKind::Nixos => "flake.modules.nixos",
-            ModuleKind::Home => "flake.modules.homeManager",
+            ModuleKind::Nixos => "nixos",
+            ModuleKind::Home => "homeManager",
         }
+    }
+
+    /// The qualifiers a value may use, longest first, e.g.
+    /// `self.modules.nixos.` and `flake.modules.nixos.`.
+    fn prefixes(self) -> [String; 2] {
+        [
+            format!("self.modules.{}.", self.scope()),
+            format!("flake.modules.{}.", self.scope()),
+        ]
     }
 }
 
@@ -187,8 +191,7 @@ pub enum Editor {
     ModuleList {
         root: gtk::Box,
         entries: Rc<RefCell<Vec<gtk::Entry>>>,
-        kind: ModuleKind,
-        qualified: bool,
+        prefix: String,
     },
     Color(gtk::ColorDialogButton),
     Submodule {
@@ -218,6 +221,23 @@ impl Editor {
             Editor::Submodule { root, .. } => root.clone().upcast(),
             Editor::Raw { root, .. } => root.clone().upcast(),
         }
+    }
+
+    /// Whether this editor holds a text input (or another width-hungry control)
+    /// and should be stretched to fill the space left of its row label.
+    pub fn wants_width(&self) -> bool {
+        matches!(
+            self,
+            Editor::Text(_)
+                | Editor::Path(_)
+                | Editor::Multiline { .. }
+                | Editor::Raw { .. }
+                | Editor::Package { .. }
+                | Editor::List { .. }
+                | Editor::ModuleList { .. }
+                | Editor::Submodule { .. }
+                | Editor::Slider(_)
+        )
     }
 
     /// Render the editor's current state back to Nix source.
@@ -257,10 +277,7 @@ impl Editor {
                 }
             }
             Editor::ModuleList {
-                entries,
-                kind,
-                qualified,
-                ..
+                entries, prefix, ..
             } => {
                 let names: Vec<String> = entries
                     .borrow()
@@ -268,7 +285,7 @@ impl Editor {
                     .map(|e| e.text().trim().to_string())
                     .filter(|n| !n.is_empty())
                     .collect();
-                serialize_modules(&names, *kind, *qualified)
+                serialize_modules(&names, prefix)
             }
             Editor::Color(w) => {
                 let rgba = w.rgba();
@@ -330,7 +347,7 @@ impl Editor {
 pub fn build(record: &Record, type_str: Option<&str>, ctx: &BuildContext) -> Editor {
     let spec = &record.spec;
     let value_text = &record.value;
-    match choose_widget(spec, value_text, type_str) {
+    match choose_widget(record, type_str) {
         WidgetKind::Switch => Editor::Switch(build_switch(value_text)),
         WidgetKind::Dropdown | WidgetKind::Radio => {
             let choices = resolve_choices(spec, type_str);
@@ -370,17 +387,38 @@ pub fn is_package(record: &Record) -> bool {
     )
 }
 
-fn choose_widget(spec: &OptionSpec, value_text: &str, type_str: Option<&str>) -> WidgetKind {
+fn choose_widget(record: &Record, type_str: Option<&str>) -> WidgetKind {
+    let spec = &record.spec;
+    let value_text = &record.value;
     if let Some(widget) = spec.widget {
         if widget == WidgetKind::Spin && spec.min.is_some() && spec.max.is_some() {
             return WidgetKind::Slider;
         }
         return widget;
     }
+    if let Some(widget) = import_widget_kind(record) {
+        return widget;
+    }
     if let Some(widget) = type_str.and_then(widget_from_type) {
         return widget;
     }
     widget_from_kind(value::classify(value_text))
+}
+
+/// A top-level `imports` list becomes a dedicated module-import control: NixOS
+/// modules for a `modules.nixos.*` origin, home-manager modules for
+/// `modules.homeManager.*`.
+fn import_widget_kind(record: &Record) -> Option<WidgetKind> {
+    if record.segments.len() != 1 || record.segments[0] != "imports" {
+        return None;
+    }
+    if record.origin.starts_with("modules.nixos.") {
+        Some(WidgetKind::NixosModules)
+    } else if record.origin.starts_with("modules.homeManager.") {
+        Some(WidgetKind::HmModules)
+    } else {
+        None
+    }
 }
 
 fn widget_from_type(type_str: &str) -> Option<WidgetKind> {
@@ -518,6 +556,7 @@ fn build_entry(value_text: &str, spec: &OptionSpec, monospace: bool) -> gtk::Ent
     let entry = gtk::Entry::new();
     entry.set_text(&unquoted);
     entry.set_hexpand(true);
+    entry.set_width_chars(44);
     if monospace {
         entry.add_css_class("monospace");
     }
@@ -560,6 +599,8 @@ fn build_multiline(value_text: &str, spec: &OptionSpec) -> (gtk::TextView, gtk::
     let rows = spec.rows.unwrap_or(4).max(2);
     let root = gtk::ScrolledWindow::builder()
         .child(&view)
+        .hexpand(true)
+        .min_content_width(440)
         .min_content_height((rows as i32) * 24)
         .has_frame(true)
         .build();
@@ -578,6 +619,8 @@ fn build_raw(value_text: &str, spec: &OptionSpec) -> (gtk::TextView, gtk::Scroll
     let rows = spec.rows.unwrap_or(5).max(2);
     let root = gtk::ScrolledWindow::builder()
         .child(&view)
+        .hexpand(true)
+        .min_content_width(440)
         .min_content_height((rows as i32) * 22)
         .has_frame(true)
         .build();
@@ -597,6 +640,7 @@ fn build_color(value_text: &str) -> gtk::ColorDialogButton {
 
 fn build_list(value_text: &str, packages: bool, search: Option<&PackageSearch>) -> Editor {
     let root = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    root.set_hexpand(true);
     let entries: Rc<RefCell<Vec<gtk::Entry>>> = Rc::new(RefCell::new(Vec::new()));
 
     let add = gtk::Button::with_label("Add item");
@@ -633,6 +677,8 @@ fn add_list_row(
     entry.set_hexpand(true);
     if packages {
         entry.add_css_class("monospace");
+        entry.set_editable(false);
+        entry.set_tooltip_text(Some("Choose a package with the search button"));
     }
     if let Some(search) = search {
         row.append(&attach_package_search(&entry, search));
@@ -662,6 +708,8 @@ fn build_package_editor(
     search: Option<&PackageSearch>,
 ) -> Editor {
     let entry = build_entry(value_text, spec, true);
+    entry.set_editable(false);
+    entry.set_tooltip_text(Some("Choose a package with the search button"));
     let root = gtk::Box::new(gtk::Orientation::Horizontal, 4);
     root.set_hexpand(true);
     if let Some(search) = search {
@@ -699,11 +747,10 @@ fn attach_package_search(entry: &gtk::Entry, search: &PackageSearch) -> gtk::Men
 
     let entry = entry.clone();
     let search: PackageSearch = Rc::clone(search);
-    let pending: Rc<Cell<Option<glib::SourceId>>> = Rc::new(Cell::new(None));
+    let generation: Rc<Cell<u64>> = Rc::new(Cell::new(0));
     search_entry.connect_search_changed(move |field| {
-        if let Some(id) = pending.take() {
-            id.remove();
-        }
+        let current = generation.get() + 1;
+        generation.set(current);
         let term = field.text().to_string();
         if term.trim().len() < 2 {
             clear_rows(&list);
@@ -713,7 +760,11 @@ fn attach_package_search(entry: &gtk::Entry, search: &PackageSearch) -> gtk::Men
         let list = list.clone();
         let popover = popover.clone();
         let search = PackageSearch::clone(&search);
-        let id = glib::timeout_add_local_once(std::time::Duration::from_millis(300), move || {
+        let generation = generation.clone();
+        glib::timeout_add_local_once(std::time::Duration::from_millis(300), move || {
+            if generation.get() != current {
+                return;
+            }
             let entry = entry.clone();
             let list = list.clone();
             let popover = popover.clone();
@@ -736,7 +787,6 @@ fn attach_package_search(entry: &gtk::Entry, search: &PackageSearch) -> gtk::Men
                 }),
             );
         });
-        pending.set(Some(id));
     });
     button
 }
@@ -751,11 +801,12 @@ fn build_module_list(
     value_text: &str,
     kind: ModuleKind,
     choices: &[String],
-    record: &Record,
+    _record: &Record,
 ) -> Editor {
     let root = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    root.set_hexpand(true);
     let entries: Rc<RefCell<Vec<gtk::Entry>>> = Rc::new(RefCell::new(Vec::new()));
-    let qualified = record.wrapper.is_none();
+    let prefixes = kind.prefixes();
 
     if !choices.is_empty() {
         let labels: Vec<&str> = choices.iter().map(String::as_str).collect();
@@ -779,17 +830,25 @@ fn build_module_list(
         root.append(&bar);
     }
 
-    let prefix = format!("{}.", kind.prefix());
+    let mut prefix = String::new();
     for item in value::list_items(value_text).unwrap_or_default() {
-        let name = item.trim().strip_prefix(&prefix).unwrap_or(item.trim());
+        let raw = item.trim();
+        let name = prefixes
+            .iter()
+            .find_map(|p| raw.strip_prefix(p.as_str()))
+            .unwrap_or(raw);
+        if prefix.is_empty() {
+            if let Some(p) = prefixes.iter().find(|p| raw.starts_with(p.as_str())) {
+                prefix = p.clone();
+            }
+        }
         add_module_row(&root, &entries, name);
     }
 
     Editor::ModuleList {
         root,
         entries,
-        kind,
-        qualified,
+        prefix,
     }
 }
 
@@ -818,6 +877,7 @@ fn add_module_row(root: &gtk::Box, entries: &Rc<RefCell<Vec<gtk::Entry>>>, name:
 
 fn build_submodule(record: &Record, type_str: Option<&str>) -> Editor {
     let root = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    root.set_hexpand(true);
     let mut children = Vec::new();
     for mut child in scan::scan_value(&record.value) {
         offset_record(&mut child, record.byte_start, &record.file);
@@ -999,13 +1059,34 @@ mod tests {
     fn serialises_module_lists() {
         let names = vec!["audio".to_string(), "desktop".to_string()];
         assert_eq!(
-            serialize_modules(&names, ModuleKind::Nixos, true),
+            serialize_modules(&names, "flake.modules.nixos."),
             "[ flake.modules.nixos.audio flake.modules.nixos.desktop ]"
         );
         assert_eq!(
-            serialize_modules(&names, ModuleKind::Home, false),
-            "[ audio desktop ]"
+            serialize_modules(&names, "self.modules.homeManager."),
+            "[ self.modules.homeManager.audio self.modules.homeManager.desktop ]"
         );
-        assert_eq!(serialize_modules(&[], ModuleKind::Nixos, true), "[]");
+        assert_eq!(serialize_modules(&names, ""), "[ audio desktop ]");
+        assert_eq!(serialize_modules(&[], "flake.modules.nixos."), "[]");
+    }
+
+    #[test]
+    fn maps_imports_to_module_widgets() {
+        let mut record = Record {
+            segments: vec!["imports".to_string()],
+            origin: "modules.nixos.audio".to_string(),
+            ..Record::default()
+        };
+        assert_eq!(import_widget_kind(&record), Some(WidgetKind::NixosModules));
+
+        record.origin = "modules.homeManager.desktop".to_string();
+        assert_eq!(import_widget_kind(&record), Some(WidgetKind::HmModules));
+
+        record.origin = String::new();
+        assert_eq!(import_widget_kind(&record), None);
+
+        record.origin = "modules.nixos.audio".to_string();
+        record.segments = vec!["services".to_string(), "imports".to_string()];
+        assert_eq!(import_widget_kind(&record), None);
     }
 }

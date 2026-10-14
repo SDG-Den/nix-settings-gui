@@ -34,7 +34,7 @@ the `nixd` JSON-RPC client, and the span-patch plus `nixfmt` write path.
   menu and scrolls to and highlights the option.
 - "Current system only" checkbox: filters menus and options to the detected
   system (see section 6).
-- Advanced toggle: reveals `hidden` menus and `advanced` controls.
+- Advanced toggle: reveals `hidden` menus and `hidden`/`advanced` controls.
 - Close button: closes the window, which triggers the unsaved-changes prompt.
 
 ### 1.2 Left pane: menu list
@@ -54,7 +54,8 @@ the `nixd` JSON-RPC client, and the span-patch plus `nixfmt` write path.
 - Header from the selected file's `@menu` (`displayname`, `description`).
 - Controls grouped by `@option group` and sorted by `order`; ungrouped
   controls come first.
-- `advanced` controls collapse into an "Advanced" section.
+- `advanced` controls collapse into an "Advanced" section; `hidden` controls
+  render only while the Advanced toggle is on.
 - Each control shows its label, helper text, and an unsaved indicator when its
   staged value differs from the file.
 - Controls that resolve to another module (a merged import) render with an
@@ -109,6 +110,12 @@ against the flake's `nixosConfigurations.<host>`, and matches the live
 configuration where it can be read. When no host matches, the app falls back to
 showing shared modules and asks the user to pick a host. In "all settings"
 mode, every module and every host configuration is shown.
+
+In "current system only" mode, menus are filtered by the host's module import
+graph: a menu shows when a module its file defines is reachable from the host's
+configuration by following `imports` transitively. `@menu systems` overrides
+the graph, and the `hosts/<host>/` directory name is the fallback when no origin
+can be resolved.
 
 ## 7. Settings submenu
 

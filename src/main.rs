@@ -13,6 +13,8 @@ mod model;
 mod nixd;
 mod scan;
 #[allow(dead_code)]
+mod templates;
+#[allow(dead_code)]
 mod value;
 mod widgets;
 

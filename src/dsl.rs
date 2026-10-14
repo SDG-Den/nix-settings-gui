@@ -56,6 +56,26 @@ impl Directives {
         self.0.iter().rev().find(|(k, _)| k == key).map(|(_, v)| v)
     }
 
+    /// Iterate the raw `key = value` pairs in source order.
+    pub fn iter(&self) -> impl Iterator<Item = &(String, Lit)> {
+        self.0.iter()
+    }
+
+    /// A view of every key under `prefix.`, with the prefix stripped. Keys at
+    /// the top level that do not share the prefix are dropped.
+    pub fn sub(&self, prefix: &str) -> Directives {
+        let prefix = format!("{prefix}.");
+        Directives(
+            self.0
+                .iter()
+                .filter_map(|(k, v)| {
+                    k.strip_prefix(&prefix)
+                        .map(|rest| (rest.to_string(), v.clone()))
+                })
+                .collect(),
+        )
+    }
+
     pub fn string(&self, key: &str) -> Option<String> {
         match self.get(key)? {
             Lit::Str(s) => Some(s.clone()),
@@ -151,6 +171,7 @@ fn attr_name(attr: &Attr) -> Option<String> {
 pub enum MarkerKind {
     Menu,
     Option,
+    Template,
 }
 
 /// Recognise a marker comment and parse its body. `inner` is the comment text
@@ -161,14 +182,24 @@ pub fn parse_marker(inner: &str) -> Option<(MarkerKind, Directives)> {
     Some((kind, directives))
 }
 
-/// Strip `/* ... */` delimiters and hand the inside to `parse_marker`.
+/// Strip comment delimiters and hand the inside to `parse_marker`. Both
+/// `/* ... */` block comments and `# ...` line comments are accepted.
 pub fn parse_comment(text: &str) -> Option<(MarkerKind, Directives)> {
-    let inner = text.trim().strip_prefix("/*")?.strip_suffix("*/")?;
+    let trimmed = text.trim();
+    let inner = if let Some(rest) = trimmed.strip_prefix("/*") {
+        rest.strip_suffix("*/")?
+    } else {
+        trimmed.strip_prefix('#')?
+    };
     parse_marker(inner)
 }
 
 fn split_marker(s: &str) -> Option<(MarkerKind, &str)> {
-    for (tag, kind) in [("@menu", MarkerKind::Menu), ("@option", MarkerKind::Option)] {
+    for (tag, kind) in [
+        ("@menu", MarkerKind::Menu),
+        ("@option", MarkerKind::Option),
+        ("@template", MarkerKind::Template),
+    ] {
         if let Some(rest) = s.strip_prefix(tag) {
             if rest.is_empty() || rest.starts_with(char::is_whitespace) {
                 return Some((kind, rest));
@@ -317,6 +348,23 @@ mod tests {
     }
 
     #[test]
+    fn parses_template_marker_and_sub() {
+        let text = "/* @template\n label = \"Example\";\n kind = \"nixos\";\n placeholders.name.label = \"Module name\";\n placeholders.name.default = \"example\";\n*/";
+        let (kind, d) = parse_comment(text).unwrap();
+        assert_eq!(kind, MarkerKind::Template);
+        assert_eq!(d.string("label").as_deref(), Some("Example"));
+        let placeholders = d.sub("placeholders");
+        assert_eq!(
+            placeholders.string("name.label").as_deref(),
+            Some("Module name")
+        );
+        assert_eq!(
+            placeholders.string("name.default").as_deref(),
+            Some("example")
+        );
+    }
+
+    #[test]
     fn parses_option_marker() {
         let text = "/* @option widget = \"dropdown\"; label = \"Time zone\"; choices = [ \"Europe/Amsterdam\" \"UTC\" ]; */";
         let (kind, d) = parse_comment(text).unwrap();
@@ -341,6 +389,17 @@ mod tests {
         assert_eq!(opt.step, Some(0.5));
         assert_eq!(opt.digits, Some(2));
         assert!(opt.advanced);
+    }
+
+    #[test]
+    fn parses_hash_line_comments() {
+        let (kind, d) =
+            parse_comment("# @option widget = \"packages\"; label = \"Base\";").unwrap();
+        assert_eq!(kind, MarkerKind::Option);
+        let opt = OptionSpec::from_directives(&d);
+        assert_eq!(opt.widget, Some(WidgetKind::Packages));
+        assert_eq!(opt.label.as_deref(), Some("Base"));
+        assert!(parse_comment("# just a note").is_none());
     }
 
     #[test]

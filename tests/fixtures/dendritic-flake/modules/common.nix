@@ -14,7 +14,7 @@
     time.timeZone = "Europe/Amsterdam";
 
     # @option widget = "dropdown"; choices = [ "en_US.UTF-8" "nl_NL.UTF-8" ];
-    i18n.defaultLocale = "en_US.UTF-8";
+    i18n.defaultLocale = "\"en_US.UTF-8\"";
 
     # @option widget = "switch"; label = "Allow unfree packages";
     nixpkgs.config.allowUnfree = true;
@@ -26,9 +26,14 @@
     ];
 
     # @option widget = "packages"; label = "Base packages";
-    environment.systemPackages = with pkgs; [
-      git
-      vim
-    ];
+    environment.systemPackages =
+      with pkgs;
+      with pkgs;
+      [
+        git
+        vim
+        btop
+        micro
+      ];
   };
 }

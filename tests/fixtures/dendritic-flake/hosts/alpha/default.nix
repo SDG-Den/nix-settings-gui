@@ -11,7 +11,7 @@
     modules = [
       inputs.home-manager.nixosModules.home-manager
       self.modules.nixos.common
-      self.modules.nixos.audio
+      self.modules.nixos.bundle
       {
         home-manager.users.den.imports = [
           self.modules.homeManager.desktop

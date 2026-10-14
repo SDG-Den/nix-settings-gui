@@ -68,6 +68,8 @@ pub struct MenuModel {
     pub file: String,
     pub spec: MenuSpec,
     pub records: Vec<Record>,
+    /// Module origins this file defines, used to filter by host import graph.
+    pub origins: Vec<String>,
 }
 
 impl MenuModel {

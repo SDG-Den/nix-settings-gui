@@ -13,11 +13,12 @@ main.rs
     widgets.rs  widget factory and value serialization
     edit.rs     span-patch engine, nixfmt, atomic write
     scan.rs     file discovery and record extraction
-    dsl.rs      @menu / @option comment parsing
+    dsl.rs      @menu / @option / @template comment parsing
     model.rs    MenuModel, categories, ordering, filtering
     metadata.rs nixd and nix-eval option metadata
     nixd.rs     LSP JSON-RPC client
     value.rs    Nix literal classification and rendering
+    templates.rs  _-prefixed file templates and placeholder rendering
     config.rs   ~/.config/nix-settings-gui/config.json
   nix/options-to-json.nix  eval fallback that enumerates options
 ```
@@ -32,7 +33,10 @@ It skips `flake.nix`, names starting with `_`, and hidden directories. For every
 file it finds the `@menu` header and the `@option` comments with `dsl.rs`, and
 records the source span of each value. A file with no `@menu` header still
 becomes a menu named after the file. Files that fail to parse are listed with an
-error and skipped.
+error and skipped. For dendritic files it also records which
+`flake.modules.<kind>.<name>` origins the file defines and which module origins
+it imports, plus the modules each `flake.nixosConfigurations.<host>` pulls in,
+so host filtering can follow the import graph.
 
 Two helpers support add-option: `scan_value` reads the inner bindings of an
 attribute set so a submodule control can be built from a value, and
@@ -42,7 +46,9 @@ attribute set so a submodule control can be built from a value, and
 
 `model.rs` groups records into menus, sorts by `order` then name, and answers
 `menus_for(system)`, which returns the menus reachable from shared modules and
-from one host configuration. Multi-system filtering is built on that call:
+from one host configuration. It follows the recorded import graph transitively,
+falls back to `@menu systems` and the `hosts/<host>/` directory name, and is
+what multi-system filtering is built on:
 "system only" shows `menus_for(current_host)`, "all settings" shows everything.
 
 ## 4. Metadata

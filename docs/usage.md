@@ -20,7 +20,8 @@ Recent paths are remembered, so the selector offers them again next time.
 - The left pane lists every menu the scanner found, grouped by `@menu category`
   and sorted by `order`.
 - The right pane shows the selected menu: its header, the grouped controls, and
-  an Advanced section for controls marked `advanced` or `hidden`.
+  an Advanced section for controls marked `advanced`. A control marked `hidden`
+  appears only while the Advanced toggle is on.
 - A control shows its label, its helper text, and an indicator when its staged
   value differs from the file.
 - The search box filters the menu list and the visible controls. The "system
@@ -62,6 +63,12 @@ Edits are staged in memory and are not written until you save.
 template kind (raw function, NixOS module, or home-manager module), a filename,
 and a target directory. For a plain flake the app reminds you to add the module
 to the flake's imports; dendritic `import-tree` flakes need no import edit.
+
+The Kind dropdown also lists the templates found in the flake's `templates/`
+directory. These are `_`-prefixed files with a `@template` header (see
+`comment-syntax.md`, section 11). Selecting one prefills the filename and
+directory and adds a form field for each placeholder. On create, the
+placeholders are substituted and the result is written to the chosen path.
 
 ## 6. Adding an option
 

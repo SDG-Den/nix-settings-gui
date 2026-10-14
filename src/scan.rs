@@ -1,7 +1,7 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use rnix::ast::{Attr, AttrSet, AttrpathValue, Expr, HasEntry, InterpolPart};
+use rnix::ast::{Attr, AttrSet, AttrpathValue, Expr, HasEntry, InterpolPart, List, Select, With};
 use rnix::{NodeOrToken, SyntaxKind, SyntaxNode};
 use rowan::ast::AstNode;
 
@@ -15,6 +15,13 @@ pub struct FileScan {
     pub spec: MenuSpec,
     pub records: Vec<Record>,
     pub targets: Vec<String>,
+    /// Module origins this file defines, e.g. `modules.nixos.audio`.
+    pub origins: Vec<String>,
+    /// Module origins this file references, e.g. `modules.nixos.common`.
+    pub imports: Vec<String>,
+    /// Per-host direct module references, keyed by target, e.g.
+    /// `nixos:alpha`.
+    pub target_imports: HashMap<String, Vec<String>>,
 }
 
 /// The whole scan of a config tree.
@@ -22,28 +29,71 @@ pub struct FileScan {
 pub struct ScanResult {
     pub menus: Vec<MenuModel>,
     pub targets: Vec<String>,
+    /// Origin to the menu file that defines it.
+    pub origin_menu: HashMap<String, String>,
+    /// Origin to the origins it imports.
+    pub module_imports: HashMap<String, Vec<String>>,
+    /// Target to the origins its configuration pulls in directly.
+    pub target_imports: HashMap<String, Vec<String>>,
 }
 
 impl ScanResult {
-    /// Menu filenames restricted to one host. A shared menu (no `systems`)
-    /// always shows; a host directory name acts as a fallback when `systems`
-    /// is absent but the file sits under `hosts/<host>/`.
+    /// Menu filenames restricted to one host. A `systems` list overrides the
+    /// import graph; otherwise a menu shows when one of its origins is reachable
+    /// from the host's configuration. Menus with no origin fall back to the
+    /// `hosts/<host>/` directory name, and any file with neither restriction is
+    /// shared.
     pub fn menus_for(&self, host: &str) -> Vec<&MenuModel> {
+        let resolved = self.resolve_host(&format!("nixos:{host}"));
         self.menus
             .iter()
-            .filter(|menu| {
-                menu.spec.systems.is_empty() || menu.spec.systems.iter().any(|s| s == host)
-            })
-            .filter(|menu| {
-                if !menu.spec.systems.is_empty() {
-                    return true;
-                }
-                match menu_host_dir(&menu.file) {
-                    Some(dir) => dir == host,
-                    None => true,
-                }
-            })
+            .filter(|menu| self.menu_visible(menu, host, resolved.as_ref()))
             .collect()
+    }
+
+    fn menu_visible(
+        &self,
+        menu: &MenuModel,
+        host: &str,
+        resolved: Option<&HashSet<String>>,
+    ) -> bool {
+        if !menu.spec.systems.is_empty() {
+            return menu.spec.systems.iter().any(|s| s == host);
+        }
+        if !menu.origins.is_empty() {
+            if let Some(reachable) = resolved {
+                return menu.origins.iter().any(|o| reachable.contains(o));
+            }
+        }
+        match menu_host_dir(&menu.file) {
+            Some(dir) => dir == host,
+            None => true,
+        }
+    }
+
+    /// The origins reachable from a target by following module imports
+    /// transitively, or `None` when the target has no resolvable imports.
+    pub fn resolve_host(&self, target: &str) -> Option<HashSet<String>> {
+        let direct = self.target_imports.get(target)?;
+        let mut reachable = HashSet::new();
+        let mut stack = direct.clone();
+        while let Some(origin) = stack.pop() {
+            if !reachable.insert(origin.clone()) {
+                continue;
+            }
+            if let Some(next) = self.module_imports.get(&origin) {
+                for import in next {
+                    if !reachable.contains(import) {
+                        stack.push(import.clone());
+                    }
+                }
+            }
+        }
+        if reachable.is_empty() {
+            None
+        } else {
+            Some(reachable)
+        }
     }
 }
 
@@ -59,11 +109,32 @@ pub fn scan_root(root: &str) -> Result<ScanResult, String> {
         let text = std::fs::read_to_string(file)
             .map_err(|e| format!("cannot read {}: {e}", file.display()))?;
         let scan = scan_file(file, &text);
-        result.targets.extend(scan.targets);
+        result.targets.extend(scan.targets.clone());
+        for origin in &scan.origins {
+            result
+                .origin_menu
+                .entry(origin.clone())
+                .or_insert_with(|| scan.file.clone());
+            let entry = result.module_imports.entry(origin.clone()).or_default();
+            for import in &scan.imports {
+                if !entry.contains(import) {
+                    entry.push(import.clone());
+                }
+            }
+        }
+        for (target, imports) in &scan.target_imports {
+            let entry = result.target_imports.entry(target.clone()).or_default();
+            for import in imports {
+                if !entry.contains(import) {
+                    entry.push(import.clone());
+                }
+            }
+        }
         result.menus.push(MenuModel {
             file: scan.file,
             spec: scan.spec,
             records: scan.records,
+            origins: scan.origins,
         });
     }
 
@@ -119,7 +190,7 @@ pub fn scan_file(path: &Path, text: &str) -> FileScan {
 
     if let Some(set) = top_attrset(&expr) {
         if has_flake_container(&set) {
-            scan_dendritic(text, &file, &set, &mut scan.records, &mut scan.targets);
+            scan_dendritic(text, &set, &mut scan);
             return scan;
         }
     }
@@ -227,13 +298,8 @@ fn has_flake_container(set: &AttrSet) -> bool {
 
 /// Dendritic files express each module as `flake.modules.<kind>.<name>` and
 /// each host as `flake.nixosConfigurations.<host>`.
-fn scan_dendritic(
-    text: &str,
-    file: &str,
-    set: &AttrSet,
-    out: &mut Vec<Record>,
-    targets: &mut Vec<String>,
-) {
+fn scan_dendritic(text: &str, set: &AttrSet, scan: &mut FileScan) {
+    let file = scan.file.clone();
     for binding in set.attrpath_values() {
         let Some(path) = binding.attrpath() else {
             continue;
@@ -245,20 +311,33 @@ fn scan_dendritic(
 
         if comps[1] == "modules" && comps.len() >= 4 {
             let origin = format!("modules.{}.{}", comps[2], comps[3]);
+            scan.origins.push(origin.clone());
             let Some(value) = binding.value() else {
                 continue;
             };
             if let Some(Expr::AttrSet(body)) = peel_body(&value) {
-                collect_container(text, file, &origin, body.syntax(), &[], out);
+                collect_container(text, &file, &origin, body.syntax(), &[], &mut scan.records);
+                collect_module_refs(body.syntax(), &mut scan.imports);
             }
             continue;
         }
 
-        match comps[1].as_str() {
-            "nixosConfigurations" => targets.push(format!("nixos:{}", comps[2])),
-            "homeConfigurations" => targets.push(format!("home:{}", comps[2])),
-            "darwinConfigurations" => targets.push(format!("darwin:{}", comps[2])),
-            _ => {}
+        let target = match comps[1].as_str() {
+            "nixosConfigurations" => Some(format!("nixos:{}", comps[2])),
+            "homeConfigurations" => Some(format!("home:{}", comps[2])),
+            "darwinConfigurations" => Some(format!("darwin:{}", comps[2])),
+            _ => None,
+        };
+        if let Some(target) = target {
+            scan.targets.push(target.clone());
+            let Some(value) = binding.value() else {
+                continue;
+            };
+            let mut imports = Vec::new();
+            collect_module_refs(value.syntax(), &mut imports);
+            if !imports.is_empty() {
+                scan.target_imports.insert(target, imports);
+            }
         }
     }
 }
@@ -365,7 +444,7 @@ fn collect_binding(
             None => return,
         }
     }
-    if comps.is_empty() || comps[0] == "imports" {
+    if comps.is_empty() {
         return;
     }
     let mut segments = prefix.to_vec();
@@ -452,6 +531,114 @@ fn attr_component(attr: &Attr) -> Option<String> {
         },
         Attr::Dynamic(_) => None,
     }
+}
+
+/// Collect every `self.modules.<kind>.<name>` (or `flake.modules...`)
+/// reference appearing anywhere in `node`, normalized to `modules.<kind>.<name>`.
+/// Inside a `with self.modules.<kind>; [ a b ]` scope, the bare list items are
+/// module names, so they are normalized too.
+fn collect_module_refs(node: &SyntaxNode, out: &mut Vec<String>) {
+    for descendant in node.descendants() {
+        if descendant.kind() == SyntaxKind::NODE_SELECT {
+            let Some(select) = Select::cast(descendant) else {
+                continue;
+            };
+            if let Some(path) = dotted_path(&select) {
+                if let Some(origin) = module_origin_from_path(&path) {
+                    push_unique(out, origin);
+                }
+            }
+        } else if descendant.kind() == SyntaxKind::NODE_WITH {
+            collect_with_refs(&descendant, out);
+        }
+    }
+}
+
+/// The bare module names a `with self.modules.<kind>; [...]` scope brings in.
+fn collect_with_refs(node: &SyntaxNode, out: &mut Vec<String>) {
+    let Some(with) = With::cast(node.clone()) else {
+        return;
+    };
+    let Some(namespace) = with.namespace() else {
+        return;
+    };
+    let Some(path) = select_base_path(&namespace) else {
+        return;
+    };
+    let Some(kind) = module_kind_from_path(&path) else {
+        return;
+    };
+    let Some(body) = with.body() else {
+        return;
+    };
+    for descendant in body.syntax().descendants() {
+        if descendant.kind() != SyntaxKind::NODE_LIST {
+            continue;
+        }
+        let Some(list) = List::cast(descendant) else {
+            continue;
+        };
+        for item in list.items() {
+            if let Some(name) = bare_ident(&item) {
+                push_unique(out, format!("modules.{kind}.{name}"));
+            }
+        }
+    }
+}
+
+/// A list item that is just a bare name (optionally parenthesized).
+fn bare_ident(expr: &Expr) -> Option<String> {
+    match expr {
+        Expr::Ident(ident) => Some(ident.syntax().text().to_string()),
+        Expr::Paren(paren) => paren.expr().and_then(|inner| bare_ident(&inner)),
+        _ => None,
+    }
+}
+
+/// The module kind of a `with` namespace path such as `self.modules.nixos`.
+fn module_kind_from_path(path: &[String]) -> Option<String> {
+    let comps: Vec<&str> = path.iter().map(String::as_str).collect();
+    match comps.as_slice() {
+        [base, "modules", kind] if *base == "self" || *base == "flake" => Some((*kind).to_string()),
+        ["modules", kind] => Some((*kind).to_string()),
+        _ => None,
+    }
+}
+
+fn push_unique(out: &mut Vec<String>, origin: String) {
+    if !out.contains(&origin) {
+        out.push(origin);
+    }
+}
+
+/// Rebuild the dotted attribute path of a selection chain, e.g.
+/// `self.modules.nixos.audio` -> `["self","modules","nixos","audio"]`.
+fn dotted_path(select: &Select) -> Option<Vec<String>> {
+    let mut path = select_base_path(&select.expr()?)?;
+    for attr in select.attrpath()?.attrs() {
+        path.push(attr_component(&attr)?);
+    }
+    Some(path)
+}
+
+fn select_base_path(expr: &Expr) -> Option<Vec<String>> {
+    match expr {
+        Expr::Ident(ident) => Some(vec![ident.syntax().text().to_string()]),
+        Expr::Select(select) => dotted_path(select),
+        _ => None,
+    }
+}
+
+/// Normalize a dotted path to a `modules.<kind>.<name>` origin when it names a
+/// flake module, ignoring anything else.
+fn module_origin_from_path(path: &[String]) -> Option<String> {
+    let comps: Vec<&str> = path.iter().map(String::as_str).collect();
+    let (kind, name) = match comps.as_slice() {
+        [base, "modules", kind, name] if *base == "self" || *base == "flake" => (*kind, *name),
+        ["modules", kind, name] => (*kind, *name),
+        _ => return None,
+    };
+    Some(format!("modules.{kind}.{name}"))
 }
 
 fn line_col(text: &str, offset: usize) -> (u32, u32) {
@@ -744,5 +931,94 @@ in
             .collect();
         assert!(!beta.contains(&"Audio".to_string()));
         assert!(beta.contains(&"Common".to_string()));
+    }
+
+    #[test]
+    fn collects_module_origins_and_imports() {
+        let text = r#"{ self, ... }: {
+  flake.modules.nixos.common = { ... }: {
+    imports = [ self.modules.nixos.audio ];
+    time.timeZone = "UTC";
+  };
+  flake.nixosConfigurations.alpha = {
+    modules = [ self.modules.nixos.common ];
+  };
+}
+"#;
+        let scan = scan(text);
+        assert_eq!(scan.origins, vec!["modules.nixos.common".to_string()]);
+        assert_eq!(scan.imports, vec!["modules.nixos.audio".to_string()]);
+        assert_eq!(
+            scan.target_imports.get("nixos:alpha").cloned().unwrap(),
+            vec!["modules.nixos.common".to_string()]
+        );
+
+        let imports = scan
+            .records
+            .iter()
+            .find(|r| r.segments == ["imports"])
+            .unwrap();
+        assert_eq!(imports.origin, "modules.nixos.common");
+        assert_eq!(imports.path(), "imports");
+    }
+
+    #[test]
+    fn collects_modules_from_with_lists() {
+        let text = r#"{ self, ... }: {
+  flake.modules.nixos.base = { ... }: {
+    imports = with self.modules.nixos; [ common audio ];
+    home-manager.sharedModules = with self.modules.homeManager; [ desktop ];
+  };
+  flake.nixosConfigurations.alpha = {
+    modules = [ self.modules.nixos.base ];
+  };
+}
+"#;
+        let scan = scan(text);
+        assert_eq!(
+            scan.imports,
+            vec![
+                "modules.nixos.common".to_string(),
+                "modules.nixos.audio".to_string(),
+                "modules.homeManager.desktop".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn resolves_host_module_graph() {
+        let result = scan_root(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/dendritic-flake"
+        ))
+        .unwrap();
+
+        let alpha = result.resolve_host("nixos:alpha").unwrap();
+        assert!(alpha.contains("modules.nixos.common"));
+        assert!(alpha.contains("modules.nixos.audio"));
+        assert!(alpha.contains("modules.homeManager.desktop"));
+
+        let beta = result.resolve_host("nixos:beta").unwrap();
+        assert!(beta.contains("modules.nixos.common"));
+        assert!(beta.contains("modules.homeManager.desktop"));
+        assert!(!beta.contains("modules.nixos.audio"));
+
+        assert!(result.resolve_host("nixos:missing").is_none());
+    }
+
+    #[test]
+    fn menus_for_hides_unreachable_origins() {
+        let result = scan_root(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/dendritic-flake"
+        ))
+        .unwrap();
+        let alpha: Vec<String> = result
+            .menus_for("alpha")
+            .iter()
+            .map(|m| m.display_name())
+            .collect();
+        assert!(!alpha.contains(&"Unused".to_string()));
+        assert!(alpha.contains(&"Audio".to_string()));
     }
 }

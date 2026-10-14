@@ -244,13 +244,20 @@ pub fn nixpkgs_expr(flake_path: Option<&str>) -> String {
 }
 
 /// A running nixd process spoken to over stdio.
-struct Session {
+pub struct Session {
     stdin: ChildStdin,
     reader: BufReader<ChildStdout>,
+    nixpkgs: String,
+    next_id: i64,
 }
 
 impl Session {
     fn start(config: &Value) -> Result<Self, String> {
+        let nixpkgs = config
+            .pointer("/nixpkgs/expr")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
         let mut child = Command::new("nixd")
             .arg("--config")
             .arg(config.to_string())
@@ -261,9 +268,46 @@ impl Session {
             .map_err(|e| format!("failed to start nixd: {e}"))?;
         let mut stdin = child.stdin.take().ok_or("nixd has no stdin")?;
         let mut reader = BufReader::new(child.stdout.take().ok_or("nixd has no stdout")?);
-        spawn_watchdog(child, Duration::from_secs(30));
+        spawn_watchdog(child, Duration::from_secs(300));
         handshake(&mut stdin, &mut reader, config)?;
-        Ok(Self { stdin, reader })
+        Ok(Self {
+            stdin,
+            reader,
+            nixpkgs,
+            next_id: 2,
+        })
+    }
+
+    /// Start a session whose nixpkgs is the flake's own input, for completing
+    /// package attribute names.
+    pub fn start_packages(flake_path: Option<&str>) -> Result<Self, String> {
+        let config = json!({ "nixpkgs": { "expr": nixpkgs_expr(flake_path) }, "options": {} });
+        Self::start(&config)
+    }
+
+    /// Complete package attribute names under `pkgs.<prefix>`. Successive calls
+    /// reuse the same nixd process, which is what makes keystroke-by-keystroke
+    /// search practical.
+    pub fn complete_packages(&mut self, prefix: &str, seq: u64) -> Result<Vec<String>, String> {
+        let uri = format!("file:///tmp/nix-settings-gui/packages-{seq}.nix");
+        let text = format!("let pkgs = {}; in\n[ pkgs.{prefix} ]\n", self.nixpkgs);
+        self.notify(&did_open(&uri, &text))?;
+
+        let id = self.next_id;
+        self.next_id += 1;
+        let column = 7 + prefix.len();
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "textDocument/completion",
+            "params": {
+                "textDocument": { "uri": uri },
+                "position": { "line": 1, "character": column },
+                "context": { "triggerKind": 1 },
+            }
+        });
+        let result = self.request(id, &request)?;
+        Ok(completion_labels(&result))
     }
 
     fn notify(&mut self, value: &Value) -> Result<(), String> {
@@ -324,31 +368,6 @@ fn did_open(uri: &str, text: &str) -> Value {
             }
         }
     })
-}
-
-/// Complete package attribute names under `pkgs.<prefix>` with nixd.
-pub fn query_packages(flake_path: Option<&str>, prefix: &str) -> Result<Vec<String>, String> {
-    let nixpkgs = nixpkgs_expr(flake_path);
-    let config = json!({ "nixpkgs": { "expr": nixpkgs }, "options": {} });
-    let mut session = Session::start(&config)?;
-
-    let uri = "file:///tmp/nix-settings-gui/packages.nix";
-    let text = format!("let pkgs = {nixpkgs}; in\n[ pkgs.{prefix} ]\n");
-    session.notify(&did_open(uri, &text))?;
-
-    let column = 7 + prefix.len();
-    let request = json!({
-        "jsonrpc": "2.0",
-        "id": 2,
-        "method": "textDocument/completion",
-        "params": {
-            "textDocument": { "uri": uri },
-            "position": { "line": 1, "character": column },
-            "context": { "triggerKind": 1 },
-        }
-    });
-    let result = session.request(2, &request)?;
-    Ok(completion_labels(&result))
 }
 
 /// The diagnostic messages nixd reports for one assignment inside a module.

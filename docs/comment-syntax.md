@@ -5,11 +5,13 @@ nix-settings-gui renders a Nix configuration directory as a settings UI. Each
 block comments, so every annotated file stays valid Nix and keeps working in any
 other Nix tooling.
 
-There are two markers:
+There are three markers:
 
 - `/* @menu ... */` once at the top of a file, describing the menu.
 - `/* @option ... */` directly above an assignment, describing how that option
   is rendered.
+- `/* @template ... */` at the top of a file under `templates/`, describing a
+  scaffold offered by the "Add file" dialog.
 
 Each marker body is a sequence of Nix assignments. The parser wraps the body in
 `{ ... }` and parses it with the same lossless Nix parser used for the rest of
@@ -74,7 +76,7 @@ services.pipewire.enable = true;
 | `group`       | string          | Sub-heading within the menu. |
 | `order`       | integer         | Sort key within the menu or group. |
 | `advanced`    | boolean         | Collapses the control under "Advanced". |
-| `hidden`      | boolean         | Never renders the control, but leaves it untouched in the file. |
+| `hidden`      | boolean         | Renders the control only while the Advanced toggle is on. |
 | `readonly`    | boolean         | Shows the control disabled. |
 | `nullable`    | boolean         | Adds an "unset" toggle for a `nullOr` option. |
 | `pattern`     | string          | Regular expression a `text` value must match. |
@@ -182,8 +184,16 @@ switches between:
 - "All settings in the flake": every module and every host configuration.
 - "Current system only": one selected host plus the modules it imports.
 
-Menus are filtered by `@menu systems`, with the `hosts/<host>/` directory name
-as a fallback. A menu with no `systems` is shared and shows in both modes.
+Menus are filtered by the host's module import graph: a menu shows when one of
+the modules its file defines is reachable from the selected host's
+configuration, following `imports` transitively. `@menu systems` overrides the
+graph when present, and the `hosts/<host>/` directory name is the fallback for
+files with no recoverable origin. A menu with no restriction is shared and
+shows in both modes.
+
+A top-level `imports` list in a `flake.modules.nixos.*` body is detected as a
+`nixosModules` control; one in a `flake.modules.homeManager.*` body becomes
+`hmModules`. Each lists the flake's available modules of that kind.
 
 ## 8. Adding settings
 
@@ -253,3 +263,56 @@ Dendritic module:
   };
 }
 ```
+
+## 11. File templates (`@template`)
+
+Files under a `templates/` directory at the flake root become scaffolds in the
+"Add file" dialog. A template file is `_`-prefixed so the flake's `import-tree`
+filter and the scanner both ignore it, and it starts with a `@template`
+comment. The comment is stripped when the file is created; the rest of the file
+may begin with a normal `@menu` header.
+
+Placeholders are written `%%name%%` and are replaced by the values typed into
+the dialog. Unknown tokens are left untouched. The token name is an identifier
+(`[A-Za-z_][A-Za-z0-9_]*`).
+
+```nix
+/* @template
+   label = "Audio module";
+   kind = "nixos";
+   filename = "audio.nix";
+   output = "modules/nixos";
+   placeholders.name.label = "Module name";
+   placeholders.name.default = "audio";
+   placeholders.title.label = "Menu title";
+   placeholders.title.default = "Audio";
+*/
+
+/* @menu
+   displayname = "%%title%%";
+   order = 40;
+*/
+
+{ self, inputs, ... }:
+
+{
+
+flake.modules.nixos."%%name%%" = { pkgs, ... }: {
+
+};
+
+}
+```
+
+| Key | Type | Default | Meaning |
+|-----|------|---------|---------|
+| `label` | string | file name | Entry shown in the Kind dropdown. |
+| `kind` | string | `nixos` | `nixos`, `home`, or `raw`. |
+| `filename` | string | `<stem>.nix` | Default new-file name. |
+| `output` | string | `modules/<kind>` | Default directory, relative to the flake root. |
+| `placeholders.<name>.label` | string | the name | Field label in the dialog. |
+| `placeholders.<name>.default` | string | empty | Prefilled field value. |
+| `placeholders.<name>.hint` | string | empty | Placeholder text shown when the field is empty. |
+
+Placeholder order follows the order the fields first appear in the comment.
+

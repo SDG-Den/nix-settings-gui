@@ -29,6 +29,11 @@ enum Msg {
 
 type Tx = async_channel::Sender<Msg>;
 
+/// A pending package-search result handler plus its request id, keyed in
+/// `PackageService::callbacks`.
+type PackageCallback = Box<dyn FnOnce(Vec<String>)>;
+type PackageCallbacks = Rc<RefCell<HashMap<u64, PackageCallback>>>;
+
 /// One rendered option in a menu: the record it edits, the live control, and
 /// the widgets that let the row be filtered or refined after nixd answers.
 struct ControlRow {
@@ -59,6 +64,74 @@ struct MenuPage {
     content: gtk::Box,
 }
 
+/// A single long-lived nixd process shared by all package searches. Keystrokes
+/// are queued to a worker thread; results come back on the main thread keyed by
+/// request id so several popovers can search concurrently.
+struct PackageService {
+    requests: async_channel::Sender<(u64, String, String)>,
+    callbacks: PackageCallbacks,
+    next_id: Rc<Cell<u64>>,
+}
+
+impl PackageService {
+    fn new() -> Rc<Self> {
+        let (requests, request_rx) = async_channel::bounded::<(u64, String, String)>(16);
+        let (result_tx, result_rx) = async_channel::bounded::<(u64, Vec<String>)>(16);
+        std::thread::spawn(move || {
+            let mut session: Option<(String, crate::nixd::Session)> = None;
+            while let Ok((id, flake, term)) = request_rx.recv_blocking() {
+                let needs_start =
+                    session.as_ref().map(|(current, _)| current != &flake) != Some(false);
+                if needs_start {
+                    let flake_arg = if flake.is_empty() {
+                        None
+                    } else {
+                        Some(flake.as_str())
+                    };
+                    match crate::nixd::Session::start_packages(flake_arg) {
+                        Ok(started) => session = Some((flake.clone(), started)),
+                        Err(_) => {
+                            let _ = result_tx.send_blocking((id, Vec::new()));
+                            continue;
+                        }
+                    }
+                }
+                let names = session
+                    .as_mut()
+                    .and_then(|(_, session)| session.complete_packages(&term, id).ok())
+                    .unwrap_or_default();
+                let _ = result_tx.send_blocking((id, names));
+            }
+        });
+
+        let callbacks: PackageCallbacks = Rc::new(RefCell::new(HashMap::new()));
+        {
+            let callbacks = callbacks.clone();
+            glib::MainContext::default().spawn_local(async move {
+                while let Ok((id, names)) = result_rx.recv().await {
+                    if let Some(done) = callbacks.borrow_mut().remove(&id) {
+                        done(names);
+                    }
+                }
+            });
+        }
+        Rc::new(Self {
+            requests,
+            callbacks,
+            next_id: Rc::new(Cell::new(0)),
+        })
+    }
+
+    fn search(&self, flake: String, term: String, done: PackageCallback) {
+        let id = self.next_id.get();
+        self.next_id.set(id + 1);
+        self.callbacks.borrow_mut().insert(id, done);
+        if self.requests.try_send((id, flake, term)).is_err() {
+            self.callbacks.borrow_mut().remove(&id);
+        }
+    }
+}
+
 struct App {
     window: adw::ApplicationWindow,
     title: gtk::Label,
@@ -69,7 +142,9 @@ struct App {
     advanced_toggle: gtk::ToggleButton,
     list: gtk::ListBox,
     stack: gtk::Stack,
+    nixd_banner: adw::Banner,
     status: gtk::Label,
+    package_service: Rc<PackageService>,
     tx: Tx,
 
     config: RefCell<AppConfig>,
@@ -84,6 +159,8 @@ struct App {
     flakes: RefCell<Vec<PathBuf>>,
     pages: RefCell<Vec<MenuPage>>,
     suggest_store: RefCell<Option<gtk::ListStore>>,
+    suggest_parent: RefCell<Option<String>>,
+    suggest_cache: RefCell<HashMap<String, Vec<String>>>,
     system_only: Cell<bool>,
     advanced: Cell<bool>,
     manual_host: Cell<bool>,
@@ -96,8 +173,10 @@ struct App {
 
 fn build_ui(app: &adw::Application, tx: &Tx) -> Rc<App> {
     let provider = gtk::CssProvider::new();
-    provider
-        .load_from_data(".search-hit { outline: 2px solid @accent_color; border-radius: 6px; }");
+    provider.load_from_data(
+        ".search-hit { outline: 2px solid @accent_color; border-radius: 6px; }\n\
+         .group-header { color: @accent_color; font-weight: 700; }",
+    );
     if let Some(display) = gtk::gdk::Display::default() {
         gtk::style_context_add_provider_for_display(
             &display,
@@ -108,6 +187,7 @@ fn build_ui(app: &adw::Application, tx: &Tx) -> Rc<App> {
 
     let title = gtk::Label::builder()
         .label("nix-settings-gui")
+        .ellipsize(gtk::pango::EllipsizeMode::End)
         .css_classes(["title-4"])
         .build();
 
@@ -149,7 +229,7 @@ fn build_ui(app: &adw::Application, tx: &Tx) -> Rc<App> {
     list.add_css_class("navigation-sidebar");
     let list_scroll = gtk::ScrolledWindow::builder()
         .child(&list)
-        .hscrollbar_policy(gtk::PolicyType::Never)
+        .hscrollbar_policy(gtk::PolicyType::Automatic)
         .vexpand(true)
         .build();
 
@@ -157,11 +237,21 @@ fn build_ui(app: &adw::Application, tx: &Tx) -> Rc<App> {
     stack.set_hexpand(true);
     stack.set_vexpand(true);
 
+    let nixd_banner = adw::Banner::new("");
+    nixd_banner.set_revealed(false);
+
+    let content_pane = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    content_pane.append(&stack);
+    content_pane.append(&nixd_banner);
+
     let paned = gtk::Paned::new(gtk::Orientation::Horizontal);
     paned.set_start_child(Some(&list_scroll));
-    paned.set_end_child(Some(&stack));
+    paned.set_end_child(Some(&content_pane));
     paned.set_position(320);
+    paned.set_hexpand(true);
     paned.set_vexpand(true);
+    paned.set_shrink_start_child(true);
+    paned.set_shrink_end_child(true);
 
     let status = gtk::Label::builder()
         .xalign(0.0)
@@ -173,6 +263,7 @@ fn build_ui(app: &adw::Application, tx: &Tx) -> Rc<App> {
     let configure_btn = gtk::Button::with_label("Configure");
     let add_file_btn = gtk::Button::with_label("Add file");
     let refresh_btn = gtk::Button::builder()
+        .label("Reload")
         .icon_name("view-refresh-symbolic")
         .tooltip_text("Reload from disk")
         .build();
@@ -180,20 +271,38 @@ fn build_ui(app: &adw::Application, tx: &Tx) -> Rc<App> {
     save_btn.add_css_class("suggested-action");
     let rebuild_btn = gtk::Button::with_label("Save & rebuild");
     let info_btn = gtk::Button::builder()
+        .label("Query info")
         .icon_name("dialog-information-symbolic")
         .tooltip_text("Query nixd for types and descriptions of this menu")
         .build();
+
+    let menu_box = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    menu_box.set_margin_top(6);
+    menu_box.set_margin_bottom(6);
+    menu_box.set_margin_start(6);
+    menu_box.set_margin_end(6);
+    for button in [&configure_btn, &add_file_btn, &refresh_btn, &info_btn] {
+        button.set_halign(gtk::Align::Fill);
+        menu_box.append(button);
+    }
+    let menu_popover = gtk::Popover::new();
+    menu_popover.set_child(Some(&menu_box));
+    let menu_button = gtk::MenuButton::builder()
+        .icon_name("open-menu-symbolic")
+        .tooltip_text("More actions")
+        .build();
+    menu_button.set_popover(Some(&menu_popover));
+    for button in [&configure_btn, &add_file_btn, &refresh_btn, &info_btn] {
+        let popover = menu_popover.clone();
+        button.connect_clicked(move |_| popover.popdown());
+    }
 
     let bottom = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     bottom.set_margin_top(6);
     bottom.set_margin_bottom(6);
     bottom.set_margin_start(8);
     bottom.set_margin_end(8);
-    bottom.append(&configure_btn);
-    bottom.append(&add_file_btn);
-    bottom.append(&refresh_btn);
-    bottom.append(&gtk::Separator::new(gtk::Orientation::Vertical));
-    bottom.append(&info_btn);
+    bottom.append(&menu_button);
     bottom.append(&status);
     bottom.append(&save_btn);
     bottom.append(&rebuild_btn);
@@ -224,7 +333,9 @@ fn build_ui(app: &adw::Application, tx: &Tx) -> Rc<App> {
         advanced_toggle,
         list,
         stack,
+        nixd_banner,
         status,
+        package_service: PackageService::new(),
         tx: tx.clone(),
         config: RefCell::new(AppConfig::load()),
         base: RefCell::new(String::new()),
@@ -237,6 +348,8 @@ fn build_ui(app: &adw::Application, tx: &Tx) -> Rc<App> {
         flakes: RefCell::new(Vec::new()),
         pages: RefCell::new(Vec::new()),
         suggest_store: RefCell::new(None),
+        suggest_parent: RefCell::new(None),
+        suggest_cache: RefCell::new(HashMap::new()),
         system_only: Cell::new(false),
         advanced: Cell::new(false),
         manual_host: Cell::new(false),
@@ -264,7 +377,7 @@ fn build_ui(app: &adw::Application, tx: &Tx) -> Rc<App> {
                     glib::Propagation::Proceed
                 } else {
                     let window = window.clone();
-                    run_changes_prompt(&app, Box::new(move || window.close()));
+                    run_changes_prompt(&app, Box::new(move || window.destroy()));
                     glib::Propagation::Stop
                 }
             });
@@ -295,6 +408,7 @@ fn wire(
                     .map(|p| p.display().to_string())
                     .unwrap_or_default();
                 if !path.is_empty() {
+                    combo.set_tooltip_text(Some(&path));
                     open_flake(&app, &tx, &path);
                 }
             }
@@ -527,7 +641,14 @@ fn rebuild_menu_list(app: &Rc<App>) {
         app.list.remove(&child);
     }
     let query = app.search.text().to_lowercase();
-    let menus = visible_menus(app);
+    let mut menus = visible_menus(app);
+    menus.sort_by(|a, b| {
+        let ac = a.spec.category.clone().unwrap_or_default();
+        let bc = b.spec.category.clone().unwrap_or_default();
+        ac.cmp(&bc)
+            .then_with(|| a.order().cmp(&b.order()))
+            .then_with(|| a.display_name().cmp(&b.display_name()))
+    });
     let mut last_category: Option<String> = None;
     for menu in &menus {
         if !menu_matches(menu, &query) {
@@ -540,8 +661,9 @@ fn rebuild_menu_list(app: &Rc<App>) {
                 let header = gtk::Label::builder()
                     .label(&category)
                     .xalign(0.0)
+                    .ellipsize(gtk::pango::EllipsizeMode::End)
                     .margin_top(6)
-                    .css_classes(["dim-label", "caption"])
+                    .css_classes(["group-header"])
                     .build();
                 let row = gtk::ListBoxRow::builder()
                     .activatable(false)
@@ -552,7 +674,12 @@ fn rebuild_menu_list(app: &Rc<App>) {
             }
         }
         let name = menu.display_name();
-        let label = gtk::Label::builder().label(&name).xalign(0.0).build();
+        let label = gtk::Label::builder()
+            .label(&name)
+            .xalign(0.0)
+            .hexpand(true)
+            .ellipsize(gtk::pango::EllipsizeMode::End)
+            .build();
         let row = gtk::ListBoxRow::new();
         row.set_widget_name(&menu.file);
         let content = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -625,6 +752,7 @@ fn build_page(app: &Rc<App>, menu: &crate::model::MenuModel) -> MenuPage {
     let heading = gtk::Label::builder()
         .label(menu.display_name())
         .xalign(0.0)
+        .wrap(true)
         .css_classes(["title-2"])
         .build();
     content.append(&heading);
@@ -641,7 +769,7 @@ fn build_page(app: &Rc<App>, menu: &crate::model::MenuModel) -> MenuPage {
     let mut ordinary = Vec::new();
     let mut advanced = Vec::new();
     for record in &menu.records {
-        if record.spec.hidden {
+        if record.spec.hidden && !app.advanced.get() {
             continue;
         }
         let row = build_control_row(app, record);
@@ -660,9 +788,7 @@ fn build_page(app: &Rc<App>, menu: &crate::model::MenuModel) -> MenuPage {
         let expander = gtk::Expander::new(Some("Advanced"));
         let inner = gtk::Box::new(gtk::Orientation::Vertical, 12);
         inner.set_margin_top(6);
-        for row in &advanced {
-            inner.append(&row.row);
-        }
+        add_grouped(&inner, &advanced);
         expander.set_child(Some(&inner));
         content.append(&expander);
     }
@@ -688,7 +814,8 @@ fn build_page(app: &Rc<App>, menu: &crate::model::MenuModel) -> MenuPage {
 
     let scrolled = gtk::ScrolledWindow::builder()
         .child(&content)
-        .hscrollbar_policy(gtk::PolicyType::Never)
+        .hscrollbar_policy(gtk::PolicyType::Automatic)
+        .propagate_natural_width(false)
         .vexpand(true)
         .hexpand(true)
         .build();
@@ -714,7 +841,7 @@ fn add_grouped(content: &gtk::Box, controls: &[Rc<ControlRow>]) {
                     .label(&group)
                     .xalign(0.0)
                     .margin_top(6)
-                    .css_classes(["heading"])
+                    .css_classes(["group-header"])
                     .build();
                 content.append(&label);
             }
@@ -725,9 +852,11 @@ fn add_grouped(content: &gtk::Box, controls: &[Rc<ControlRow>]) {
 }
 
 fn control_cmp(a: &ControlRow, b: &ControlRow) -> std::cmp::Ordering {
+    let ag = a.record.spec.group.clone().unwrap_or_default();
+    let bg = b.record.spec.group.clone().unwrap_or_default();
     let ao = a.record.spec.order.unwrap_or(1000);
     let bo = b.record.spec.order.unwrap_or(1000);
-    ao.cmp(&bo).then_with(|| {
+    ag.cmp(&bg).then_with(|| ao.cmp(&bo)).then_with(|| {
         control_label(a)
             .to_lowercase()
             .cmp(&control_label(b).to_lowercase())
@@ -750,13 +879,11 @@ fn build_context(app: &Rc<App>) -> widgets::BuildContext {
     {
         let scan = app.scan.borrow();
         if let Some(scan) = scan.as_ref() {
-            for menu in &scan.menus {
-                for record in &menu.records {
-                    if let Some(name) = record.origin.strip_prefix("modules.nixos.") {
-                        push_unique(&mut ctx.nixos_modules, name);
-                    } else if let Some(name) = record.origin.strip_prefix("modules.homeManager.") {
-                        push_unique(&mut ctx.hm_modules, name);
-                    }
+            for origin in scan.origin_menu.keys() {
+                if let Some(name) = origin.strip_prefix("modules.nixos.") {
+                    push_unique(&mut ctx.nixos_modules, name);
+                } else if let Some(name) = origin.strip_prefix("modules.homeManager.") {
+                    push_unique(&mut ctx.hm_modules, name);
                 }
             }
         }
@@ -770,19 +897,10 @@ fn build_context(app: &Rc<App>) -> widgets::BuildContext {
 /// Package search hook: queries nixd off the main thread and delivers the
 /// results back on the main thread.
 fn package_search(app: &Rc<App>) -> widgets::PackageSearch {
-    let flake = app.config.borrow().flake_path.clone();
+    let service = app.package_service.clone();
+    let flake = app.config.borrow().flake_path.clone().unwrap_or_default();
     Rc::new(move |term: String, done: Box<dyn FnOnce(Vec<String>)>| {
-        let flake = flake.clone();
-        let (tx, rx) = async_channel::bounded::<Vec<String>>(1);
-        glib::MainContext::default().spawn_local(async move {
-            if let Ok(names) = rx.recv().await {
-                done(names);
-            }
-        });
-        std::thread::spawn(move || {
-            let names = crate::nixd::query_packages(flake.as_deref(), &term).unwrap_or_default();
-            let _ = tx.send_blocking(names);
-        });
+        service.search(flake.clone(), term, done);
     })
 }
 
@@ -799,8 +917,9 @@ fn build_control_row(app: &Rc<App>, record: &Record) -> Rc<ControlRow> {
     row.set_margin_top(4);
     row.set_margin_bottom(4);
 
+    let expands = editor.wants_width();
     let labels = gtk::Box::new(gtk::Orientation::Vertical, 2);
-    labels.set_hexpand(true);
+    labels.set_hexpand(!expands);
     let label_text = record
         .spec
         .label
@@ -812,6 +931,9 @@ fn build_control_row(app: &Rc<App>, record: &Record) -> Rc<ControlRow> {
         .xalign(0.0)
         .wrap(true)
         .build();
+    if expands {
+        name.set_max_width_chars(48);
+    }
     labels.append(&name);
 
     let desc = gtk::Label::builder()
@@ -820,6 +942,9 @@ fn build_control_row(app: &Rc<App>, record: &Record) -> Rc<ControlRow> {
         .wrap(true)
         .css_classes(["dim-label", "caption"])
         .build();
+    if expands {
+        desc.set_max_width_chars(48);
+    }
     labels.append(&desc);
 
     let dirty = gtk::Label::builder()
@@ -834,13 +959,18 @@ fn build_control_row(app: &Rc<App>, record: &Record) -> Rc<ControlRow> {
         let origin = gtk::Label::builder()
             .label(format!("imported from {}", record.origin))
             .xalign(0.0)
+            .ellipsize(gtk::pango::EllipsizeMode::End)
             .css_classes(["dim-label", "caption"])
             .build();
         labels.append(&origin);
     }
 
     let slot = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    slot.set_halign(gtk::Align::End);
+    if expands {
+        slot.set_hexpand(true);
+    } else {
+        slot.set_halign(gtk::Align::End);
+    }
     slot.set_valign(gtk::Align::Center);
 
     let reset = gtk::Button::from_icon_name("edit-undo-symbolic");
@@ -1110,6 +1240,17 @@ fn run_changes_prompt(app: &Rc<App>, on_save: Box<dyn Fn()>) {
     save.add_css_class("suggested-action");
     dialog.set_default_response(gtk::ResponseType::Yes);
 
+    let message = gtk::Label::builder()
+        .label("You have unsaved changes. Save them before closing?")
+        .xalign(0.0)
+        .wrap(true)
+        .margin_top(12)
+        .margin_bottom(12)
+        .margin_start(12)
+        .margin_end(12)
+        .build();
+    dialog.content_area().append(&message);
+
     let on_save: Rc<dyn Fn()> = Rc::from(on_save);
     let state = app.clone();
     dialog.connect_response(move |dialog, response| {
@@ -1280,8 +1421,7 @@ fn query_current_page(app: &Rc<App>, tx: &Tx) {
     let target = app.target.borrow().clone();
     let base = app.base.borrow().clone();
     if target.is_empty() {
-        app.status
-            .set_text("nixd: no option target for this config");
+        set_nixd_status(app, "nixd: no option target for this config");
         return;
     }
     let paths: Vec<(String, Vec<String>)> = app
@@ -1296,7 +1436,7 @@ fn query_current_page(app: &Rc<App>, tx: &Tx) {
                 .collect()
         })
         .unwrap_or_default();
-    app.status.set_text("Querying nixd...");
+    set_nixd_status(app, "Querying nixd...");
     spawn(tx, move |tx| {
         let parsed = Target::parse(&target);
         let mut parents: HashMap<String, Vec<metadata::ChildOption>> = HashMap::new();
@@ -1364,8 +1504,12 @@ fn apply_infos(app: &Rc<App>, file: &str, infos: &[(String, OptionInfo)]) {
             updated += 1;
         }
     }
-    app.status
-        .set_text(&format!("nixd updated {updated} option(s)"));
+    set_nixd_status(app, &format!("nixd updated {updated} option(s)"));
+}
+
+fn set_nixd_status(app: &Rc<App>, message: &str) {
+    app.nixd_banner.set_title(message);
+    app.nixd_banner.set_revealed(!message.is_empty());
 }
 
 fn type_widget(type_str: &str) -> Option<WidgetKind> {
@@ -1494,6 +1638,9 @@ fn select_folder(parent: &impl IsA<gtk::Window>, entry: &gtk::Entry) {
 }
 
 fn open_add_file(app: &Rc<App>, tx: &Tx) {
+    let root = app.base.borrow().clone();
+    let templates = Rc::new(crate::templates::load_templates(&root));
+
     let dialog = gtk::Dialog::builder()
         .title("Add file")
         .transient_for(&app.window)
@@ -1515,6 +1662,12 @@ fn open_add_file(app: &Rc<App>, tx: &Tx) {
     kind.append(Some("raw"), "Raw function");
     kind.append(Some("nixos"), "NixOS module");
     kind.append(Some("home"), "Home-manager module");
+    for (index, template) in templates.iter().enumerate() {
+        kind.append(
+            Some(&format!("template:{index}")),
+            &format!("Template: {}", template.label),
+        );
+    }
     kind.set_active_id(Some("nixos"));
 
     let filename = gtk::Entry::new();
@@ -1522,7 +1675,7 @@ fn open_add_file(app: &Rc<App>, tx: &Tx) {
     let module_name = gtk::Entry::new();
     module_name.set_placeholder_text(Some("flake.modules.<kind>.<name>"));
     let directory = gtk::Entry::new();
-    directory.set_text(&app.base.borrow());
+    directory.set_text(&root);
     directory.set_hexpand(true);
     let directory_browse = gtk::Button::with_label("Browse...");
     {
@@ -1543,17 +1696,95 @@ fn open_add_file(app: &Rc<App>, tx: &Tx) {
     grid.attach(&gtk::Label::new(Some("Directory")), 0, 3, 1, 1);
     grid.attach(&directory_row, 1, 3, 1, 1);
 
-    dialog.content_area().append(&grid);
+    let placeholder_box = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    placeholder_box.set_margin_start(12);
+    placeholder_box.set_margin_end(12);
+    placeholder_box.set_margin_bottom(12);
+    let placeholder_entries: Rc<RefCell<Vec<(String, gtk::Entry)>>> =
+        Rc::new(RefCell::new(Vec::new()));
+
+    {
+        let filename = filename.clone();
+        let directory = directory.clone();
+        let placeholder_box = placeholder_box.clone();
+        let placeholder_entries = placeholder_entries.clone();
+        let root = root.clone();
+        let templates = templates.clone();
+        kind.connect_changed(move |combo| {
+            while let Some(child) = placeholder_box.first_child() {
+                placeholder_box.remove(&child);
+            }
+            placeholder_entries.borrow_mut().clear();
+            let id = combo.active_id().map(|s| s.to_string()).unwrap_or_default();
+            let Some(index) = id
+                .strip_prefix("template:")
+                .and_then(|s| s.parse::<usize>().ok())
+            else {
+                filename.set_text("module.nix");
+                directory.set_text(&root);
+                return;
+            };
+            let Some(template) = templates.get(index) else {
+                return;
+            };
+            filename.set_text(&template.filename);
+            directory.set_text(&Path::new(&root).join(&template.output).to_string_lossy());
+            for placeholder in &template.placeholders {
+                let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+                let label = gtk::Label::builder()
+                    .label(&placeholder.label)
+                    .xalign(0.0)
+                    .build();
+                let entry = gtk::Entry::new();
+                entry.set_text(&placeholder.default);
+                entry.set_hexpand(true);
+                if !placeholder.hint.is_empty() {
+                    entry.set_placeholder_text(Some(&placeholder.hint));
+                }
+                row.append(&label);
+                row.append(&entry);
+                placeholder_box.append(&row);
+                placeholder_entries
+                    .borrow_mut()
+                    .push((placeholder.name.clone(), entry));
+            }
+        });
+    }
+
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    content.append(&grid);
+    content.append(&placeholder_box);
+    dialog.content_area().append(&content);
 
     {
         let app = app.clone();
         let tx = tx.clone();
+        let templates = templates.clone();
         dialog.connect_response(move |dialog, response| {
             if response == gtk::ResponseType::Accept {
-                let kind_id = kind.active_id().unwrap_or_else(|| "nixos".into());
-                let module_name = module_name.text().to_string();
+                let kind_id = kind
+                    .active_id()
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| "nixos".into());
+                let module_name_text = module_name.text().to_string();
                 let path = Path::new(&directory.text()).join(filename.text());
-                match write_template(&kind_id, &module_name, &path) {
+                let result = match kind_id
+                    .strip_prefix("template:")
+                    .and_then(|s| s.parse::<usize>().ok())
+                    .and_then(|index| templates.get(index))
+                {
+                    Some(template) => {
+                        let values: Vec<(String, String)> = placeholder_entries
+                            .borrow()
+                            .iter()
+                            .map(|(name, entry)| (name.clone(), entry.text().to_string()))
+                            .collect();
+                        let body = crate::templates::render(&template.body, &values);
+                        write_body(&path, &body)
+                    }
+                    None => write_template(&kind_id, &module_name_text, &path),
+                };
+                match result {
                     Ok(()) => {
                         app.status.set_text(&format!("Created {}", path.display()));
                         let base = app.base.borrow().clone();
@@ -1573,6 +1804,13 @@ fn open_add_file(app: &Rc<App>, tx: &Tx) {
         });
     }
     dialog.present();
+}
+
+fn write_body(path: &Path, body: &str) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(path, body).map_err(|e| e.to_string())
 }
 
 fn write_template(kind: &str, module_name: &str, path: &Path) -> Result<(), String> {
@@ -1631,8 +1869,10 @@ fn open_add_option(app: &Rc<App>, file: &str, origin: &str) {
         .build();
 
     let path_entry = gtk::Entry::new();
+    let probe_entry = path_entry.clone();
     path_entry.set_placeholder_text(Some("services.pipewire.enable"));
     path_entry.set_hexpand(true);
+    path_entry.set_width_chars(48);
     let completion = gtk::EntryCompletion::new();
     let store = gtk::ListStore::new(&[glib::Type::STRING]);
     completion.set_model(Some(&store));
@@ -1642,7 +1882,26 @@ fn open_add_option(app: &Rc<App>, file: &str, origin: &str) {
     for path in option_suggestions(app) {
         store.set(&store.append(), &[(0, &path)]);
     }
-    request_suggestions(app, store.clone());
+    request_suggestions(app, store.clone(), Vec::new());
+    {
+        let app = app.clone();
+        let store = store.clone();
+        let generation: Rc<Cell<u64>> = Rc::new(Cell::new(0));
+        path_entry.connect_changed(move |entry| {
+            let current = generation.get() + 1;
+            generation.set(current);
+            let parent = parent_segments_from_text(&entry.text());
+            let app = app.clone();
+            let store = store.clone();
+            let generation = generation.clone();
+            glib::timeout_add_local_once(std::time::Duration::from_millis(250), move || {
+                if generation.get() != current {
+                    return;
+                }
+                request_suggestions(&app, store, parent)
+            });
+        });
+    }
 
     let widget = gtk::ComboBoxText::new();
     for kind in [
@@ -1670,6 +1929,7 @@ fn open_add_option(app: &Rc<App>, file: &str, origin: &str) {
 
     let value_entry = gtk::Entry::new();
     value_entry.set_placeholder_text(Some("Initial value"));
+    value_entry.set_width_chars(48);
 
     grid.attach(&gtk::Label::new(Some("Option path")), 0, 0, 1, 1);
     grid.attach(&path_entry, 1, 0, 1, 1);
@@ -1708,6 +1968,67 @@ fn open_add_option(app: &Rc<App>, file: &str, origin: &str) {
         dialog.close();
     });
     dialog.present();
+
+    if std::env::var_os("NSG_ADDPROBE").is_some() {
+        let app2 = app.clone();
+        let entry = probe_entry.clone();
+        let store = store.clone();
+        let completion = completion.clone();
+        completion.connect_no_matches(|_| eprintln!("PROBE no_matches"));
+        {
+            use gtk::prelude::{TreeModelExt, TreeModelExtManual};
+            let mut iter = store.iter_first();
+            let mut shown = 0;
+            while let Some(it) = iter {
+                let val = store.get_value(&it, 0);
+                eprintln!("PROBE row={:?}", val.get::<String>());
+                shown += 1;
+                if shown >= 3 || !store.iter_next(&it) {
+                    break;
+                }
+                iter = Some(it);
+            }
+            eprintln!("PROBE model_is_some={}", completion.model().is_some());
+        }
+        eprintln!(
+            "PROBE column_type={:?} text_column={} min_key={} popup={}",
+            gtk::prelude::TreeModelExt::column_type(&store, 0),
+            completion.text_column(),
+            completion.minimum_key_length(),
+            completion.is_popup_completion(),
+        );
+        for key in ["ser", "services", "services.pipewire", "boot", "prog"] {
+            eprintln!(
+                "PROBE compute_prefix({key}) = {:?}",
+                completion.compute_prefix(key)
+            );
+        }
+        {
+            let cstore = gtk::ListStore::new(&[glib::Type::STRING]);
+            let ccomp = gtk::EntryCompletion::new();
+            ccomp.set_model(Some(&cstore));
+            ccomp.set_text_column(0);
+            for p in ["services.foo", "services.bar"] {
+                let p = p.to_string();
+                cstore.set(&cstore.append(), &[(0, &p)]);
+            }
+            eprintln!(
+                "PROBE control_prefix(services) = {:?}",
+                ccomp.compute_prefix("services")
+            );
+        }
+        glib::timeout_add_local_once(std::time::Duration::from_millis(2500), move || {
+            let n = store.iter_n_children(None);
+            eprintln!("PROBE store_count={n}");
+            entry.set_text("services");
+            let app3 = app2.clone();
+            glib::timeout_add_local_once(std::time::Duration::from_millis(800), move || {
+                let cache = app3.suggest_cache.borrow().clone();
+                eprintln!("PROBE cache_keys={:?}", cache.keys().collect::<Vec<_>>());
+                std::process::exit(0);
+            });
+        });
+    }
 }
 
 /// Every option path the scan already knows, plus each dotted prefix, offered
@@ -1729,10 +2050,17 @@ fn option_suggestions(app: &Rc<App>) -> Vec<String> {
     set.into_iter().collect()
 }
 
-/// Ask a worker to walk the option registry up to four levels deep and offer
-/// the resulting paths to the add-option entry's completion store.
-fn request_suggestions(app: &Rc<App>, store: gtk::ListStore) {
+/// Ask a worker to enumerate the children of `parent` and offer those paths to
+/// the add-option entry's completion store, reusing a cached result when present.
+fn request_suggestions(app: &Rc<App>, store: gtk::ListStore, parent: Vec<String>) {
     *app.suggest_store.borrow_mut() = Some(store);
+    let key = parent.join(".");
+    *app.suggest_parent.borrow_mut() = Some(key.clone());
+    let cached = app.suggest_cache.borrow().get(&key).cloned();
+    if let Some(cached) = cached {
+        fill_suggestions(app, cached);
+        return;
+    }
     let base = app.base.borrow().clone();
     let target = app.target.borrow().clone();
     let tx = app.tx.clone();
@@ -1741,39 +2069,43 @@ fn request_suggestions(app: &Rc<App>, store: gtk::ListStore) {
             let _ = tx.send_blocking(Msg::Suggestions(Vec::new()));
             return;
         };
-        let mut paths = metadata::all_options(&base, &target).unwrap_or_default();
-        if paths.is_empty() {
-            let mut frontier: Vec<Vec<String>> = vec![Vec::new()];
-            for _depth in 0..4 {
-                let mut next = Vec::new();
-                for parent in &frontier {
-                    let Ok(children) = metadata::enumerate(&base, &target, parent) else {
-                        continue;
-                    };
-                    for child in children {
-                        paths.push(child.path.clone());
-                        if child.has_children {
-                            next.push(child.segments);
-                        }
-                    }
-                }
-                frontier = next;
-                if frontier.is_empty() {
-                    break;
-                }
-            }
-        }
+        let mut paths: Vec<String> = metadata::enumerate(&base, &target, &parent)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|child| child.path)
+            .collect();
         paths.sort();
         paths.dedup();
         let _ = tx.send_blocking(Msg::Suggestions(paths));
     });
 }
 
-/// Merge the metadata paths into the completion store seeded from the scan.
+/// The parent path implied by the text typed so far: everything before the last
+/// dot, split into segments. `services.pip` yields `["services"]`; a bare
+/// `services` yields the root.
+fn parent_segments_from_text(text: &str) -> Vec<String> {
+    let trimmed = text.trim();
+    match trimmed.rfind('.') {
+        Some(index) => trimmed[..index]
+            .split('.')
+            .filter(|segment| !segment.is_empty())
+            .map(str::to_string)
+            .collect(),
+        None => Vec::new(),
+    }
+}
+
+/// Merge the fetched children into the completion store, remembering them under
+/// the parent key so revisiting a prefix is instant.
 fn fill_suggestions(app: &Rc<App>, suggestions: Vec<String>) {
     let Some(store) = app.suggest_store.borrow_mut().take() else {
         return;
     };
+    if let Some(key) = app.suggest_parent.borrow_mut().take() {
+        app.suggest_cache
+            .borrow_mut()
+            .insert(key, suggestions.clone());
+    }
     let mut paths: std::collections::BTreeSet<String> =
         option_suggestions(app).into_iter().collect();
     paths.extend(suggestions);
@@ -1857,6 +2189,17 @@ fn handle_msg(app: &Rc<App>, tx: &Tx, msg: Msg) {
             *app.scan.borrow_mut() = Some(result);
             app.status.set_text("Ready");
             rebuild_view(app);
+            if std::env::var_os("NSG_ADDPROBE").is_some() {
+                let menus = visible_menus(app);
+                if let Some(menu) = menus.first() {
+                    let origin = menu
+                        .records
+                        .first()
+                        .map(|r| r.origin.clone())
+                        .unwrap_or_default();
+                    open_add_option(app, &menu.file, &origin);
+                }
+            }
         }
         Msg::Scanned(Err(e)) => {
             app.status.set_text("Scan failed");
@@ -1978,10 +2321,12 @@ fn populate_flakes(app: &Rc<App>) -> Option<String> {
     }
     app.flake_combo.remove_all();
     for flake in &flakes {
-        app.flake_combo.append(
-            Some(&flake.display().to_string()),
-            &flake.display().to_string(),
-        );
+        let label = flake
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| flake.display().to_string());
+        app.flake_combo
+            .append(Some(&flake.display().to_string()), &label);
     }
     *app.flakes.borrow_mut() = flakes;
     if app.flakes.borrow().is_empty() {
@@ -2096,5 +2441,22 @@ mod tests {
 
         let fallback = template_for("leaf", "nixos", "   ", path);
         assert!(fallback.contains("flake.modules.nixos.leaf = { pkgs, ... }:"));
+    }
+
+    #[test]
+    fn derives_suggestion_parent_from_text() {
+        assert!(parent_segments_from_text("services").is_empty());
+        assert_eq!(
+            parent_segments_from_text("services.pip"),
+            vec!["services".to_string()]
+        );
+        assert_eq!(
+            parent_segments_from_text("environment.systemPackages"),
+            vec!["environment".to_string()]
+        );
+        assert_eq!(
+            parent_segments_from_text("  services.pipewire."),
+            vec!["services".to_string(), "pipewire".to_string()]
+        );
     }
 }
