@@ -1,0 +1,255 @@
+# Comment syntax
+
+nix-settings-gui renders a Nix configuration directory as a settings UI. Each
+`.nix` file becomes one menu. The GUI is configured entirely by ordinary Nix
+block comments, so every annotated file stays valid Nix and keeps working in any
+other Nix tooling.
+
+There are two markers:
+
+- `/* @menu ... */` once at the top of a file, describing the menu.
+- `/* @option ... */` directly above an assignment, describing how that option
+  is rendered.
+
+Each marker body is a sequence of Nix assignments. The parser wraps the body in
+`{ ... }` and parses it with the same lossless Nix parser used for the rest of
+the file, so bodies use real Nix literals (`"strings"`, `[ lists ]`, numbers,
+`true`/`false`).
+
+## 1. Menu header (`@menu`)
+
+The first `@menu` comment in a file is the menu header. It must appear before
+the module body. If a file has no header, the menu is named after the file and
+sorted alphabetically.
+
+```nix
+/* @menu
+   displayname = "Audio";
+   icon = "audio-card-symbolic";
+   order = 40;
+   description = "Sound server and controls";
+   category = "Hardware";
+   systems = [ "x570" "webhost" ];
+   hidden = false;
+*/
+```
+
+| Key           | Type            | Default            | Meaning |
+|---------------|-----------------|--------------------|---------|
+| `displayname` | string          | file name          | Title shown in the left menu list. |
+| `icon`        | string          | generic icon       | Icon name from the current theme. |
+| `order`       | integer         | 1000               | Sort key in the left list; lower comes first. |
+| `description` | string          | nixd description   | Subtitle under the title. |
+| `category`    | string          | none               | Groups menus under a heading in the left list. |
+| `systems`     | list of strings | shared (all)       | Restricts the menu to these hosts. Empty or absent means shared. |
+| `hidden`      | boolean         | false              | Hides the menu until "advanced" is enabled. |
+
+## 2. Option directive (`@option`)
+
+An `@option` comment binds to the attribute path of the next assignment below
+it. This works at any depth, so placing it above a leaf configures that leaf,
+and placing it above an attribute set configures the whole subtree.
+
+```nix
+/* @option
+   label = "Enable PipeWire";
+   widget = "switch";
+   group = "Sound Server";
+*/
+services.pipewire.enable = true;
+```
+
+| Key           | Type            | Meaning |
+|---------------|-----------------|---------|
+| `widget`      | string          | Forces a control instead of the type default. |
+| `label`       | string          | Display label; defaults to the option's short name or nixd description. |
+| `description` | string          | Helper text; defaults to the nixd description. |
+| `choices`     | list of strings | Values for `dropdown` and `radio`. |
+| `min`, `max`  | number          | Bounds for `spin` and `slider`; setting both turns `spin` into `slider`. |
+| `step`        | number          | Increment for `spin` and `slider`. |
+| `digits`      | integer         | Decimal places for a float `spin`. |
+| `unit`        | string          | Suffix shown after a number (for example `"MB"`). |
+| `rows`        | integer         | Visible height of a `multiline` or `raw` editor. |
+| `placeholder` | string          | Hint text for `text` and `multiline`. |
+| `group`       | string          | Sub-heading within the menu. |
+| `order`       | integer         | Sort key within the menu or group. |
+| `advanced`    | boolean         | Collapses the control under "Advanced". |
+| `hidden`      | boolean         | Never renders the control, but leaves it untouched in the file. |
+| `readonly`    | boolean         | Shows the control disabled. |
+| `nullable`    | boolean         | Adds an "unset" toggle for a `nullOr` option. |
+| `pattern`     | string          | Regular expression a `text` value must match. |
+| `itemLabel`   | string          | Label for one row of a `list`. |
+| `addLabel`    | string          | Label of the list "add" button. |
+
+## 3. Widgets
+
+| Widget      | Renders | Serialized Nix |
+|-------------|---------|----------------|
+| `switch`    | Toggle  | `true` / `false` |
+| `dropdown`  | Selection menu | one of the `choices` literals |
+| `radio`     | Inline radio group | one of the `choices` literals |
+| `spin`      | Numeric field | integer or float literal |
+| `slider`    | Continuous slider | integer or float literal |
+| `text`      | Single-line entry | `"..."` |
+| `multiline` | Multi-line entry | `"..."` or `''...''` when the value contains newlines |
+| `path`      | Entry plus file chooser | `"..."` path string or `./relative` |
+| `package`   | Searchable picker | `pkgs.name` or a quoted attrpath |
+| `packages`  | List of package pickers | `[ pkgs.a pkgs.b ]` |
+| `list`      | Add, remove, reorder rows | `[ ... ]` |
+| `nixosModules` | List of NixOS flake modules | `[ flake.modules.nixos.a ... ]` or bare names under `with flake.modules.nixos;` |
+| `hmModules` | List of home-manager flake modules | `[ flake.modules.homeManager.a ... ]` or bare names under `with flake.modules.homeManager;` |
+| `color`     | Color button | `"#rrggbb"` |
+| `submodule` | Nested group of controls | recursive attribute set |
+| `raw`       | Monospace Nix editor | verbatim value |
+
+## 4. Default type mapping
+
+When `@option` has no `widget`, the control is chosen from the option type that
+nixd reports:
+
+| Nix option type                | Widget |
+|--------------------------------|--------|
+| `bool`                         | `switch` |
+| integer types                  | `spin` |
+| floating point types           | `spin` with `digits` |
+| string types                   | `text` |
+| enum (`one of "..."`)          | `dropdown` |
+| path types                     | `path` |
+| package types                  | `package` |
+| list of package                | `packages` |
+| other list types               | `list` |
+| submodule, attrsOf submodule   | `submodule` |
+| `nullOr X`                     | X's widget plus an unset toggle |
+| freeform attributes, functions | `raw` |
+
+## 5. Choice resolution
+
+`dropdown` and `radio` fill their items in this order:
+
+1. An explicit `choices = [ ... ];` in the `@option` comment.
+2. The `one of "a", "b", "c"` clause parsed from the nixd type.
+3. The sub-option names, when the option is an `attrsOf` over a set of keys.
+
+If none applies, the control falls back to `text` with `pattern` validation.
+
+## 6. `let` and `with` handling
+
+The scanner unwraps a module body through lambdas, `let ... in`, `with ...;`,
+and parentheses before collecting assignments. Comments attach to the next
+assignment wherever it sits, including inside a `let` block:
+
+```nix
+{ pkgs, ... }:
+let
+  /* @option label = "Extra packages"; widget = "packages"; */
+  extraPackages = [ pkgs.git pkgs.vim ];
+in
+with pkgs; {
+  environment.systemPackages = extraPackages;
+}
+```
+
+A `with` scope does not change attachment. The comment still binds to the
+following assignment:
+
+```nix
+with pkgs; {
+  /* @option widget = "dropdown"; choices = [ "auto" "manual" ]; */
+  programs.example.mode = "auto";
+}
+```
+
+When a value itself is wrapped in `let ... in` or `with ...;`, the wrapper is
+peeled for type detection and preserved on write. Only the inner expression span
+is replaced:
+
+```nix
+/* @option widget = "list"; */
+environment.systemPackages = with pkgs; [ git vim ];
+```
+
+Here the editor rewrites `[ git vim ]` and leaves `with pkgs;` intact.
+
+Dynamic attributes (`${...}`) and non-literal paths cannot be addressed, so no
+control is generated for them and they are left untouched.
+
+## 7. Multi-system flakes
+
+With flake-parts and the dendritic pattern, shared modules live under
+`flake.modules.*` and hosts under `flake.nixosConfigurations.*`. A checkbox
+switches between:
+
+- "All settings in the flake": every module and every host configuration.
+- "Current system only": one selected host plus the modules it imports.
+
+Menus are filtered by `@menu systems`, with the `hosts/<host>/` directory name
+as a fallback. A menu with no `systems` is shared and shows in both modes.
+
+## 8. Adding settings
+
+Adding a setting writes both the `@option` block and the assignment at the
+chosen path, then reformats the file. For example, choosing
+`services.pipewire.jack.enable` with a switch produces:
+
+```nix
+/* @option
+   widget = "switch";
+*/
+services.pipewire.jack.enable = true;
+```
+
+## 9. Safety guarantee
+
+The GUI never writes free-form text as the primary input. Every value is
+serialized from a typed control, then parsed with the lossless Nix parser and
+formatted with `nixfmt` before an atomic write. If the result would not parse,
+the write is rejected and the file is left unchanged. An unparseable
+configuration cannot be produced.
+
+## 10. Worked examples
+
+Single-file configuration:
+
+```nix
+/* @menu
+   displayname = "System";
+   icon = "preferences-system-symbolic";
+   order = 10;
+*/
+
+{ config, pkgs, ... }:
+
+{
+  /* @option widget = "text"; label = "Hostname"; */
+  networking.hostName = "myhost";
+
+  /* @option widget = "dropdown"; choices = [ "Europe/Amsterdam" "UTC" ]; */
+  time.timeZone = "Europe/Amsterdam";
+
+  /* @option widget = "switch"; */
+  nixpkgs.config.allowUnfree = true;
+}
+```
+
+Dendritic module:
+
+```nix
+{ self, inputs, ... }: {
+
+  /* @menu
+     displayname = "Audio";
+     icon = "audio-card-symbolic";
+     order = 40;
+     systems = [ "x570" ];
+  */
+
+  flake.modules.nixos.audio = { config, pkgs, ... }: {
+
+    /* @option widget = "switch"; label = "Disable PulseAudio"; */
+    services.pulseaudio.enable = false;
+
+    /* @option widget = "switch"; group = "PipeWire"; */
+    services.pipewire.enable = true;
+  };
+}
+```

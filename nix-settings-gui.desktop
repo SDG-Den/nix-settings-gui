@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=nix-settings-gui
+Comment=Comment-driven settings GUI for Nix
+Exec=nix-settings-gui
+Terminal=false
+Categories=Settings;System;
