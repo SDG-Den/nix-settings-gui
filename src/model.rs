@@ -70,6 +70,9 @@ pub struct MenuModel {
     pub records: Vec<Record>,
     /// Module origins this file defines, used to filter by host import graph.
     pub origins: Vec<String>,
+    /// Whether the file carries an `@menu` block. Files without one are never
+    /// shown, regardless of the visibility toggles.
+    pub has_menu: bool,
 }
 
 impl MenuModel {

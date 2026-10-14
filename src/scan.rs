@@ -13,6 +13,8 @@ use crate::model::{MenuModel, Record};
 pub struct FileScan {
     pub file: String,
     pub spec: MenuSpec,
+    /// Whether an `@menu` block was present in the file.
+    pub has_menu: bool,
     pub records: Vec<Record>,
     pub targets: Vec<String>,
     /// Module origins this file defines, e.g. `modules.nixos.audio`.
@@ -135,6 +137,7 @@ pub fn scan_root(root: &str) -> Result<ScanResult, String> {
             spec: scan.spec,
             records: scan.records,
             origins: scan.origins,
+            has_menu: scan.has_menu,
         });
     }
 
@@ -182,7 +185,10 @@ pub fn scan_file(path: &Path, text: &str) -> FileScan {
     let Ok(root) = rnix::Root::parse(text).ok() else {
         return scan;
     };
-    scan.spec = find_menu(root.syntax());
+    if let Some(spec) = find_menu(root.syntax()) {
+        scan.spec = spec;
+        scan.has_menu = true;
+    }
 
     let Some(expr) = root.expr() else {
         return scan;
@@ -195,7 +201,7 @@ pub fn scan_file(path: &Path, text: &str) -> FileScan {
         }
     }
 
-    walk_body(text, &file, "", &expr, &mut scan.records);
+    walk_body(text, &file, "", &expr, &mut scan.records, true);
     scan
 }
 
@@ -210,7 +216,7 @@ pub fn scan_value(text: &str) -> Vec<Record> {
         return Vec::new();
     };
     let mut out = Vec::new();
-    walk_body(text, "", "", &expr, &mut out);
+    walk_body(text, "", "", &expr, &mut out, false);
     out
 }
 
@@ -265,17 +271,17 @@ fn brace_offset(set: &AttrSet) -> Option<usize> {
 }
 
 /// The first `@menu` comment anywhere in the file is the menu header.
-fn find_menu(root: &SyntaxNode) -> MenuSpec {
+fn find_menu(root: &SyntaxNode) -> Option<MenuSpec> {
     for element in root.descendants_with_tokens() {
         if let Some(token) = element.into_token() {
             if token.kind() == SyntaxKind::TOKEN_COMMENT {
                 if let Some((MarkerKind::Menu, directives)) = dsl::parse_comment(token.text()) {
-                    return MenuSpec::from_directives(&directives);
+                    return Some(MenuSpec::from_directives(&directives));
                 }
             }
         }
     }
-    MenuSpec::default()
+    None
 }
 
 fn top_attrset(expr: &Expr) -> Option<AttrSet> {
@@ -316,7 +322,15 @@ fn scan_dendritic(text: &str, set: &AttrSet, scan: &mut FileScan) {
                 continue;
             };
             if let Some(Expr::AttrSet(body)) = peel_body(&value) {
-                collect_container(text, &file, &origin, body.syntax(), &[], &mut scan.records);
+                collect_container(
+                    text,
+                    &file,
+                    &origin,
+                    body.syntax(),
+                    &[],
+                    &mut scan.records,
+                    true,
+                );
                 collect_module_refs(body.syntax(), &mut scan.imports);
             }
             continue;
@@ -358,30 +372,41 @@ fn peel_body(expr: &Expr) -> Option<Expr> {
 
 /// Walk a module body, unwrapping wrappers, and collect assignments. `let`
 /// bindings carry their own comments, so they are collected before the body.
-fn walk_body(text: &str, file: &str, origin: &str, expr: &Expr, out: &mut Vec<Record>) {
+/// `annotated_only` hides bindings without an `@option` comment; submodule
+/// scans pass `false` so their inner fields always render.
+fn walk_body(
+    text: &str,
+    file: &str,
+    origin: &str,
+    expr: &Expr,
+    out: &mut Vec<Record>,
+    annotated_only: bool,
+) {
     match expr {
         Expr::Lambda(l) => {
             if let Some(body) = l.body() {
-                walk_body(text, file, origin, &body, out);
+                walk_body(text, file, origin, &body, out, annotated_only);
             }
         }
         Expr::LetIn(l) => {
-            collect_container(text, file, origin, l.syntax(), &[], out);
+            collect_container(text, file, origin, l.syntax(), &[], out, annotated_only);
             if let Some(body) = l.body() {
-                walk_body(text, file, origin, &body, out);
+                walk_body(text, file, origin, &body, out, annotated_only);
             }
         }
         Expr::With(w) => {
             if let Some(body) = w.body() {
-                walk_body(text, file, origin, &body, out);
+                walk_body(text, file, origin, &body, out, annotated_only);
             }
         }
         Expr::Paren(p) => {
             if let Some(inner) = p.expr() {
-                walk_body(text, file, origin, &inner, out);
+                walk_body(text, file, origin, &inner, out, annotated_only);
             }
         }
-        Expr::AttrSet(set) => collect_container(text, file, origin, set.syntax(), &[], out),
+        Expr::AttrSet(set) => {
+            collect_container(text, file, origin, set.syntax(), &[], out, annotated_only)
+        }
         _ => {}
     }
 }
@@ -395,6 +420,7 @@ fn collect_container(
     container: &SyntaxNode,
     prefix: &[String],
     out: &mut Vec<Record>,
+    annotated_only: bool,
 ) {
     let mut pending: Option<(String, usize, usize)> = None;
     for element in container.children_with_tokens() {
@@ -419,12 +445,22 @@ fn collect_container(
                 let Some(binding) = AttrpathValue::cast(node) else {
                     continue;
                 };
-                collect_binding(text, file, origin, &binding, prefix, comment, out);
+                collect_binding(
+                    text,
+                    file,
+                    origin,
+                    &binding,
+                    prefix,
+                    comment,
+                    out,
+                    annotated_only,
+                );
             }
         }
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn collect_binding(
     text: &str,
     file: &str,
@@ -433,6 +469,7 @@ fn collect_binding(
     prefix: &[String],
     comment: Option<(String, usize, usize)>,
     out: &mut Vec<Record>,
+    annotated_only: bool,
 ) {
     let Some(path) = binding.attrpath() else {
         return;
@@ -484,9 +521,21 @@ fn collect_binding(
 
     if let Expr::AttrSet(nested) = &inner {
         if !annotated {
-            collect_container(text, file, origin, nested.syntax(), &segments, out);
+            collect_container(
+                text,
+                file,
+                origin,
+                nested.syntax(),
+                &segments,
+                out,
+                annotated_only,
+            );
             return;
         }
+    }
+
+    if annotated_only && !annotated {
+        return;
     }
 
     let node = inner.syntax();
@@ -706,19 +755,24 @@ mod tests {
         let scan = scan(text);
         assert_eq!(scan.spec.displayname.as_deref(), Some("System"));
         let paths: Vec<String> = scan.records.iter().map(Record::path).collect();
-        assert_eq!(
-            paths,
-            vec!["networking.hostName", "services.openssh.enable"]
-        );
+        assert_eq!(paths, vec!["networking.hostName"]);
         assert_eq!(scan.records[0].value, "\"demo\"");
         assert!(scan.records[0].comment_span.is_some());
-        assert!(scan.records[1].comment_span.is_none());
     }
 
     #[test]
-    fn flattens_unannotated_attrsets() {
+    fn marks_files_without_menu() {
+        let with = scan("/* @menu displayname = \"System\"; */\n{ a = 1; }\n");
+        assert!(with.has_menu);
+        let without = scan("{ a = 1; }\n");
+        assert!(!without.has_menu);
+    }
+
+    #[test]
+    fn flattens_containers_to_annotated_leaves() {
         let text = r#"{
   networking = {
+    /* @option widget = "text"; label = "Hostname"; */
     hostName = "demo";
     firewall.enable = true;
   };
@@ -726,10 +780,7 @@ mod tests {
 "#;
         let scan = scan(text);
         let paths: Vec<String> = scan.records.iter().map(Record::path).collect();
-        assert_eq!(
-            paths,
-            vec!["networking.hostName", "networking.firewall.enable"]
-        );
+        assert_eq!(paths, vec!["networking.hostName"]);
     }
 
     #[test]
@@ -764,11 +815,12 @@ mod tests {
 
     #[test]
     fn captures_with_wrapper() {
-        let text = "{\n  environment.systemPackages = with pkgs; [ git vim ];\n}\n";
+        let text =
+            "{\n  /* @option widget = \"packages\"; */\n  environment.systemPackages = with pkgs; [ git vim ];\n}\n";
         let wrapped = scan(text);
         assert_eq!(wrapped.records.len(), 1);
         assert_eq!(wrapped.records[0].wrapper.as_deref(), Some("with pkgs;"));
-        let plain = scan("{ a = [ 1 2 ];\n}\n");
+        let plain = scan("{\n  /* @option widget = \"list\"; */\n  a = [ 1 2 ];\n}\n");
         assert_eq!(plain.records[0].wrapper, None);
     }
 
@@ -800,6 +852,7 @@ mod tests {
     modules = [ self.modules.nixos.common ];
   };
   flake.modules.nixos.common = { pkgs, ... }: {
+    /* @option widget = "dropdown"; */
     time.timeZone = "Europe/Amsterdam";
   };
 }
@@ -824,7 +877,7 @@ in
 "#;
         let scan = scan(text);
         let paths: Vec<String> = scan.records.iter().map(Record::path).collect();
-        assert_eq!(paths, vec!["extraPackages", "environment.systemPackages"]);
+        assert_eq!(paths, vec!["extraPackages"]);
         assert!(scan.records[0].comment_span.is_some());
     }
 
@@ -937,6 +990,7 @@ in
     fn collects_module_origins_and_imports() {
         let text = r#"{ self, ... }: {
   flake.modules.nixos.common = { ... }: {
+    /* @option widget = "module-list"; */
     imports = [ self.modules.nixos.audio ];
     time.timeZone = "UTC";
   };

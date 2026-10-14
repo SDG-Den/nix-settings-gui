@@ -96,6 +96,42 @@ fn serialize_modules(names: &[String], prefix: &str) -> String {
     value::serialize_list(&items)
 }
 
+/// Canonical form of a list value as the editor would write it. Comparing this
+/// against `to_nix` ignores source formatting (multi-line, extra spacing), so
+/// an untouched list is never mistaken for a change.
+fn canonical_list(original: &str, packages: bool) -> Option<String> {
+    let items = value::list_items(original)?;
+    if packages {
+        Some(serialize_packages(&items))
+    } else {
+        let mapped: Vec<String> = items
+            .iter()
+            .map(|item| expr_literal(item))
+            .filter(|item| !item.is_empty() && item != "\"\"")
+            .collect();
+        Some(value::serialize_list(&mapped))
+    }
+}
+
+/// Canonical form of a module list. The editor stores each item with its scope
+/// prefix stripped, so strip the same prefix before re-serializing.
+fn canonical_module_list(original: &str, prefix: &str) -> Option<String> {
+    let items = value::list_items(original)?;
+    let names: Vec<String> = items
+        .iter()
+        .map(|item| {
+            let raw = item.trim();
+            if prefix.is_empty() {
+                raw.to_string()
+            } else {
+                raw.strip_prefix(prefix).unwrap_or(raw).to_string()
+            }
+        })
+        .filter(|name| !name.is_empty())
+        .collect();
+    Some(serialize_modules(&names, prefix))
+}
+
 /// A single package reference: a bare name is qualified with `pkgs.`.
 fn package_literal(raw: &str) -> String {
     let t = raw.trim();
@@ -246,7 +282,7 @@ impl Editor {
             Editor::Switch(w) => if w.is_active() { "true" } else { "false" }.to_string(),
             Editor::Dropdown { combo, choices } => choices
                 .get(combo.selected() as usize)
-                .map(|c| choice_literal(c))
+                .cloned()
                 .unwrap_or_else(|| quote("")),
             Editor::Spin(w) => number_literal(w.value(), w.digits()),
             Editor::Slider(w) => number_literal(w.value(), 0),
@@ -310,7 +346,17 @@ impl Editor {
     /// differences, so an untouched control never triggers a rewrite.
     pub fn unchanged(&self, original: &str) -> bool {
         match self {
-            Editor::List { .. } => self.to_nix().trim() == original.trim(),
+            Editor::List { packages, .. } => match canonical_list(original, *packages) {
+                Some(canonical) => self.to_nix().trim() == canonical.trim(),
+                None => self.to_nix().trim() == original.trim(),
+            },
+            Editor::ModuleList { prefix, .. } => match canonical_module_list(original, prefix) {
+                Some(canonical) => self.to_nix().trim() == canonical.trim(),
+                None => self.to_nix().trim() == original.trim(),
+            },
+            Editor::Package { entry, .. } => {
+                package_literal(&entry.text()) == package_literal(&entry_text(original))
+            }
             Editor::Submodule { children, .. } => children
                 .iter()
                 .all(|(record, editor)| editor.unchanged(&record.value)),
@@ -547,12 +593,7 @@ fn build_slider(spec: &OptionSpec, value_text: &str) -> gtk::Scale {
 }
 
 fn build_entry(value_text: &str, spec: &OptionSpec, monospace: bool) -> gtk::Entry {
-    let unquoted =
-        if value_text.starts_with('"') && value_text.ends_with('"') && value_text.len() >= 2 {
-            unescape(value_text)
-        } else {
-            value_text.trim().to_string()
-        };
+    let unquoted = entry_text(value_text);
     let entry = gtk::Entry::new();
     entry.set_text(&unquoted);
     entry.set_hexpand(true);
@@ -573,6 +614,16 @@ fn unescape(text: &str) -> String {
         .replace("\\\"", "\"")
         .replace("\\${", "${")
         .replace("\\\\", "\\")
+}
+
+/// The text an entry shows for a value: a quoted literal is unquoted, anything
+/// else is trimmed as-is.
+fn entry_text(value: &str) -> String {
+    if value.starts_with('"') && value.ends_with('"') && value.len() >= 2 {
+        unescape(value)
+    } else {
+        value.trim().to_string()
+    }
 }
 
 /// Decode a `"..."` or `''...''` string literal into its raw text.
@@ -1053,6 +1104,42 @@ mod tests {
         assert!(is_bare_package("gcc-13"));
         assert!(!is_bare_package("pkgs.git"));
         assert!(!is_bare_package("git.override {}"));
+    }
+
+    #[test]
+    fn canonicalises_multiline_lists() {
+        let list = "[\n      \"nix-command\"\n      \"flakes\"\n    ]";
+        assert_eq!(
+            canonical_list(list, false),
+            Some("[ \"nix-command\" \"flakes\" ]".to_string())
+        );
+        let packages = "[\n        git\n        vim\n      ]";
+        assert_eq!(
+            canonical_list(packages, true),
+            Some("with pkgs; [ git vim ]".to_string())
+        );
+        assert_eq!(canonical_list("not a list", false), None);
+    }
+
+    #[test]
+    fn canonicalises_module_lists_ignoring_scope() {
+        let original = "[\n  self.modules.nixos.common\n  self.modules.nixos.audio\n]";
+        assert_eq!(
+            canonical_module_list(original, "self.modules.nixos."),
+            Some("[ self.modules.nixos.common self.modules.nixos.audio ]".to_string())
+        );
+        assert_eq!(
+            canonical_module_list("[ common ]", ""),
+            Some("[ common ]".to_string())
+        );
+    }
+
+    #[test]
+    fn package_and_entry_text_round_trip() {
+        assert_eq!(entry_text("\"en_US.UTF-8\""), "en_US.UTF-8");
+        assert_eq!(entry_text(" pkgs.git "), "pkgs.git");
+        assert_eq!(package_literal(&entry_text("\"git\"")), "pkgs.git");
+        assert_eq!(package_literal(&entry_text("pkgs.git")), "pkgs.git");
     }
 
     #[test]
