@@ -103,12 +103,47 @@ fn nixfmt(input: &str) -> Option<String> {
         .spawn()
         .ok()?;
     use std::io::Write;
-    child.stdin.as_mut()?.write_all(input.as_bytes()).ok()?;
-    let out = child.wait_with_output().ok()?;
-    if out.status.success() {
-        String::from_utf8(out.stdout).ok()
-    } else {
-        None
+    if let Some(stdin) = child.stdin.as_mut() {
+        let _ = stdin.write_all(input.as_bytes());
+    }
+    // Drop stdin to ensure EOF
+    drop(child.stdin.take());
+    let mut stdout = child.stdout.take()?;
+    let (out_tx, out_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut out = Vec::new();
+        use std::io::Read;
+        let _ = stdout.read_to_end(&mut out);
+        let _ = out_tx.send(out);
+    });
+    // Wait for process with timeout
+    let (status_tx, status_rx) =
+        std::sync::mpsc::channel::<std::io::Result<std::process::ExitStatus>>();
+    let child_pid = child.id();
+    std::thread::spawn(move || {
+        let status = child.wait();
+        let _ = status_tx.send(status);
+    });
+    match status_rx.recv_timeout(std::time::Duration::from_secs(30)) {
+        Ok(Ok(status)) => {
+            if status.success() {
+                match out_rx.recv_timeout(std::time::Duration::from_secs(5)) {
+                    Ok(out) => String::from_utf8(out).ok(),
+                    Err(_) => None,
+                }
+            } else {
+                None
+            }
+        }
+        Ok(Err(_)) => None,
+        Err(_) => {
+            // Timeout waiting for process - kill it
+            let _ = std::process::Command::new("kill")
+                .arg("-9")
+                .arg(child_pid.to_string())
+                .status();
+            None
+        }
     }
 }
 
