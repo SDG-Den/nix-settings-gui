@@ -97,22 +97,31 @@ fn is_bare_package(text: &str) -> bool {
         .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
-/// Serialize a package list. Bare names need `pkgs` in scope, so they go under
-/// `with pkgs;`; already-qualified expressions stay verbatim in a plain list.
+/// Serialize a package list as the editor writes it into the existing value
+/// span. The span is the inner list (the file's own `with pkgs;` sits outside
+/// it), so this stays a plain list and never adds a wrapper.
+fn package_items(entries: &[String]) -> String {
+    let items: Vec<String> = entries
+        .iter()
+        .map(|e| expr_literal(e))
+        .filter(|e| !e.is_empty() && e != "\"\"")
+        .collect();
+    value::serialize_list(&items)
+}
+
+/// Serialize a standalone package assignment. Bare names need `pkgs` in scope,
+/// so they go under `with pkgs;`; already-qualified expressions stay verbatim.
+/// Used when inserting a brand-new option, which has no wrapper of its own.
 fn serialize_packages(entries: &[String]) -> String {
     let cleaned: Vec<String> = entries
         .iter()
         .map(|e| e.trim().to_string())
         .filter(|e| !e.is_empty())
         .collect();
-    if cleaned.is_empty() {
-        return "[]".to_string();
-    }
-    if cleaned.iter().all(|e| is_bare_package(e)) {
-        format!("with pkgs; [ {} ]", cleaned.join(" "))
+    if !cleaned.is_empty() && cleaned.iter().all(|e| is_bare_package(e)) {
+        format!("with pkgs; {}", package_items(entries))
     } else {
-        let items: Vec<String> = cleaned.iter().map(|e| expr_literal(e)).collect();
-        value::serialize_list(&items)
+        package_items(entries)
     }
 }
 
@@ -132,7 +141,7 @@ fn serialize_modules(names: &[String], prefix: &str) -> String {
 fn canonical_list(original: &str, packages: bool) -> Option<String> {
     let items = value::list_items(original)?;
     if packages {
-        Some(serialize_packages(&items))
+        Some(package_items(&items))
     } else {
         let mapped: Vec<String> = items
             .iter()
@@ -339,7 +348,7 @@ impl Editor {
                     .map(|e| e.text().to_string())
                     .collect();
                 if *packages {
-                    serialize_packages(&raw)
+                    package_items(&raw)
                 } else {
                     let items: Vec<String> = raw
                         .iter()
@@ -495,6 +504,11 @@ fn choose_widget(record: &Record, type_str: Option<&str>) -> WidgetKind {
     if let Some(widget) = spec.widget {
         if widget == WidgetKind::Spin && spec.min.is_some() && spec.max.is_some() {
             return WidgetKind::Slider;
+        }
+        if matches!(widget, WidgetKind::List | WidgetKind::Packages)
+            && value::list_items(value_text).is_none()
+        {
+            return WidgetKind::Raw;
         }
         return widget;
     }
@@ -1172,9 +1186,34 @@ mod tests {
         let packages = "[\n        git\n        vim\n      ]";
         assert_eq!(
             canonical_list(packages, true),
-            Some("with pkgs; [ git vim ]".to_string())
+            Some("[ git vim ]".to_string())
         );
         assert_eq!(canonical_list("not a list", false), None);
+    }
+
+    #[test]
+    fn package_edits_keep_the_existing_with_wrapper() {
+        let original = "[ git vim ]";
+        assert_eq!(canonical_list(original, true), Some(original.to_string()));
+        assert_eq!(
+            package_items(&["git".into(), "vim".into(), "neovim".into()]),
+            "[ git vim neovim ]"
+        );
+        assert!(!package_items(&["git".into()]).contains("with pkgs;"));
+    }
+
+    #[test]
+    fn list_over_non_list_value_falls_back_to_raw() {
+        let mut record = Record {
+            value: "builtins.attrValues self.modules.homeManager".to_string(),
+            segments: vec!["home-manager".to_string(), "sharedModules".to_string()],
+            ..Record::default()
+        };
+        record.spec.widget = Some(WidgetKind::List);
+        assert_eq!(choose_widget(&record, None), WidgetKind::Raw);
+
+        record.value = "[ git vim ]".to_string();
+        assert_eq!(choose_widget(&record, None), WidgetKind::List);
     }
 
     #[test]

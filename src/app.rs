@@ -21,6 +21,7 @@ pub const APP_ID: &str = "org.nix_settings_gui.NixSettingsGui";
 enum Msg {
     Scanned(Result<ScanResult, String>),
     Saved(Result<usize, String>),
+    SaveProgress(f64, String),
     Inserted(Result<(), String>),
     SnippetInserted(Result<(), String>),
     Infos(String, Vec<(String, OptionInfo)>),
@@ -156,6 +157,8 @@ struct App {
     stack: gtk::Stack,
     nixd_banner: adw::Banner,
     status: gtk::Label,
+    spinner: gtk::Spinner,
+    progress: gtk::ProgressBar,
     package_service: Rc<PackageService>,
     tx: Tx,
 
@@ -271,6 +274,14 @@ fn build_ui(app: &adw::Application, tx: &Tx) -> Rc<App> {
         .css_classes(["dim-label"])
         .ellipsize(gtk::pango::EllipsizeMode::End)
         .build();
+    let spinner = gtk::Spinner::new();
+    spinner.set_visible(false);
+    spinner.set_tooltip_text(Some("Working..."));
+
+    let progress = gtk::ProgressBar::new();
+    progress.set_visible(false);
+    progress.set_width_request(160);
+    progress.set_valign(gtk::Align::Center);
 
     let configure_btn = gtk::Button::with_label("Configure");
     let add_file_btn = gtk::Button::with_label("Add file");
@@ -320,7 +331,9 @@ fn build_ui(app: &adw::Application, tx: &Tx) -> Rc<App> {
     bottom.set_margin_start(8);
     bottom.set_margin_end(8);
     bottom.append(&menu_button);
+    bottom.append(&spinner);
     bottom.append(&status);
+    bottom.append(&progress);
     bottom.append(&save_btn);
     bottom.append(&rebuild_btn);
     bottom.append(&git_btn);
@@ -353,6 +366,8 @@ fn build_ui(app: &adw::Application, tx: &Tx) -> Rc<App> {
         stack,
         nixd_banner,
         status,
+        spinner,
+        progress,
         package_service: PackageService::new(),
         tx: tx.clone(),
         config: RefCell::new(AppConfig::load()),
@@ -1324,7 +1339,10 @@ fn collect_package_checks(app: &Rc<App>) -> Vec<(String, String)> {
             if editor.unchanged(&control.record.value) {
                 continue;
             }
-            checks.push((control.record.path(), editor.to_nix()));
+            checks.push((
+                control.record.path(),
+                format!("with pkgs; {}", editor.to_nix()),
+            ));
         }
     }
     checks
@@ -1333,6 +1351,7 @@ fn collect_package_checks(app: &Rc<App>) -> Vec<(String, String)> {
 fn save_all(app: &Rc<App>, tx: &Tx, rebuild: bool) {
     let edits = collect_edits(app);
     if edits.is_empty() {
+        clear_busy(app);
         app.status.set_text("Nothing to save");
         if rebuild {
             run_rebuild(app);
@@ -1342,24 +1361,54 @@ fn save_all(app: &Rc<App>, tx: &Tx, rebuild: bool) {
     let root = app.base.borrow().clone();
     let checks = collect_package_checks(app);
     let flake = app.config.borrow().flake_path.clone();
-    app.status
-        .set_text(&format!("Saving {} change(s)...", edits.len()));
+    set_busy(app, "Saving...", 0.0);
     spawn(tx, move |tx| {
-        let mut errors = Vec::new();
-        for (path, literal) in &checks {
-            let assignment = format!("{path} = {literal};");
-            if let Ok(messages) = crate::nixd::query_errors(flake.as_deref(), &assignment) {
-                errors.extend(messages.into_iter().map(|m| format!("{path}: {m}")));
+        const VALIDATE_END: f64 = 0.7;
+        let report = |done: usize, total: usize| {
+            let fraction = if total == 0 {
+                VALIDATE_END
+            } else {
+                VALIDATE_END * done as f64 / total as f64
+            };
+            let label = if done == 0 {
+                "Validating package changes...".to_string()
+            } else {
+                format!("Validated {done} of {total} package change(s)...")
+            };
+            let _ = tx.send_blocking(Msg::SaveProgress(fraction, label));
+        };
+        if let Ok(errors) = crate::nixd::query_errors(flake.as_deref(), &checks, report) {
+            if !errors.is_empty() {
+                let _ = tx.send_blocking(Msg::Invalid(errors));
+                return;
             }
         }
-        if !errors.is_empty() {
-            let _ = tx.send_blocking(Msg::Invalid(errors));
-            return;
-        }
+        let _ = tx.send_blocking(Msg::SaveProgress(
+            VALIDATE_END,
+            "Writing changes...".to_string(),
+        ));
         let result = edit::apply(&edits, &root);
+        let _ = tx.send_blocking(Msg::SaveProgress(1.0, "Saved".to_string()));
         let _ = tx.send_blocking(Msg::Saved(result));
     });
     app.pending_rebuild.set(rebuild);
+}
+
+/// Show the busy indicators (spinner and progress bar) with a status message.
+fn set_busy(app: &Rc<App>, message: &str, fraction: f64) {
+    app.spinner.set_visible(true);
+    app.spinner.start();
+    app.progress.set_visible(true);
+    app.progress.set_fraction(fraction);
+    app.status.set_text(message);
+}
+
+/// Hide the busy indicators once a long-running task finishes.
+fn clear_busy(app: &Rc<App>) {
+    app.spinner.stop();
+    app.spinner.set_visible(false);
+    app.progress.set_visible(false);
+    app.progress.set_fraction(0.0);
 }
 
 /// What the unsaved-changes dialog should do for a response.
@@ -2450,7 +2499,11 @@ fn handle_msg(app: &Rc<App>, tx: &Tx, msg: Msg) {
             app.status.set_text("Scan failed");
             show_error(&app.window, &e);
         }
+        Msg::SaveProgress(fraction, label) => {
+            set_busy(app, &label, fraction);
+        }
         Msg::Saved(Ok(count)) => {
+            clear_busy(app);
             app.status.set_text(&format!("Saved {count} file(s)"));
             let pending = app.pending_rebuild.replace(false);
             let base = app.base.borrow().clone();
@@ -2463,11 +2516,13 @@ fn handle_msg(app: &Rc<App>, tx: &Tx, msg: Msg) {
             }
         }
         Msg::Saved(Err(e)) => {
+            clear_busy(app);
             app.pending_rebuild.set(false);
             app.status.set_text("Save failed");
             show_error(&app.window, &e);
         }
         Msg::Invalid(errors) => {
+            clear_busy(app);
             app.pending_rebuild.set(false);
             app.status
                 .set_text(&format!("Package error: {}", errors.join("; ")));

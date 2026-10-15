@@ -253,6 +253,10 @@ pub struct Session {
 
 impl Session {
     fn start(config: &Value) -> Result<Self, String> {
+        Self::start_with_timeout(config, Duration::from_secs(300))
+    }
+
+    fn start_with_timeout(config: &Value, timeout: Duration) -> Result<Self, String> {
         let nixpkgs = config
             .pointer("/nixpkgs/expr")
             .and_then(Value::as_str)
@@ -268,7 +272,7 @@ impl Session {
             .map_err(|e| format!("failed to start nixd: {e}"))?;
         let mut stdin = child.stdin.take().ok_or("nixd has no stdin")?;
         let mut reader = BufReader::new(child.stdout.take().ok_or("nixd has no stdout")?);
-        spawn_watchdog(child, Duration::from_secs(300));
+        spawn_watchdog(child, timeout);
         handshake(&mut stdin, &mut reader, config)?;
         Ok(Self {
             stdin,
@@ -370,16 +374,43 @@ fn did_open(uri: &str, text: &str) -> Value {
     })
 }
 
-/// The diagnostic messages nixd reports for one assignment inside a module.
-pub fn query_errors(flake_path: Option<&str>, assignment: &str) -> Result<Vec<String>, String> {
+/// The diagnostic messages nixd reports for changed assignments, as
+/// `"<path>: <message>"` lines to show the user.
+///
+/// All assignments share one nixd session, and the session is bounded by a short
+/// watchdog. Evaluating the flake's `nixpkgs` input can take a long time (or
+/// stall outright); when that happens the read fails and this returns `Err`, so
+/// the caller saves without validation instead of hanging. `progress` is called
+/// with `(checked, total)` before each assignment so the caller can show how far
+/// along the validation is.
+pub fn query_errors<F: FnMut(usize, usize)>(
+    flake_path: Option<&str>,
+    assignments: &[(String, String)],
+    mut progress: F,
+) -> Result<Vec<String>, String> {
+    let total = assignments.len();
+    if total == 0 {
+        return Ok(Vec::new());
+    }
     let nixpkgs = nixpkgs_expr(flake_path);
     let config = json!({ "nixpkgs": { "expr": nixpkgs }, "options": {} });
-    let mut session = Session::start(&config)?;
+    let mut session = Session::start_with_timeout(&config, Duration::from_secs(60))?;
 
-    let uri = "file:///tmp/nix-settings-gui/validate.nix";
-    let text = format!("let pkgs = {nixpkgs}; in\n{{\n  {assignment}\n}}\n");
-    session.notify(&did_open(uri, &text))?;
-    session.diagnostics(uri)
+    let mut errors = Vec::new();
+    for (index, (path, literal)) in assignments.iter().enumerate() {
+        progress(index, total);
+        let uri = format!("file:///tmp/nix-settings-gui/validate-{index}.nix");
+        let text = format!("let pkgs = {nixpkgs}; in\n{{\n  {path} = {literal};\n}}\n");
+        session.notify(&did_open(&uri, &text))?;
+        errors.extend(
+            session
+                .diagnostics(&uri)?
+                .into_iter()
+                .map(|message| format!("{path}: {message}")),
+        );
+    }
+    progress(total, total);
+    Ok(errors)
 }
 
 fn completion_labels(result: &Value) -> Vec<String> {
