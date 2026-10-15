@@ -65,6 +65,10 @@ the `nixd` JSON-RPC client, and the span-patch plus `nixfmt` write path.
   "imported from <origin>" badge, and edits are applied at the origin file.
 - A per-option action resets the control to the nixd default.
 - The "Add option" button sits below the controls.
+- Each `@insert` marker renders an "Add <label>" button at the end of its group
+  (or at the end of the menu when it has no group). Pressing it opens a dialog
+  for the snippet's `%%placeholder%%` values, then inserts the fragment directly
+  above the marker.
 
 ## 2. Bottom bar
 

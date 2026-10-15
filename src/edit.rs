@@ -75,6 +75,26 @@ pub fn insert_assignment(file: &str, origin: &str, block: &str) -> Result<(), St
     write_atomic(file, &formatted)
 }
 
+/// Insert `block` directly at `offset`, then reformat. Used to add a snippet
+/// instance at an `@insert` marker, whose line start is the offset, so the
+/// marker shifts down and the snippet lands above it.
+pub fn insert_at(file: &str, offset: usize, block: &str) -> Result<(), String> {
+    let text = std::fs::read_to_string(file).map_err(|e| format!("cannot read {file}: {e}"))?;
+    if offset > text.len() || !text.is_char_boundary(offset) {
+        return Err(format!("insert offset {offset} out of range for {file}"));
+    }
+    let insertion = format!("{block}\n");
+    let mut patched = String::with_capacity(text.len() + insertion.len());
+    patched.push_str(&text[..offset]);
+    patched.push_str(&insertion);
+    patched.push_str(&text[offset..]);
+    if rnix::Root::parse(&patched).ok().is_err() {
+        return Err(format!("new snippet would make {file} unparseable"));
+    }
+    let formatted = nixfmt(&patched).unwrap_or(patched);
+    write_atomic(file, &formatted)
+}
+
 fn nixfmt(input: &str) -> Option<String> {
     let mut child = std::process::Command::new("nixfmt")
         .stdin(std::process::Stdio::piped())
@@ -142,6 +162,32 @@ mod tests {
         let updated = std::fs::read_to_string(&file).unwrap();
         assert!(updated.contains("b = true;"));
         assert!(rnix::Root::parse(&updated).ok().is_ok());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn inserts_above_marker_and_shifts_it_down() {
+        let dir = std::env::temp_dir().join(format!("nsg-insert-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("cfg.nix");
+        let original = "{ ... }: {\n  a = 1;\n  /* @insert name = \"x\"; */\n}\n";
+        std::fs::write(&file, original).unwrap();
+        let path = file.display().to_string();
+        let marker = original.find("/* @insert").unwrap();
+        let line_start = original[..marker].rfind('\n').map(|i| i + 1).unwrap();
+
+        insert_at(
+            &path,
+            line_start,
+            "# @option widget = \"text\";\nb = \"v\";",
+        )
+        .unwrap();
+        let updated = std::fs::read_to_string(&file).unwrap();
+        assert!(rnix::Root::parse(&updated).ok().is_ok());
+        let b = updated.find("b = \"v\";").unwrap();
+        let marker = updated.find("@insert").unwrap();
+        assert!(b < marker, "snippet should sit above the marker");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

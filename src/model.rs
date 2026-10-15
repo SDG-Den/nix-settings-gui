@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::dsl::{MenuSpec, OptionSpec};
+use crate::dsl::{MenuSpec, OptionSpec, SnippetSpec};
 
 /// One config assignment found by the scanner, tied to its `@option`
 /// annotation. Spans index the original file text so the edit engine can
@@ -62,12 +62,44 @@ impl Node {
     }
 }
 
+/// A `@insert` marker in a file: the point where a snippet's instances are
+/// inserted, and the group the add button belongs to.
+#[derive(Debug, Clone, Default)]
+pub struct InsertMarker {
+    pub name: String,
+    pub group: Option<String>,
+    pub order: Option<i64>,
+    pub label: Option<String>,
+    /// Byte offset of the start of the line holding the marker comment, so an
+    /// insert lands above the marker and shifts it down.
+    pub offset: usize,
+    /// 1-based line of the marker, for diagnostics.
+    pub line: u32,
+}
+
+impl InsertMarker {
+    pub fn from_spec(spec: &crate::dsl::InsertSpec, offset: usize, line: u32) -> Self {
+        Self {
+            name: spec.name.clone(),
+            group: spec.group.clone(),
+            order: spec.order,
+            label: spec.label.clone(),
+            offset,
+            line,
+        }
+    }
+}
+
 /// One `.nix` file rendered as a settings menu.
 #[derive(Debug, Clone, Default)]
 pub struct MenuModel {
     pub file: String,
     pub spec: MenuSpec,
     pub records: Vec<Record>,
+    /// Snippets defined by `@snippet` markers in the file.
+    pub snippets: Vec<SnippetSpec>,
+    /// `@insert` markers in the file, in source order.
+    pub inserts: Vec<InsertMarker>,
     /// Module origins this file defines, used to filter by host import graph.
     pub origins: Vec<String>,
     /// Whether the file carries an `@menu` block. Files without one are never

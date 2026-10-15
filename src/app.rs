@@ -8,10 +8,10 @@ use gtk::glib;
 use gtk::prelude::*;
 
 use crate::config::AppConfig;
-use crate::dsl::WidgetKind;
+use crate::dsl::{SnippetSpec, WidgetKind};
 use crate::edit;
 use crate::metadata::{self, Target};
-use crate::model::Record;
+use crate::model::{InsertMarker, MenuModel, Record};
 use crate::nixd::OptionInfo;
 use crate::scan::{self, ScanResult};
 use crate::widgets::{self, Editor};
@@ -22,6 +22,7 @@ enum Msg {
     Scanned(Result<ScanResult, String>),
     Saved(Result<usize, String>),
     Inserted(Result<(), String>),
+    SnippetInserted(Result<(), String>),
     Infos(String, Vec<(String, OptionInfo)>),
     Suggestions(Vec<String>),
     Invalid(Vec<String>),
@@ -66,6 +67,13 @@ struct MenuPage {
     controls: Vec<Rc<ControlRow>>,
     root: gtk::Widget,
     content: gtk::Box,
+}
+
+/// An "Add <snippet>" button placed at an `@insert` marker's group.
+struct InsertButton {
+    group: String,
+    order: i64,
+    button: gtk::Button,
 }
 
 /// A single long-lived nixd process shared by all package searches. Keystrokes
@@ -803,14 +811,21 @@ fn build_page(app: &Rc<App>, menu: &crate::model::MenuModel) -> MenuPage {
     ordinary.sort_by(|a, b| control_cmp(a, b));
     advanced.sort_by(|a, b| control_cmp(a, b));
 
-    add_grouped(&content, &ordinary);
+    let mut inserts = build_insert_buttons(app, menu);
+    add_grouped(&content, &ordinary, &mut inserts);
     if !advanced.is_empty() {
         let expander = gtk::Expander::new(Some("Advanced"));
         let inner = gtk::Box::new(gtk::Orientation::Vertical, 12);
         inner.set_margin_top(6);
-        add_grouped(&inner, &advanced);
+        let mut no_inserts = Vec::new();
+        add_grouped(&inner, &advanced, &mut no_inserts);
         expander.set_child(Some(&inner));
         content.append(&expander);
+    }
+
+    inserts.sort_by(|a, b| a.group.cmp(&b.group).then_with(|| a.order.cmp(&b.order)));
+    for insert in inserts {
+        content.append(&insert.button);
     }
 
     let add = gtk::Button::with_label("Add option");
@@ -852,11 +867,14 @@ fn build_page(app: &Rc<App>, menu: &crate::model::MenuModel) -> MenuPage {
     }
 }
 
-fn add_grouped(content: &gtk::Box, controls: &[Rc<ControlRow>]) {
+fn add_grouped(content: &gtk::Box, controls: &[Rc<ControlRow>], inserts: &mut Vec<InsertButton>) {
     let mut last_group: Option<String> = None;
     for control in controls {
         let group = control.record.spec.group.clone().unwrap_or_default();
         if last_group.as_deref() != Some(group.as_str()) {
+            if let Some(previous) = last_group.take() {
+                flush_inserts(content, inserts, &previous);
+            }
             if !group.is_empty() {
                 let label = gtk::Label::builder()
                     .label(&group)
@@ -870,6 +888,73 @@ fn add_grouped(content: &gtk::Box, controls: &[Rc<ControlRow>]) {
         }
         content.append(&control.row);
     }
+    if let Some(previous) = last_group.take() {
+        flush_inserts(content, inserts, &previous);
+    }
+}
+
+/// Append the insert buttons assigned to `group`, in `order`, then drop them so
+/// they are not placed again.
+fn flush_inserts(content: &gtk::Box, inserts: &mut Vec<InsertButton>, group: &str) {
+    inserts.sort_by_key(|insert| insert.order);
+    let mut index = 0;
+    while index < inserts.len() {
+        if inserts[index].group == group {
+            let insert = inserts.remove(index);
+            content.append(&insert.button);
+        } else {
+            index += 1;
+        }
+    }
+}
+
+/// Build the "Add <snippet>" button for every `@insert` marker, resolving its
+/// target group from the marker, or from the record directly above it.
+fn build_insert_buttons(app: &Rc<App>, menu: &MenuModel) -> Vec<InsertButton> {
+    let mut out = Vec::new();
+    for marker in &menu.inserts {
+        let Some(snippet) = menu.snippets.iter().find(|s| s.name == marker.name) else {
+            continue;
+        };
+        let label = marker
+            .label
+            .clone()
+            .or_else(|| (!snippet.label.is_empty()).then(|| snippet.label.clone()))
+            .unwrap_or_else(|| marker.name.clone());
+        let button = gtk::Button::with_label(&format!("Add {label}"));
+        button.add_css_class("pill");
+        button.set_halign(gtk::Align::Start);
+        {
+            let app = app.clone();
+            let file = menu.file.clone();
+            let marker = marker.clone();
+            let snippet = snippet.clone();
+            button.connect_clicked(move |_| {
+                open_snippet_dialog(&app, &file, &marker, &snippet);
+            });
+        }
+        let group = marker
+            .group
+            .clone()
+            .unwrap_or_else(|| preceding_group(menu, marker.offset));
+        out.push(InsertButton {
+            group,
+            order: marker.order.unwrap_or(1000),
+            button,
+        });
+    }
+    out
+}
+
+/// The group of the record directly above `offset` in the file, or empty when
+/// nothing precedes the marker.
+fn preceding_group(menu: &MenuModel, offset: usize) -> String {
+    menu.records
+        .iter()
+        .filter(|record| record.byte_start < offset)
+        .max_by_key(|record| record.byte_start)
+        .map(|record| record.spec.group.clone().unwrap_or_default())
+        .unwrap_or_default()
 }
 
 fn control_cmp(a: &ControlRow, b: &ControlRow) -> std::cmp::Ordering {
@@ -2017,6 +2102,72 @@ fn template_for(displayname: &str, kind: &str, module_name: &str, path: &Path) -
     format!("{header}{body}")
 }
 
+/// Prompt for a snippet's `%%token%%` values, render it, and insert it at the
+/// marker's line so the marker shifts down one line.
+fn open_snippet_dialog(app: &Rc<App>, file: &str, marker: &InsertMarker, snippet: &SnippetSpec) {
+    let dialog = gtk::Dialog::builder()
+        .title(format!("Add {}", snippet.label))
+        .transient_for(&app.window)
+        .modal(true)
+        .build();
+    dialog.add_button("Cancel", gtk::ResponseType::Cancel);
+    dialog.add_button("Add", gtk::ResponseType::Accept);
+
+    let grid = gtk::Grid::builder()
+        .row_spacing(6)
+        .column_spacing(8)
+        .margin_top(12)
+        .margin_bottom(12)
+        .margin_start(12)
+        .margin_end(12)
+        .build();
+
+    let mut entries: Vec<(String, gtk::Entry)> = Vec::new();
+    for (row, placeholder) in snippet.placeholders.iter().enumerate() {
+        let label = gtk::Label::builder()
+            .label(&placeholder.label)
+            .xalign(0.0)
+            .build();
+        let entry = gtk::Entry::new();
+        entry.set_text(&placeholder.default);
+        entry.set_hexpand(true);
+        entry.set_width_chars(40);
+        if !placeholder.hint.is_empty() {
+            entry.set_placeholder_text(Some(&placeholder.hint));
+        }
+        grid.attach(&label, 0, row as i32, 1, 1);
+        grid.attach(&entry, 1, row as i32, 1, 1);
+        entries.push((placeholder.name.clone(), entry));
+    }
+    dialog.content_area().append(&grid);
+
+    let file = file.to_string();
+    let offset = marker.offset;
+    let body = snippet.body.clone();
+    let tx = app.tx.clone();
+    let master: gtk::Window = app.window.clone().upcast();
+    dialog.connect_response(move |dialog, response| {
+        if response == gtk::ResponseType::Accept {
+            let values: Vec<(String, String)> = entries
+                .iter()
+                .map(|(name, entry)| (name.clone(), entry.text().to_string()))
+                .collect();
+            let rendered = crate::templates::render(&body, &values);
+            let result = edit::insert_at(&file, offset, &rendered);
+            let message = match &result {
+                Ok(()) => Msg::SnippetInserted(Ok(())),
+                Err(e) => {
+                    show_error(&master, e);
+                    Msg::SnippetInserted(Err(e.clone()))
+                }
+            };
+            let _ = tx.send_blocking(message);
+        }
+        dialog.close();
+    });
+    dialog.present();
+}
+
 fn open_add_option(app: &Rc<App>, file: &str, origin: &str) {
     let dialog = gtk::Dialog::builder()
         .title("Add option")
@@ -2331,6 +2482,18 @@ fn handle_msg(app: &Rc<App>, tx: &Tx, msg: Msg) {
         }
         Msg::Inserted(Err(e)) => {
             app.status.set_text("Add option failed");
+            show_error(&app.window, &e);
+        }
+        Msg::SnippetInserted(Ok(())) => {
+            app.status.set_text("Snippet added");
+            let base = app.base.borrow().clone();
+            spawn(tx, move |tx| {
+                let result = scan::scan_root(&base);
+                let _ = tx.send_blocking(Msg::Scanned(result));
+            });
+        }
+        Msg::SnippetInserted(Err(e)) => {
+            app.status.set_text("Add snippet failed");
             show_error(&app.window, &e);
         }
         Msg::Infos(file, infos) => apply_infos(app, &file, &infos),

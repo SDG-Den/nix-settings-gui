@@ -206,6 +206,8 @@ pub enum MarkerKind {
     Menu,
     Option,
     Template,
+    Snippet,
+    Insert,
 }
 
 /// Recognise a marker comment and parse its body. `inner` is the comment text
@@ -233,6 +235,8 @@ fn split_marker(s: &str) -> Option<(MarkerKind, &str)> {
         ("@menu", MarkerKind::Menu),
         ("@option", MarkerKind::Option),
         ("@template", MarkerKind::Template),
+        ("@snippet", MarkerKind::Snippet),
+        ("@insert", MarkerKind::Insert),
     ] {
         if let Some(rest) = s.strip_prefix(tag) {
             if rest.is_empty() || rest.starts_with(char::is_whitespace) {
@@ -412,6 +416,96 @@ fn parse_visibility(d: &Directives) -> Option<Visibility> {
     })
 }
 
+/// One `%%token%%` field offered when a snippet is inserted.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PlaceholderSpec {
+    pub name: String,
+    pub label: String,
+    pub default: String,
+    pub hint: String,
+}
+
+/// A reusable snippet defined by an in-file `@snippet` marker.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SnippetSpec {
+    pub name: String,
+    pub label: String,
+    pub body: String,
+    pub placeholders: Vec<PlaceholderSpec>,
+}
+
+impl SnippetSpec {
+    pub fn from_directives(d: &Directives) -> Self {
+        let name = d.string("name").unwrap_or_default();
+        let body = d
+            .string("snippet")
+            .or_else(|| d.string("body"))
+            .unwrap_or_default();
+        let label = d.string("label").unwrap_or_else(|| name.clone());
+        Self {
+            name,
+            label,
+            placeholders: collect_placeholders(d, &body),
+            body,
+        }
+    }
+}
+
+/// A `@insert` marker naming the snippet to place there.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct InsertSpec {
+    pub name: String,
+    pub group: Option<String>,
+    pub order: Option<i64>,
+    pub label: Option<String>,
+}
+
+impl InsertSpec {
+    pub fn from_directives(d: &Directives) -> Self {
+        Self {
+            name: d.string("name").unwrap_or_default(),
+            group: d.string("group"),
+            order: d.int("order"),
+            label: d.string("label"),
+        }
+    }
+}
+
+/// The `%%token%%` names in `body`, in first-seen order, deduplicated.
+pub fn snippet_tokens(body: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut rest = body;
+    while let Some(start) = rest.find("%%") {
+        let after = &rest[start + 2..];
+        let Some(end) = after.find("%%") else {
+            break;
+        };
+        let name = &after[..end];
+        if !name.is_empty() && !names.iter().any(|n| n == name) {
+            names.push(name.to_string());
+        }
+        rest = &after[end + 2..];
+    }
+    names
+}
+
+/// Read `placeholders.<name>.<field>` overrides for the tokens in `body`,
+/// preserving the token order from the body.
+fn collect_placeholders(d: &Directives, body: &str) -> Vec<PlaceholderSpec> {
+    let sub = d.sub("placeholders");
+    snippet_tokens(body)
+        .into_iter()
+        .map(|name| PlaceholderSpec {
+            label: sub
+                .string(&format!("{name}.label"))
+                .unwrap_or_else(|| name.clone()),
+            default: sub.string(&format!("{name}.default")).unwrap_or_default(),
+            hint: sub.string(&format!("{name}.hint")).unwrap_or_default(),
+            name,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -546,5 +640,32 @@ mod tests {
             Lit::List(vec![Lit::Int(1), Lit::Bool(false)]).to_nix(),
             "[ 1 false ]"
         );
+    }
+
+    #[test]
+    fn parses_snippet_marker() {
+        let text = "/* @snippet\n   name = \"keybind\";\n   label = \"Add keybind\";\n   snippet = ''\n     # @option widget = \"text\";\n     keybinds.\"%%keys%%\" = \"%%action%%\";\n   '';\n   placeholders.keys.label = \"Keys\";\n*/";
+        let (kind, d) = parse_comment(text).unwrap();
+        assert_eq!(kind, MarkerKind::Snippet);
+        let spec = SnippetSpec::from_directives(&d);
+        assert_eq!(spec.name, "keybind");
+        assert_eq!(spec.label, "Add keybind");
+        assert!(spec.body.contains("%%keys%%"));
+        assert!(spec.body.contains("# @option"));
+        let names: Vec<&str> = spec.placeholders.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["keys", "action"]);
+        assert_eq!(spec.placeholders[0].label, "Keys");
+        assert_eq!(spec.placeholders[1].label, "action");
+    }
+
+    #[test]
+    fn parses_insert_marker() {
+        let text = "/* @insert name = \"keybind\"; group = \"Keybinds\"; order = 10; */";
+        let (kind, d) = parse_comment(text).unwrap();
+        assert_eq!(kind, MarkerKind::Insert);
+        let spec = InsertSpec::from_directives(&d);
+        assert_eq!(spec.name, "keybind");
+        assert_eq!(spec.group.as_deref(), Some("Keybinds"));
+        assert_eq!(spec.order, Some(10));
     }
 }

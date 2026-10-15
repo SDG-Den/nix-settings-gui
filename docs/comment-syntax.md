@@ -343,3 +343,65 @@ flake.modules.nixos."%%name%%" = { pkgs, ... }: {
 
 Placeholder order follows the order the fields first appear in the comment.
 
+## 12. Insert snippets (`@snippet` and `@insert`)
+
+A snippet is a reusable fragment offered as an "Add" button in a menu. A
+`@snippet` comment at the top of a file defines the fragment; an `@insert`
+comment inside the module body marks where its button appears.
+
+```nix
+/* @menu displayname = "Keybinds"; */
+
+/* @snippet
+   name = "keybind";
+   label = "Add keybind";
+   snippet = ''
+     # @option widget = "text"; label = "Action";
+     keybinds."%%keys%%" = "%%action%%";
+   '';
+   placeholders.keys.label = "Keys";
+   placeholders.action.label = "Action";
+   placeholders.action.default = "spawn";
+*/
+
+{ config, ... }:
+
+{
+  /* @insert
+     name = "keybind";
+     group = "Keybinds";
+     order = 10;
+  */
+}
+```
+
+| Key (`@snippet`) | Type | Default | Meaning |
+|------------------|------|---------|---------|
+| `name` | string | required | Identifier an `@insert` refers to. |
+| `label` | string | the name | Text of the "Add" button. |
+| `snippet` | string | required | The fragment to insert. `body` is accepted as a fallback. |
+| `placeholders.<name>.label` | string | the name | Field label in the fill-in dialog. |
+| `placeholders.<name>.default` | string | empty | Prefilled field value. |
+| `placeholders.<name>.hint` | string | empty | Placeholder text shown when the field is empty. |
+
+| Key (`@insert`) | Type | Default | Meaning |
+|-----------------|------|---------|---------|
+| `name` | string | required | The `@snippet` this button inserts. |
+| `label` | string | the snippet's label | Overrides the button text. |
+| `group` | string | inferred | Places the button at the end of this group. |
+| `order` | integer | 1000 | Sort key among the buttons in the same group. |
+
+Placeholders are written `%%name%%` in the snippet body, the same notation as
+`@template`, and are replaced with the values typed into the dialog. Adding
+always opens the dialog, even when the snippet has no placeholders.
+
+The fragment is inserted at the marker's line start, so the marker shifts one
+line down each time and the snippet always lands directly above it. The inserted
+text keeps its own `@option` comments, so the new control appears immediately.
+Because comment bodies are lexed as ordinary comments, a multi-line `@snippet`
+body annotates its lines with `#` line comments rather than a `/* */` block,
+which would close the enclosing comment early. `@insert` belongs directly above
+the assignments it introduces, and `nixfmt` rewrites both markers to `#` lines
+on write; the scanner reads either form.
+
+

@@ -5,8 +5,8 @@ use rnix::ast::{Attr, AttrSet, AttrpathValue, Expr, HasEntry, InterpolPart, List
 use rnix::{NodeOrToken, SyntaxKind, SyntaxNode};
 use rowan::ast::AstNode;
 
-use crate::dsl::{self, MarkerKind, MenuSpec, OptionSpec};
-use crate::model::{MenuModel, Record};
+use crate::dsl::{self, InsertSpec, MarkerKind, MenuSpec, OptionSpec, SnippetSpec};
+use crate::model::{InsertMarker, MenuModel, Record};
 
 /// Everything the scanner learns from one file.
 #[derive(Debug, Clone, Default)]
@@ -16,6 +16,10 @@ pub struct FileScan {
     /// Whether an `@menu` block was present in the file.
     pub has_menu: bool,
     pub records: Vec<Record>,
+    /// `@snippet` definitions in the file.
+    pub snippets: Vec<SnippetSpec>,
+    /// `@insert` markers in the file, in source order.
+    pub inserts: Vec<InsertMarker>,
     pub targets: Vec<String>,
     /// Module origins this file defines, e.g. `modules.nixos.audio`.
     pub origins: Vec<String>,
@@ -136,6 +140,8 @@ pub fn scan_root(root: &str) -> Result<ScanResult, String> {
             file: scan.file,
             spec: scan.spec,
             records: scan.records,
+            snippets: scan.snippets,
+            inserts: scan.inserts,
             origins: scan.origins,
             has_menu: scan.has_menu,
         });
@@ -189,6 +195,8 @@ pub fn scan_file(path: &Path, text: &str) -> FileScan {
         scan.spec = spec;
         scan.has_menu = true;
     }
+    scan.snippets = find_snippets(root.syntax());
+    scan.inserts = find_inserts(text, root.syntax());
 
     let Some(expr) = root.expr() else {
         return scan;
@@ -296,6 +304,54 @@ fn find_menu(root: &SyntaxNode) -> Option<MenuSpec> {
         }
     }
     None
+}
+
+/// Every `@snippet` marker in the file, in source order.
+fn find_snippets(root: &SyntaxNode) -> Vec<SnippetSpec> {
+    let mut out = Vec::new();
+    for element in root.descendants_with_tokens() {
+        let Some(token) = element.into_token() else {
+            continue;
+        };
+        if token.kind() != SyntaxKind::TOKEN_COMMENT {
+            continue;
+        }
+        if let Some((MarkerKind::Snippet, directives)) = dsl::parse_comment(token.text()) {
+            let spec = SnippetSpec::from_directives(&directives);
+            if !spec.name.is_empty() {
+                out.push(spec);
+            }
+        }
+    }
+    out
+}
+
+/// Every `@insert` marker in the file, in source order, with the byte offset of
+/// the start of its line.
+fn find_inserts(text: &str, root: &SyntaxNode) -> Vec<InsertMarker> {
+    let mut out = Vec::new();
+    for element in root.descendants_with_tokens() {
+        let Some(token) = element.into_token() else {
+            continue;
+        };
+        if token.kind() != SyntaxKind::TOKEN_COMMENT {
+            continue;
+        }
+        let Some((MarkerKind::Insert, directives)) = dsl::parse_comment(token.text()) else {
+            continue;
+        };
+        let comment_start = usize::from(token.text_range().start());
+        let offset = text[..comment_start]
+            .rfind('\n')
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        let (line, _) = line_col(text, offset);
+        let spec = InsertSpec::from_directives(&directives);
+        if !spec.name.is_empty() {
+            out.push(InsertMarker::from_spec(&spec, offset, line));
+        }
+    }
+    out
 }
 
 fn top_attrset(expr: &Expr) -> Option<AttrSet> {
@@ -1174,5 +1230,50 @@ in
             .collect();
         assert!(!alpha.contains(&"Unused".to_string()));
         assert!(alpha.contains(&"Audio".to_string()));
+    }
+
+    #[test]
+    fn finds_snippet_and_insert_markers() {
+        let text = r#"/* @menu displayname = "Keys"; */
+
+/* @snippet
+   name = "keybind";
+   label = "Add keybind";
+   snippet = ''
+     # @option widget = "text"; label = "Action";
+     keybinds."%%keys%%" = "%%action%%";
+   '';
+   placeholders.keys.label = "Keys";
+*/
+
+{ config, ... }:
+
+{
+  /* @insert
+     name = "keybind";
+     group = "Keybinds";
+     order = 10;
+  */
+}
+"#;
+        let scan = scan(text);
+        assert_eq!(scan.snippets.len(), 1);
+        let snippet = &scan.snippets[0];
+        assert_eq!(snippet.name, "keybind");
+        assert_eq!(snippet.placeholders[0].label, "Keys");
+        assert_eq!(scan.inserts.len(), 1);
+        let marker = &scan.inserts[0];
+        assert_eq!(marker.name, "keybind");
+        assert_eq!(marker.group.as_deref(), Some("Keybinds"));
+        assert_eq!(marker.order, Some(10));
+        let marker_line = text[..marker.offset].matches('\n').count() + 1;
+        assert_eq!(marker_line as u32, marker.line);
+    }
+
+    #[test]
+    fn ignores_incomplete_markers() {
+        let text = "/* @snippet label = \"No name\"; */\n{ a = 1; }\n";
+        let scan = scan(text);
+        assert!(scan.snippets.is_empty());
     }
 }
