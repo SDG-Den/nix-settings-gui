@@ -56,6 +56,9 @@ the `nixd` JSON-RPC client, and the span-patch plus `nixfmt` write path.
   controls come first.
 - `advanced` controls collapse into an "Advanced" section; `hidden` controls
   render only while the Advanced toggle is on.
+- A control with `visibleWhen` renders only while another option in the same
+  menu satisfies the condition, re-evaluated live as values change. Hidden
+  controls are not written on save.
 - Each control shows its label, helper text, and an unsaved indicator when its
   staged value differs from the file.
 - Controls that resolve to another module (a merged import) render with an

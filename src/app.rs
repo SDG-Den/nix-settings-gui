@@ -46,6 +46,8 @@ struct ControlRow {
     desc: gtk::Label,
     dirty: gtk::Label,
     reset: gtk::Button,
+    /// Whether this control's `visibleWhen` dependency currently holds.
+    dep_visible: Cell<bool>,
 }
 
 impl ControlRow {
@@ -840,6 +842,7 @@ fn build_page(app: &Rc<App>, menu: &crate::model::MenuModel) -> MenuPage {
 
     let mut controls: Vec<Rc<ControlRow>> = ordinary;
     controls.extend(advanced);
+    evaluate_dependencies(&controls);
 
     MenuPage {
         file: menu.file.clone(),
@@ -1011,6 +1014,7 @@ fn build_control_row(app: &Rc<App>, record: &Record) -> Rc<ControlRow> {
         desc,
         dirty,
         reset,
+        dep_visible: Cell::new(true),
     });
 
     {
@@ -1023,21 +1027,24 @@ fn build_control_row(app: &Rc<App>, record: &Record) -> Rc<ControlRow> {
         });
     }
 
-    connect_dirty(&control);
+    connect_dirty(app, &control);
     control
 }
 
 /// Set the dirty bullet whenever any editor widget changes, based on whether
-/// the editor still matches the record's original value.
-fn connect_dirty(row: &ControlRow) {
+/// the editor still matches the record's original value, and re-evaluate any
+/// visibility dependencies that key off the changed editor.
+fn connect_dirty(app: &Rc<App>, row: &ControlRow) {
     let dirty = row.dirty.clone();
     let original = row.record.value.clone();
     let weak = Rc::downgrade(&row.editor);
+    let app = app.clone();
     let update: Rc<dyn Fn()> = Rc::new(move || {
         if let Some(editor) = weak.upgrade() {
             let unchanged = editor.borrow().unchanged(&original);
             dirty.set_visible(!unchanged);
         }
+        refresh_dependencies(&app);
     });
     connect_editor_signals(&row.editor.borrow(), &update);
 }
@@ -1092,6 +1099,39 @@ fn connect_editor_signals(editor: &Editor, update: &Rc<dyn Fn()>) {
     }
 }
 
+/// Recompute `dep_visible` for every control from the current values of the
+/// options it depends on, then re-apply the combined visibility. Dependency
+/// scope is one page: `visibleWhen.path` is looked up by full option path
+/// within the same menu.
+fn refresh_dependencies(app: &Rc<App>) {
+    let current = app.current_file.borrow().clone();
+    for page in app.pages.borrow().iter() {
+        if page.file == current {
+            evaluate_dependencies(&page.controls);
+        }
+    }
+    apply_control_filter(app);
+}
+
+/// Set each control's `dep_visible` from its `visibleWhen` condition. A
+/// governing option that is absent fails open, so a stale path never hides a
+/// setting.
+fn evaluate_dependencies(controls: &[Rc<ControlRow>]) {
+    let mut values: HashMap<String, String> = HashMap::new();
+    for control in controls {
+        values
+            .entry(control.record.path())
+            .or_insert_with(|| control.editor.borrow().to_nix());
+    }
+    for control in controls {
+        let visible = match &control.record.spec.visible_when {
+            Some(vis) => vis.holds(values.get(&vis.path).map(String::as_str)),
+            None => true,
+        };
+        control.dep_visible.set(visible);
+    }
+}
+
 fn apply_control_filter(app: &Rc<App>) {
     let query = app.search.text().to_lowercase();
     let current = app.current_file.borrow().clone();
@@ -1111,8 +1151,9 @@ fn apply_control_filter(app: &Rc<App>) {
                     .as_deref()
                     .map(|l| l.to_lowercase().contains(&query))
                     .unwrap_or(false);
-            control.row.set_visible(matches);
-            if matches && !query.is_empty() && first_match.is_none() {
+            let visible = matches && control.dep_visible.get();
+            control.row.set_visible(visible);
+            if visible && !query.is_empty() && first_match.is_none() {
                 first_match = Some(control);
             }
         }
@@ -1153,7 +1194,7 @@ fn reset_to_default(app: &Rc<App>, control: &ControlRow) {
             record.value = default;
             let editor = widgets::build(&record, None, &build_context(app));
             control.set_editor(editor);
-            connect_dirty(control);
+            connect_dirty(app, control);
             app.status.set_text("Reset to default");
         }
         Ok(_) => app.status.set_text("No default available"),
@@ -1165,11 +1206,16 @@ fn reset_to_default(app: &Rc<App>, control: &ControlRow) {
 // save and rebuild
 // ---------------------------------------------------------------------------
 
-/// Every staged edit across every page, in page order.
+/// Every staged edit across every page, in page order. Controls hidden by a
+/// `visibleWhen` dependency are skipped, so a disabled parent cannot commit
+/// its children's staged edits.
 fn collect_edits(app: &Rc<App>) -> Vec<edit::PendingEdit> {
     let mut edits = Vec::new();
     for page in app.pages.borrow().iter() {
         for control in &page.controls {
+            if !control.dep_visible.get() {
+                continue;
+            }
             let editor = control.editor.borrow();
             edits.extend(editor.edits(&control.record));
         }
@@ -1178,11 +1224,14 @@ fn collect_edits(app: &Rc<App>) -> Vec<edit::PendingEdit> {
 }
 
 /// Package assignments that changed, as `(path, literal)` pairs to validate
-/// with nixd before writing.
+/// with nixd before writing. Hidden-by-dependency controls are skipped.
 fn collect_package_checks(app: &Rc<App>) -> Vec<(String, String)> {
     let mut checks = Vec::new();
     for page in app.pages.borrow().iter() {
         for control in &page.controls {
+            if !control.dep_visible.get() {
+                continue;
+            }
             if !widgets::is_package(&control.record) {
                 continue;
             }
@@ -1615,7 +1664,7 @@ fn apply_infos(app: &Rc<App>, file: &str, infos: &[(String, OptionInfo)]) {
                         let editor =
                             widgets::build(&control.record, Some(type_str), &build_context(app));
                         control.set_editor(editor);
-                        connect_dirty(control);
+                        connect_dirty(app, control);
                     }
                 }
             }
@@ -1987,7 +2036,6 @@ fn open_add_option(app: &Rc<App>, file: &str, origin: &str) {
         .build();
 
     let path_entry = gtk::Entry::new();
-    let probe_entry = path_entry.clone();
     path_entry.set_placeholder_text(Some("services.pipewire.enable"));
     path_entry.set_hexpand(true);
     path_entry.set_width_chars(48);
@@ -2086,67 +2134,6 @@ fn open_add_option(app: &Rc<App>, file: &str, origin: &str) {
         dialog.close();
     });
     dialog.present();
-
-    if std::env::var_os("NSG_ADDPROBE").is_some() {
-        let app2 = app.clone();
-        let entry = probe_entry.clone();
-        let store = store.clone();
-        let completion = completion.clone();
-        completion.connect_no_matches(|_| eprintln!("PROBE no_matches"));
-        {
-            use gtk::prelude::{TreeModelExt, TreeModelExtManual};
-            let mut iter = store.iter_first();
-            let mut shown = 0;
-            while let Some(it) = iter {
-                let val = store.get_value(&it, 0);
-                eprintln!("PROBE row={:?}", val.get::<String>());
-                shown += 1;
-                if shown >= 3 || !store.iter_next(&it) {
-                    break;
-                }
-                iter = Some(it);
-            }
-            eprintln!("PROBE model_is_some={}", completion.model().is_some());
-        }
-        eprintln!(
-            "PROBE column_type={:?} text_column={} min_key={} popup={}",
-            gtk::prelude::TreeModelExt::column_type(&store, 0),
-            completion.text_column(),
-            completion.minimum_key_length(),
-            completion.is_popup_completion(),
-        );
-        for key in ["ser", "services", "services.pipewire", "boot", "prog"] {
-            eprintln!(
-                "PROBE compute_prefix({key}) = {:?}",
-                completion.compute_prefix(key)
-            );
-        }
-        {
-            let cstore = gtk::ListStore::new(&[glib::Type::STRING]);
-            let ccomp = gtk::EntryCompletion::new();
-            ccomp.set_model(Some(&cstore));
-            ccomp.set_text_column(0);
-            for p in ["services.foo", "services.bar"] {
-                let p = p.to_string();
-                cstore.set(&cstore.append(), &[(0, &p)]);
-            }
-            eprintln!(
-                "PROBE control_prefix(services) = {:?}",
-                ccomp.compute_prefix("services")
-            );
-        }
-        glib::timeout_add_local_once(std::time::Duration::from_millis(2500), move || {
-            let n = store.iter_n_children(None);
-            eprintln!("PROBE store_count={n}");
-            entry.set_text("services");
-            let app3 = app2.clone();
-            glib::timeout_add_local_once(std::time::Duration::from_millis(800), move || {
-                let cache = app3.suggest_cache.borrow().clone();
-                eprintln!("PROBE cache_keys={:?}", cache.keys().collect::<Vec<_>>());
-                std::process::exit(0);
-            });
-        });
-    }
 }
 
 /// Every option path the scan already knows, plus each dotted prefix, offered
@@ -2307,17 +2294,6 @@ fn handle_msg(app: &Rc<App>, tx: &Tx, msg: Msg) {
             *app.scan.borrow_mut() = Some(result);
             app.status.set_text("Ready");
             rebuild_view(app);
-            if std::env::var_os("NSG_ADDPROBE").is_some() {
-                let menus = visible_menus(app);
-                if let Some(menu) = menus.first() {
-                    let origin = menu
-                        .records
-                        .first()
-                        .map(|r| r.origin.clone())
-                        .unwrap_or_default();
-                    open_add_option(app, &menu.file, &origin);
-                }
-            }
         }
         Msg::Scanned(Err(e)) => {
             app.status.set_text("Scan failed");

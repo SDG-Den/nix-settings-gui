@@ -14,6 +14,40 @@ pub enum Lit {
     Null,
 }
 
+impl Lit {
+    /// Render a literal as canonical Nix source, so it can be compared against
+    /// the output of an editor's `to_nix`.
+    pub fn to_nix(&self) -> String {
+        match self {
+            Lit::Bool(b) => b.to_string(),
+            Lit::Int(i) => i.to_string(),
+            Lit::Float(f) => format_float(*f),
+            Lit::Str(s) => quote(s),
+            Lit::List(items) => {
+                let inner: Vec<String> = items.iter().map(Lit::to_nix).collect();
+                format!("[ {} ]", inner.join(" "))
+            }
+            Lit::Null => "null".to_string(),
+        }
+    }
+}
+
+fn quote(s: &str) -> String {
+    let escaped = s
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace("${", "\\${");
+    format!("\"{escaped}\"")
+}
+
+fn format_float(f: f64) -> String {
+    let mut text = f.to_string();
+    if !text.contains('.') && !text.contains('e') && !text.contains('E') {
+        text.push_str(".0");
+    }
+    text
+}
+
 /// Parsed `key = value;` pairs from a single marker body.
 #[derive(Debug, Clone, Default)]
 pub struct Directives(Vec<(String, Lit)>);
@@ -280,6 +314,41 @@ impl MenuSpec {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Visibility {
+    /// Full option path of the governing option, within the same menu.
+    pub path: String,
+    /// Canonical Nix literal the governing value must equal, if any.
+    pub equals: Option<String>,
+    /// Canonical Nix literal the governing value must not equal, if any.
+    pub not_equals: Option<String>,
+}
+
+impl Visibility {
+    /// Whether the condition holds for the governing option's current value.
+    /// `None` means the governing option was not found, which fails open.
+    pub fn holds(&self, current: Option<&str>) -> bool {
+        let Some(current) = current else {
+            return true;
+        };
+        let current = current.trim();
+        if self.equals.is_none() && self.not_equals.is_none() {
+            return !matches!(current, "false" | "null" | "0" | "0.0");
+        }
+        if let Some(equals) = &self.equals {
+            if current != equals.trim() {
+                return false;
+            }
+        }
+        if let Some(not_equals) = &self.not_equals {
+            if current == not_equals.trim() {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct OptionSpec {
     pub widget: Option<WidgetKind>,
     pub label: Option<String>,
@@ -301,6 +370,7 @@ pub struct OptionSpec {
     pub pattern: Option<String>,
     pub item_label: Option<String>,
     pub add_label: Option<String>,
+    pub visible_when: Option<Visibility>,
 }
 
 impl OptionSpec {
@@ -326,8 +396,20 @@ impl OptionSpec {
             pattern: d.string("pattern"),
             item_label: d.string("itemLabel"),
             add_label: d.string("addLabel"),
+            visible_when: parse_visibility(d),
         }
     }
+}
+
+/// Build a `Visibility` from the `visibleWhen.*` dotted directives, if a path
+/// is present.
+fn parse_visibility(d: &Directives) -> Option<Visibility> {
+    let path = d.string("visibleWhen.path")?;
+    Some(Visibility {
+        path,
+        equals: d.get("visibleWhen.equals").map(|lit| lit.to_nix()),
+        not_equals: d.get("visibleWhen.notEquals").map(|lit| lit.to_nix()),
+    })
 }
 
 #[cfg(test)]
@@ -413,5 +495,56 @@ mod tests {
     fn marker_requires_word_boundary() {
         assert!(parse_marker("@optionwidget = 1;").is_none());
         assert!(parse_marker("@option").is_some());
+    }
+
+    #[test]
+    fn parses_visibility_dependency() {
+        let text = "/* @option widget = \"switch\"; visibleWhen.path = \"services.pipewire.enable\"; visibleWhen.equals = true; visibleWhen.notEquals = false; */";
+        let (kind, d) = parse_comment(text).unwrap();
+        assert_eq!(kind, MarkerKind::Option);
+        let opt = OptionSpec::from_directives(&d);
+        let vis = opt.visible_when.unwrap();
+        assert_eq!(vis.path, "services.pipewire.enable");
+        assert_eq!(vis.equals.as_deref(), Some("true"));
+        assert_eq!(vis.not_equals.as_deref(), Some("false"));
+    }
+
+    #[test]
+    fn visibility_holds_by_truthiness_and_equality() {
+        let truthy = Visibility {
+            path: "a".into(),
+            equals: None,
+            not_equals: None,
+        };
+        assert!(truthy.holds(Some("true")));
+        assert!(!truthy.holds(Some("false")));
+        assert!(truthy.holds(None));
+
+        let eq = Visibility {
+            path: "a".into(),
+            equals: Some("\"auto\"".into()),
+            not_equals: None,
+        };
+        assert!(eq.holds(Some("\"auto\"")));
+        assert!(!eq.holds(Some("\"manual\"")));
+
+        let ne = Visibility {
+            path: "a".into(),
+            equals: None,
+            not_equals: Some("false".into()),
+        };
+        assert!(ne.holds(Some("true")));
+        assert!(!ne.holds(Some("false")));
+    }
+
+    #[test]
+    fn lit_renders_canonical_nix() {
+        assert_eq!(Lit::Bool(true).to_nix(), "true");
+        assert_eq!(Lit::Int(3).to_nix(), "3");
+        assert_eq!(Lit::Str("a\"b".into()).to_nix(), "\"a\\\"b\"");
+        assert_eq!(
+            Lit::List(vec![Lit::Int(1), Lit::Bool(false)]).to_nix(),
+            "[ 1 false ]"
+        );
     }
 }

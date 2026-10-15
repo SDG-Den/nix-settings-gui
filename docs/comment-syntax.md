@@ -82,6 +82,33 @@ services.pipewire.enable = true;
 | `pattern`     | string          | Regular expression a `text` value must match. |
 | `itemLabel`   | string          | Label for one row of a `list`. |
 | `addLabel`    | string          | Label of the list "add" button. |
+| `visibleWhen.path` | string     | Another option in the same menu; the control shows only when its value satisfies the conditions below. |
+| `visibleWhen.equals` | literal | Value the governing option must equal. |
+| `visibleWhen.notEquals` | literal | Value the governing option must not equal. |
+
+### Visibility dependencies
+
+`visibleWhen.path` names another option in the same menu. The control renders
+only while that option's current value satisfies the conditions. This makes an
+enable toggle reveal its dependent settings:
+
+```nix
+/* @option widget = "switch"; label = "Enable JACK"; */
+services.pipewire.jack.enable = true;
+
+/* @option widget = "text"; label = "JACK server name";
+   visibleWhen.path = "services.pipewire.jack.enable"; */
+services.pipewire.jack.serverName = "default";
+```
+
+`visibleWhen.equals` and `visibleWhen.notEquals` take any literal (`true`,
+`"auto"`, `3`). With neither set, the control shows while the governing value is
+truthy (not `false`, `null`, or zero). When both are set, both must hold.
+
+The dependency is evaluated live as you edit, and is scoped to the menu. If the
+named option is not found in the menu, the control stays visible, so a stale
+path never hides a setting unexpectedly. A control hidden by its dependency is
+not written on save, so a disabled parent cannot commit its children.
 
 ## 3. Widgets
 

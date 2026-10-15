@@ -228,10 +228,7 @@ pub fn body_insert_offset(text: &str, origin: &str) -> Option<usize> {
     let expr = root.expr()?;
 
     if origin.is_empty() {
-        return match peel_body(&expr)? {
-            Expr::AttrSet(set) => brace_offset(&set),
-            _ => None,
-        };
+        return insert_body(&expr).and_then(|set| brace_offset(&set));
     }
 
     let comps: Vec<&str> = origin.split('.').collect();
@@ -254,7 +251,7 @@ pub fn body_insert_offset(text: &str, origin: &str) -> Option<usize> {
             let Some(value) = binding.value() else {
                 continue;
             };
-            if let Expr::AttrSet(set) = peel_body(&value)? {
+            if let Some(set) = insert_body(&value) {
                 return brace_offset(&set);
             }
         }
@@ -268,6 +265,23 @@ fn brace_offset(set: &AttrSet) -> Option<usize> {
         .filter_map(|element| element.into_token())
         .find(|token| token.kind() == SyntaxKind::TOKEN_L_BRACE)
         .map(|token| usize::from(token.text_range().end()))
+}
+
+/// The attribute set an inserted assignment belongs to: unwrap wrappers and
+/// descend through merges (`//`) and conditionals (`if`) to the first set.
+fn insert_body(expr: &Expr) -> Option<AttrSet> {
+    match peel_body(expr)? {
+        Expr::AttrSet(set) => Some(set),
+        Expr::BinOp(op) => op
+            .lhs()
+            .and_then(|lhs| insert_body(&lhs))
+            .or_else(|| op.rhs().and_then(|rhs| insert_body(&rhs))),
+        Expr::IfElse(cond) => cond
+            .body()
+            .and_then(|body| insert_body(&body))
+            .or_else(|| cond.else_body().and_then(|body| insert_body(&body))),
+        _ => None,
+    }
 }
 
 /// The first `@menu` comment anywhere in the file is the menu header.
@@ -321,18 +335,8 @@ fn scan_dendritic(text: &str, set: &AttrSet, scan: &mut FileScan) {
             let Some(value) = binding.value() else {
                 continue;
             };
-            if let Some(Expr::AttrSet(body)) = peel_body(&value) {
-                collect_container(
-                    text,
-                    &file,
-                    &origin,
-                    body.syntax(),
-                    &[],
-                    &mut scan.records,
-                    true,
-                );
-                collect_module_refs(body.syntax(), &mut scan.imports);
-            }
+            walk_body(text, &file, &origin, &value, &mut scan.records, true);
+            collect_module_refs(value.syntax(), &mut scan.imports);
             continue;
         }
 
@@ -371,7 +375,8 @@ fn peel_body(expr: &Expr) -> Option<Expr> {
 }
 
 /// Walk a module body, unwrapping wrappers, and collect assignments. `let`
-/// bindings carry their own comments, so they are collected before the body.
+/// bindings carry their own comments, so they are collected before the body;
+/// they always require an `@option` comment so helper variables stay hidden.
 /// `annotated_only` hides bindings without an `@option` comment; submodule
 /// scans pass `false` so their inner fields always render.
 fn walk_body(
@@ -389,7 +394,7 @@ fn walk_body(
             }
         }
         Expr::LetIn(l) => {
-            collect_container(text, file, origin, l.syntax(), &[], out, annotated_only);
+            collect_container(text, file, origin, l.syntax(), &[], out, true);
             if let Some(body) = l.body() {
                 walk_body(text, file, origin, &body, out, annotated_only);
             }
@@ -406,6 +411,22 @@ fn walk_body(
         }
         Expr::AttrSet(set) => {
             collect_container(text, file, origin, set.syntax(), &[], out, annotated_only)
+        }
+        Expr::BinOp(op) => {
+            if let Some(lhs) = op.lhs() {
+                walk_body(text, file, origin, &lhs, out, annotated_only);
+            }
+            if let Some(rhs) = op.rhs() {
+                walk_body(text, file, origin, &rhs, out, annotated_only);
+            }
+        }
+        Expr::IfElse(cond) => {
+            if let Some(body) = cond.body() {
+                walk_body(text, file, origin, &body, out, annotated_only);
+            }
+            if let Some(else_body) = cond.else_body() {
+                walk_body(text, file, origin, &else_body, out, annotated_only);
+            }
         }
         _ => {}
     }
@@ -538,7 +559,11 @@ fn collect_binding(
         return;
     }
 
-    let node = inner.syntax();
+    let node = if annotated && matches!(inner, Expr::AttrSet(_)) {
+        value.syntax()
+    } else {
+        inner.syntax()
+    };
     let range = node.text_range();
     let byte_start = usize::from(range.start());
     let (line, col) = line_col(text, byte_start);
@@ -846,6 +871,59 @@ mod tests {
     }
 
     #[test]
+    fn scans_dendritic_let_and_merge_body() {
+        let text = r#"{ self, ... }: {
+  flake.modules.nixos.mixed = { pkgs, ... }:
+    let
+      /* @option widget = "text"; label = "Extra"; */
+      extra = "value";
+      enabled = true;
+    in
+    {
+      /* @option widget = "switch"; label = "Base"; */
+      services.base.enable = true;
+    } // (if enabled then {
+      /* @option widget = "text"; label = "Theme"; */
+      theme.name = "dark";
+    } else { });
+}
+"#;
+        let scan = scan(text);
+        let paths: Vec<String> = scan.records.iter().map(Record::path).collect();
+        assert!(paths.contains(&"extra".to_string()));
+        assert!(paths.contains(&"services.base.enable".to_string()));
+        assert!(paths.contains(&"theme.name".to_string()));
+        assert!(!paths.contains(&"enabled".to_string()));
+        assert!(scan
+            .records
+            .iter()
+            .all(|r| r.origin == "modules.nixos.merge" || r.origin == "modules.nixos.mixed"));
+    }
+
+    #[test]
+    fn submodule_value_with_let() {
+        let text = r#"{ self, ... }: {
+  flake.modules.nixos.sub = {
+    /* @option widget = "submodule"; label = "Group"; */
+    foo = let
+      hidden = 1;
+      /* @option widget = "switch"; label = "Nested"; */
+      bar = true;
+    in {
+      baz = 2;
+    };
+  };
+}
+"#;
+        let scan = scan(text);
+        let foo = scan.records.iter().find(|r| r.path() == "foo").unwrap();
+        let names: Vec<String> = scan_value(&foo.value).iter().map(Record::path).collect();
+        assert!(names.contains(&"bar".to_string()));
+        assert!(names.contains(&"baz".to_string()));
+        assert!(!names.contains(&"hidden".to_string()));
+    }
+
+    #[test]
     fn records_host_targets() {
         let text = r#"{ self, inputs, ... }: {
   flake.nixosConfigurations.alpha = inputs.nixpkgs.lib.nixosSystem {
@@ -938,6 +1016,20 @@ in
         assert!(shared.contains(&"Common".to_string()));
         assert!(shared.contains(&"Desktop".to_string()));
         assert!(!shared.contains(&"Audio".to_string()));
+
+        let merge = result
+            .menus
+            .iter()
+            .find(|m| m.display_name() == "Merge")
+            .unwrap();
+        let merge_paths: Vec<String> = merge.records.iter().map(Record::path).collect();
+        assert!(merge_paths.contains(&"extra".to_string()));
+        assert!(merge_paths.contains(&"services.base.enable".to_string()));
+        assert!(merge_paths.contains(&"theme.name".to_string()));
+        assert!(merge
+            .records
+            .iter()
+            .all(|r| r.origin == "modules.nixos.merge"));
     }
 
     #[test]
@@ -960,6 +1052,14 @@ in
         let text = "{ self, ... }: {\n  flake.modules.nixos.audio = { pkgs, ... }: {\n    a = 1;\n  };\n}\n";
         let offset = body_insert_offset(text, "modules.nixos.audio").unwrap();
         assert!(text[..offset].ends_with("flake.modules.nixos.audio = { pkgs, ... }: {"));
+        assert!(text[offset..].starts_with("\n    a = 1;"));
+    }
+
+    #[test]
+    fn body_insert_offset_merged_body() {
+        let text = "{ self, ... }: {\n  flake.modules.nixos.mixed = { pkgs, ... }: let x = 1; in {\n    a = 1;\n  } // (if true then { b = 2; } else { });\n}\n";
+        let offset = body_insert_offset(text, "modules.nixos.mixed").unwrap();
+        assert!(text[..offset].ends_with(": let x = 1; in {"));
         assert!(text[offset..].starts_with("\n    a = 1;"));
     }
 
