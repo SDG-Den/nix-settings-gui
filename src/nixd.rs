@@ -1,5 +1,7 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use serde_json::{json, Value};
@@ -104,12 +106,19 @@ fn read_message(reader: &mut BufReader<ChildStdout>) -> std::io::Result<Value> {
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
 }
 
-fn spawn_watchdog(mut child: Child, timeout: Duration) {
-    std::thread::spawn(move || {
-        std::thread::sleep(timeout);
-        let _ = child.kill();
-    });
+#[cfg(unix)]
+fn set_death_signal(child: &mut Command) {
+    use std::os::unix::process::CommandExt;
+    unsafe {
+        child.pre_exec(|| {
+            libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
+            Ok(())
+        });
+    }
 }
+
+#[cfg(not(unix))]
+fn set_death_signal(_child: &mut Command) {}
 
 fn handshake(
     stdin: &mut ChildStdin,
@@ -160,6 +169,105 @@ fn handshake(
     }
 }
 
+struct Manager {
+    session: Option<Session>,
+    key: String,
+}
+
+impl Manager {
+    fn ensure(&mut self, key: &str, config: &Value) -> Result<&mut Session, String> {
+        if self.session.is_none() || self.key != key {
+            self.session = None;
+            let session = Session::start_with_timeout(config, Duration::from_secs(300))?;
+            self.session = Some(session);
+            self.key = key.to_string();
+        }
+        self.session
+            .as_mut()
+            .ok_or_else(|| "nixd session missing".to_string())
+    }
+
+    fn shutdown(&mut self) {
+        self.session = None;
+        self.key.clear();
+    }
+}
+
+type Job = Box<dyn FnOnce(&mut Manager) + Send>;
+
+struct Client {
+    tx: std::sync::mpsc::Sender<Job>,
+}
+
+static CLIENT: OnceLock<Client> = OnceLock::new();
+static HOVER_URI_COUNTER: AtomicU64 = AtomicU64::new(0);
+static VALIDATE_URI_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// The owner thread owns the single nixd session for the life of the process.
+/// It is the thread that spawns nixd, so `PR_SET_PDEATHSIG` tracks the whole
+/// process rather than any short-lived caller thread.
+fn client() -> &'static Client {
+    CLIENT.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::channel::<Job>();
+        std::thread::spawn(move || {
+            let mut manager = Manager {
+                session: None,
+                key: String::new(),
+            };
+            while let Ok(job) = rx.recv() {
+                job(&mut manager);
+            }
+        });
+        Client { tx }
+    })
+}
+
+/// Open the owner thread so the instance is ready from launch.
+pub fn init() {
+    let _ = client();
+}
+
+/// Ensure a session exists for `flake_path` without running a request.
+pub fn warm(flake_path: Option<&str>) {
+    let nixpkgs = nixpkgs_expr(flake_path);
+    let config = json!({ "nixpkgs": { "expr": nixpkgs.clone() }, "options": {} });
+    let key = format!("pkgs:{}:{}", flake_path.unwrap_or("<nixpkgs>"), nixpkgs);
+    let job: Job = Box::new(move |manager: &mut Manager| {
+        let _ = manager.ensure(&key, &config);
+    });
+    let _ = client().tx.send(job);
+}
+
+fn with_session<T>(
+    key: String,
+    config: Value,
+    f: impl FnOnce(&mut Session) -> Result<T, String> + Send + 'static,
+) -> Result<T, String>
+where
+    T: Send + 'static,
+{
+    let (result_tx, result_rx) = std::sync::mpsc::channel();
+    let job: Job = Box::new(move |manager: &mut Manager| {
+        let result = match manager.ensure(&key, &config) {
+            Ok(session) => f(session),
+            Err(e) => Err(e),
+        };
+        let _ = result_tx.send(result);
+    });
+    client()
+        .tx
+        .send(job)
+        .map_err(|_| "nixd owner thread is gone".to_string())?;
+    result_rx
+        .recv()
+        .map_err(|_| "nixd owner thread dropped the request".to_string())?
+}
+
+pub fn shutdown_nixd() {
+    let job: Job = Box::new(|manager: &mut Manager| manager.shutdown());
+    let _ = client().tx.send(job);
+}
+
 /// Ask nixd for hover information about an option path in the given flake.
 pub fn query_hover(flake_path: &str, target: &str, option_path: &str) -> Result<String, String> {
     let expr = options_expr(flake_path, target)
@@ -168,27 +276,12 @@ pub fn query_hover(flake_path: &str, target: &str, option_path: &str) -> Result<
         "nixpkgs": { "expr": "import <nixpkgs> { }" },
         "options": { "main": { "expr": expr } },
     });
-
-    let mut child = Command::new("nixd")
-        .arg("--config")
-        .arg(config.to_string())
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| format!("failed to start nixd: {e}"))?;
-
-    let mut stdin = child.stdin.take().ok_or("nixd has no stdin")?;
-    let mut reader = BufReader::new(child.stdout.take().ok_or("nixd has no stdout")?);
-    spawn_watchdog(child, Duration::from_secs(30));
-
-    handshake(&mut stdin, &mut reader, &config)?;
-
-    let uri = "file:///tmp/nix-settings-gui/synthetic.nix";
+    let key = format!("hover:{flake_path}:{target}");
+    let uri = format!(
+        "file:///tmp/nix-settings-gui/synthetic-{}.nix",
+        HOVER_URI_COUNTER.fetch_add(1, Ordering::SeqCst)
+    );
     let text = format!("{{ ... }}: {{\n  {option_path} = null;\n}}\n");
-    // nixd resolves only the single attrpath segment under the cursor; hover the
-    // leaf (e.g. `systemPackages`) so it reports the option's real type, not the
-    // first segment (`environment`), which has no type.
     let last_len = option_path.rsplit('.').next().map(str::len).unwrap_or(0);
     let leaf_column = 2 + option_path.len() - last_len;
     let did_open = json!({
@@ -196,38 +289,22 @@ pub fn query_hover(flake_path: &str, target: &str, option_path: &str) -> Result<
         "method": "textDocument/didOpen",
         "params": { "textDocument": { "uri": uri, "languageId": "nix", "version": 1, "text": text } }
     });
-    write_message(&mut stdin, &did_open).map_err(|e| e.to_string())?;
-
-    let hover = json!({
-        "jsonrpc": "2.0",
-        "id": 2,
-        "method": "textDocument/hover",
-        "params": {
-            "textDocument": { "uri": uri },
-            "position": { "line": 1, "character": leaf_column }
-        }
-    });
-    write_message(&mut stdin, &hover).map_err(|e| e.to_string())?;
-
-    let result = loop {
-        let msg = read_message(&mut reader).map_err(|e| e.to_string())?;
-        let method = msg.get("method").and_then(Value::as_str);
-        let id = msg.get("id").cloned();
-
-        if method.is_some() {
-            if let Some(id) = id {
-                let reply = json!({"jsonrpc": "2.0", "id": id, "result": Value::Null});
-                let _ = write_message(&mut stdin, &reply);
+    with_session(key, config, move |session| -> Result<String, String> {
+        session.notify(&did_open)?;
+        let id = session.next_id;
+        session.next_id += 1;
+        let hover = json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "textDocument/hover",
+            "params": {
+                "textDocument": { "uri": uri },
+                "position": { "line": 1, "character": leaf_column }
             }
-            continue;
-        }
-
-        if id.and_then(|v| v.as_i64()) == Some(2) {
-            break msg.get("result").cloned().unwrap_or(Value::Null);
-        }
-    };
-
-    Ok(render_hover(&result))
+        });
+        let result = session.request(id, &hover)?;
+        Ok(render_hover(&result))
+    })
 }
 
 /// The nixpkgs expression nixd should evaluate. Mirrors the VSCodium nix-ide
@@ -243,8 +320,15 @@ pub fn nixpkgs_expr(flake_path: Option<&str>) -> String {
     }
 }
 
+impl Drop for Session {
+    fn drop(&mut self) {
+        self.kill();
+    }
+}
+
 /// A running nixd process spoken to over stdio.
 pub struct Session {
+    child: Arc<Mutex<Child>>,
     stdin: ChildStdin,
     reader: BufReader<ChildStdout>,
     nixpkgs: String,
@@ -252,29 +336,25 @@ pub struct Session {
 }
 
 impl Session {
-    fn start(config: &Value) -> Result<Self, String> {
-        Self::start_with_timeout(config, Duration::from_secs(300))
-    }
-
-    fn start_with_timeout(config: &Value, timeout: Duration) -> Result<Self, String> {
+    fn start_with_timeout(config: &Value, _timeout: Duration) -> Result<Self, String> {
         let nixpkgs = config
             .pointer("/nixpkgs/expr")
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_string();
-        let mut child = Command::new("nixd")
-            .arg("--config")
-            .arg(config.to_string())
+        let mut cmd = Command::new("nixd");
+        cmd.arg("--config").arg(config.to_string())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|e| format!("failed to start nixd: {e}"))?;
+            .stderr(Stdio::null());
+        set_death_signal(&mut cmd);
+        let mut child = cmd.spawn().map_err(|e| format!("failed to start nixd: {e}"))?;
         let mut stdin = child.stdin.take().ok_or("nixd has no stdin")?;
         let mut reader = BufReader::new(child.stdout.take().ok_or("nixd has no stdout")?);
-        spawn_watchdog(child, timeout);
         handshake(&mut stdin, &mut reader, config)?;
+        let child = Arc::new(Mutex::new(child));
         Ok(Self {
+            child,
             stdin,
             reader,
             nixpkgs,
@@ -282,17 +362,10 @@ impl Session {
         })
     }
 
-    /// Start a session whose nixpkgs is the flake's own input, for completing
-    /// package attribute names.
-    pub fn start_packages(flake_path: Option<&str>) -> Result<Self, String> {
-        let config = json!({ "nixpkgs": { "expr": nixpkgs_expr(flake_path) }, "options": {} });
-        Self::start(&config)
-    }
-
     /// Complete package attribute names under `pkgs.<prefix>`. Successive calls
     /// reuse the same nixd process, which is what makes keystroke-by-keystroke
     /// search practical.
-    pub fn complete_packages(&mut self, prefix: &str, seq: u64) -> Result<Vec<String>, String> {
+    fn complete_packages(&mut self, prefix: &str, seq: u64) -> Result<Vec<String>, String> {
         let uri = format!("file:///tmp/nix-settings-gui/packages-{seq}.nix");
         let text = format!("let pkgs = {}; in\n[ pkgs.{prefix} ]\n", self.nixpkgs);
         self.notify(&did_open(&uri, &text))?;
@@ -312,6 +385,13 @@ impl Session {
         });
         let result = self.request(id, &request)?;
         Ok(completion_labels(&result))
+    }
+
+    fn kill(&mut self) {
+        if let Ok(mut child) = self.child.lock() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
     }
 
     fn notify(&mut self, value: &Value) -> Result<(), String> {
@@ -383,34 +463,37 @@ fn did_open(uri: &str, text: &str) -> Value {
 /// the caller saves without validation instead of hanging. `progress` is called
 /// with `(checked, total)` before each assignment so the caller can show how far
 /// along the validation is.
-pub fn query_errors<F: FnMut(usize, usize)>(
+pub fn query_errors<F: FnMut(usize, usize) + Send + 'static>(
     flake_path: Option<&str>,
-    assignments: &[(String, String)],
-    mut progress: F,
+    assignments: Vec<(String, String)>,
+    progress: F,
 ) -> Result<Vec<String>, String> {
     let total = assignments.len();
     if total == 0 {
         return Ok(Vec::new());
     }
     let nixpkgs = nixpkgs_expr(flake_path);
-    let config = json!({ "nixpkgs": { "expr": nixpkgs }, "options": {} });
-    let mut session = Session::start_with_timeout(&config, Duration::from_secs(60))?;
-
-    let mut errors = Vec::new();
-    for (index, (path, literal)) in assignments.iter().enumerate() {
-        progress(index, total);
-        let uri = format!("file:///tmp/nix-settings-gui/validate-{index}.nix");
-        let text = format!("let pkgs = {nixpkgs}; in\n{{\n  {path} = {literal};\n}}\n");
-        session.notify(&did_open(&uri, &text))?;
-        errors.extend(
-            session
-                .diagnostics(&uri)?
-                .into_iter()
-                .map(|message| format!("{path}: {message}")),
-        );
-    }
-    progress(total, total);
-    Ok(errors)
+    let config = json!({ "nixpkgs": { "expr": nixpkgs.clone() }, "options": {} });
+    let key = format!("pkgs:{}:{}", flake_path.unwrap_or("<nixpkgs>"), nixpkgs);
+    let run = VALIDATE_URI_COUNTER.fetch_add(1, Ordering::SeqCst);
+    with_session(key, config, move |session| -> Result<Vec<String>, String> {
+        let mut progress = progress;
+        let mut errors = Vec::new();
+        for (index, (path, literal)) in assignments.iter().enumerate() {
+            progress(index, total);
+            let uri = format!("file:///tmp/nix-settings-gui/validate-{run}-{index}.nix");
+            let text = format!("let pkgs = {nixpkgs}; in\n{{\n  {path} = {literal};\n}}\n");
+            session.notify(&did_open(&uri, &text))?;
+            errors.extend(
+                session
+                    .diagnostics(&uri)?
+                    .into_iter()
+                    .map(|message| format!("{path}: {message}")),
+            );
+        }
+        progress(total, total);
+        Ok(errors)
+    })
 }
 
 fn completion_labels(result: &Value) -> Vec<String> {
@@ -451,6 +534,15 @@ fn collect_diagnostics(msg: &Value) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+
+pub fn complete_packages(flake_path: Option<&str>, prefix: &str, seq: u64) -> Result<Vec<String>, String> {
+    let nixpkgs = nixpkgs_expr(flake_path);
+    let config = json!({ "nixpkgs": { "expr": nixpkgs.clone() }, "options": {} });
+    let key = format!("pkgs:{}:{}", flake_path.unwrap_or("<nixpkgs>"), nixpkgs);
+    let prefix = prefix.to_string();
+    with_session(key, config, move |session| session.complete_packages(&prefix, seq))
 }
 
 /// Query one option's type and description.

@@ -519,6 +519,7 @@ dependencies = [
  "async-channel",
  "gtk4",
  "libadwaita",
+ "libc",
  "rnix",
  "rowan",
  "serde",

@@ -91,28 +91,9 @@ impl PackageService {
         let (requests, request_rx) = async_channel::bounded::<(u64, String, String)>(16);
         let (result_tx, result_rx) = async_channel::bounded::<(u64, Vec<String>)>(16);
         std::thread::spawn(move || {
-            let mut session: Option<(String, crate::nixd::Session)> = None;
             while let Ok((id, flake, term)) = request_rx.recv_blocking() {
-                let needs_start =
-                    session.as_ref().map(|(current, _)| current != &flake) != Some(false);
-                if needs_start {
-                    let flake_arg = if flake.is_empty() {
-                        None
-                    } else {
-                        Some(flake.as_str())
-                    };
-                    match crate::nixd::Session::start_packages(flake_arg) {
-                        Ok(started) => session = Some((flake.clone(), started)),
-                        Err(_) => {
-                            let _ = result_tx.send_blocking((id, Vec::new()));
-                            continue;
-                        }
-                    }
-                }
-                let names = session
-                    .as_mut()
-                    .and_then(|(_, session)| session.complete_packages(&term, id).ok())
-                    .unwrap_or_default();
+                let flake_arg = if flake.is_empty() { None } else { Some(flake.as_str()) };
+                let names = crate::nixd::complete_packages(flake_arg, &term, id).unwrap_or_default();
                 let _ = result_tx.send_blocking((id, names));
             }
         });
@@ -416,6 +397,11 @@ fn build_ui(app: &adw::Application, tx: &Tx) -> Rc<App> {
                 }
             });
     }
+    {
+        app_state.window.clone().connect_destroy(|_| {
+            crate::nixd::shutdown_nixd();
+        });
+    }
     app_state
 }
 
@@ -628,6 +614,7 @@ fn open_flake(app: &Rc<App>, tx: &Tx, path: &str) {
     app.config.borrow_mut().remember(path);
     let _ = app.config.borrow().save();
     app.status.set_text(&format!("Scanning {path}..."));
+    crate::nixd::warm(Some(path));
     let path = path.to_string();
     spawn(tx, move |tx| {
         let result = scan::scan_root(&path);
@@ -1364,7 +1351,8 @@ fn save_all(app: &Rc<App>, tx: &Tx, rebuild: bool) {
     set_busy(app, "Saving...", 0.0);
     spawn(tx, move |tx| {
         const VALIDATE_END: f64 = 0.7;
-        let report = |done: usize, total: usize| {
+        let report_tx = tx.clone();
+        let report = move |done: usize, total: usize| {
             let fraction = if total == 0 {
                 VALIDATE_END
             } else {
@@ -1375,9 +1363,9 @@ fn save_all(app: &Rc<App>, tx: &Tx, rebuild: bool) {
             } else {
                 format!("Validated {done} of {total} package change(s)...")
             };
-            let _ = tx.send_blocking(Msg::SaveProgress(fraction, label));
+            let _ = report_tx.send_blocking(Msg::SaveProgress(fraction, label));
         };
-        if let Ok(errors) = crate::nixd::query_errors(flake.as_deref(), &checks, report) {
+        if let Ok(errors) = crate::nixd::query_errors(flake.as_deref(), checks, report) {
             if !errors.is_empty() {
                 let _ = tx.send_blocking(Msg::Invalid(errors));
                 return;
@@ -2679,6 +2667,7 @@ fn populate_flakes(app: &Rc<App>) -> Option<String> {
 }
 
 pub fn run(app: &adw::Application) -> glib::ExitCode {
+    crate::nixd::init();
     let (tx, rx) = async_channel::unbounded::<Msg>();
     let rx_cell = std::cell::Cell::new(Some(rx));
 
