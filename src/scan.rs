@@ -64,7 +64,7 @@ impl ScanResult {
         resolved: Option<&HashSet<String>>,
     ) -> bool {
         if !menu.spec.systems.is_empty() {
-            return menu.spec.systems.iter().any(|s| s == host);
+            return menu.spec.systems.iter().any(|s| s == "all" || s == host);
         }
         if !menu.origins.is_empty() {
             if let Some(reachable) = resolved {
@@ -226,6 +226,124 @@ pub fn scan_value(text: &str) -> Vec<Record> {
     let mut out = Vec::new();
     walk_body(text, "", "", &expr, &mut out, false);
     out
+}
+
+/// One row of a `table-attrset` / `table-list` value.
+#[derive(Debug, Clone, Default)]
+pub struct TableRowScan {
+    /// Parent attribute name for `table-attrset`, empty for `table-list`.
+    pub key: String,
+    /// Field name -> source text of the field value.
+    pub fields: Vec<(String, String)>,
+    /// Per-row settings from a leading `@table-item` comment.
+    pub spec: OptionSpec,
+}
+
+/// Read a table value into rows. `list` selects `table-list` (`[ { ... } ]`)
+/// over `table-attrset` (`{ key = { ... }; }`).
+pub fn scan_table(value: &str, list: bool) -> Vec<TableRowScan> {
+    let Ok(root) = rnix::Root::parse(value).ok() else {
+        return Vec::new();
+    };
+    let Some(expr) = root.expr() else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    if list {
+        let Expr::List(list_node) = expr else {
+            return Vec::new();
+        };
+        let mut pending: Option<OptionSpec> = None;
+        for element in list_node.syntax().children_with_tokens() {
+            match element {
+                NodeOrToken::Token(token) => match token.kind() {
+                    SyntaxKind::TOKEN_COMMENT => pending = table_item_spec(token.text()),
+                    SyntaxKind::TOKEN_WHITESPACE => {}
+                    _ => pending = None,
+                },
+                NodeOrToken::Node(node) => {
+                    if Expr::cast(node.clone()).is_none() {
+                        continue;
+                    }
+                    let spec = pending.take().unwrap_or_default();
+                    if let Some(fields) = row_fields(&node) {
+                        out.push(TableRowScan {
+                            key: String::new(),
+                            fields,
+                            spec,
+                        });
+                    }
+                }
+            }
+        }
+    } else {
+        let Expr::AttrSet(set) = expr else {
+            return Vec::new();
+        };
+        let mut pending: Option<OptionSpec> = None;
+        for element in set.syntax().children_with_tokens() {
+            match element {
+                NodeOrToken::Token(token) => match token.kind() {
+                    SyntaxKind::TOKEN_COMMENT => pending = table_item_spec(token.text()),
+                    SyntaxKind::TOKEN_WHITESPACE => {}
+                    _ => pending = None,
+                },
+                NodeOrToken::Node(node) => {
+                    if node.kind() != SyntaxKind::NODE_ATTRPATH_VALUE {
+                        continue;
+                    }
+                    let Some(binding) = AttrpathValue::cast(node) else {
+                        continue;
+                    };
+                    let spec = pending.take().unwrap_or_default();
+                    let key = binding
+                        .attrpath()
+                        .and_then(|path| {
+                            let comps: Vec<String> =
+                                path.attrs().filter_map(|a| attr_component(&a)).collect();
+                            (comps.len() == 1).then(|| comps[0].clone())
+                        })
+                        .unwrap_or_default();
+                    let fields = binding
+                        .value()
+                        .and_then(|v| row_fields(v.syntax()))
+                        .unwrap_or_default();
+                    out.push(TableRowScan { key, fields, spec });
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The `key = value` fields of a row's attribute set.
+fn row_fields(node: &SyntaxNode) -> Option<Vec<(String, String)>> {
+    let Expr::AttrSet(set) = Expr::cast(node.clone())? else {
+        return None;
+    };
+    let mut fields = Vec::new();
+    for binding in set.attrpath_values() {
+        let Some(path) = binding.attrpath() else {
+            continue;
+        };
+        let comps: Vec<String> = path.attrs().filter_map(|a| attr_component(&a)).collect();
+        if comps.len() != 1 {
+            continue;
+        }
+        let Some(value) = binding.value() else {
+            continue;
+        };
+        fields.push((comps[0].clone(), value.syntax().text().to_string()));
+    }
+    Some(fields)
+}
+
+/// Parse a leading `@table-item` comment into a per-row spec.
+fn table_item_spec(text: &str) -> Option<OptionSpec> {
+    match dsl::parse_comment(text) {
+        Some((MarkerKind::TableItem, directives)) => Some(OptionSpec::from_directives(&directives)),
+        _ => None,
+    }
 }
 
 /// Byte offset just after the opening brace of the module body selected by
@@ -1086,6 +1204,102 @@ in
             .records
             .iter()
             .all(|r| r.origin == "modules.nixos.merge"));
+    }
+
+    #[test]
+    fn scans_feature_widgets_fixture() {
+        use crate::dsl::WidgetKind;
+
+        let root = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/feature-widgets"
+        );
+        let result = scan_root(root).unwrap();
+        assert_eq!(result.menus.len(), 1);
+
+        // `systems = [ "all" ]` makes the menu visible for any host.
+        let any_host: Vec<String> = result
+            .menus_for("no-such-host")
+            .iter()
+            .map(|m| m.display_name())
+            .collect();
+        assert!(any_host.contains(&"Features".to_string()));
+
+        let menu = &result.menus[0];
+        let find = |path: &str| {
+            menu.records
+                .iter()
+                .find(|r| r.path() == path)
+                .unwrap_or_else(|| panic!("missing record {path}"))
+        };
+
+        let zeta = find("features.zetaFirst");
+        assert_eq!(zeta.spec.group.as_deref(), Some("Zeta"));
+        assert_eq!(zeta.spec.group_order, None);
+        let unordered = find("features.alphaUnordered");
+        assert_eq!(unordered.spec.group_order, Some(5));
+        assert_eq!(unordered.spec.order, None);
+
+        let sites = find("features.sites");
+        assert_eq!(sites.spec.widget, Some(WidgetKind::TableAttrset));
+        assert_eq!(
+            sites.spec.columns,
+            Some(vec!["enable".to_string(), "url".to_string()])
+        );
+        assert!(sites.spec.first_value_editable);
+        assert!(!sites.spec.key_editable);
+
+        let rules = find("features.rules");
+        assert_eq!(rules.spec.widget, Some(WidgetKind::TableList));
+        assert!(rules.spec.key_editable);
+
+        let cards = find("features.cards");
+        assert_eq!(cards.spec.widget, Some(WidgetKind::HorizontalSubmodule));
+        assert_eq!(cards.spec.max_columns, Some(2));
+
+        for (path, kind) in [
+            ("features.binds.default", WidgetKind::Keybinds),
+            ("features.monitor_rule", WidgetKind::Monitors),
+            ("features.palette", WidgetKind::Theme),
+            ("features.menu", WidgetKind::Menu),
+            ("features.plugins", WidgetKind::Plugins),
+            ("features.bar.default", WidgetKind::Bar),
+            ("features.dockConfig", WidgetKind::Dock),
+        ] {
+            assert_eq!(find(path).spec.widget, Some(kind), "wrong kind at {path}");
+        }
+
+        // The nested submodule is kept whole; its children stay in the value.
+        let nested = find("features.nested");
+        assert_eq!(nested.spec.widget, Some(WidgetKind::Submodule));
+        assert!(nested.value.contains("visibleChild"));
+        assert!(nested.value.contains("hiddenChild"));
+        assert!(nested.value.contains("deeper"));
+    }
+
+    #[test]
+    fn scans_table_rows_and_item_specs() {
+        let value = r#"{
+  /* @table-item label = "Docs"; hidden = true; */
+  docs = { enable = true; url = "x"; };
+  plain = { enable = false; };
+}"#;
+        let rows = scan_table(value, false);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].key, "docs");
+        assert_eq!(rows[0].spec.label.as_deref(), Some("Docs"));
+        assert!(rows[0].spec.hidden);
+        assert_eq!(rows[0].fields[0], ("enable".into(), "true".into()));
+        assert_eq!(rows[0].fields[1], ("url".into(), "\"x\"".into()));
+        assert_eq!(rows[1].key, "plain");
+        assert!(rows[1].spec.label.is_none());
+        assert!(!rows[1].spec.hidden);
+
+        let list_rows = scan_table("[ { name = \"eDP\"; width = 1920; } ]", true);
+        assert_eq!(list_rows.len(), 1);
+        assert_eq!(list_rows[0].key, "");
+        assert_eq!(list_rows[0].fields.len(), 2);
+        assert_eq!(list_rows[0].fields[1], ("width".into(), "1920".into()));
     }
 
     #[test]

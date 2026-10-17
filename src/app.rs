@@ -48,6 +48,9 @@ struct ControlRow {
     desc: gtk::Label,
     dirty: gtk::Label,
     reset: gtk::Button,
+    /// Position of this control's record in source order, used to preserve
+    /// declaration order when no explicit `order` is set.
+    src_index: usize,
     /// Whether this control's `visibleWhen` dependency currently holds.
     dep_visible: Cell<bool>,
 }
@@ -92,8 +95,13 @@ impl PackageService {
         let (result_tx, result_rx) = async_channel::bounded::<(u64, Vec<String>)>(16);
         std::thread::spawn(move || {
             while let Ok((id, flake, term)) = request_rx.recv_blocking() {
-                let flake_arg = if flake.is_empty() { None } else { Some(flake.as_str()) };
-                let names = crate::nixd::complete_packages(flake_arg, &term, id).unwrap_or_default();
+                let flake_arg = if flake.is_empty() {
+                    None
+                } else {
+                    Some(flake.as_str())
+                };
+                let names =
+                    crate::nixd::complete_packages(flake_arg, &term, id).unwrap_or_default();
                 let _ = result_tx.send_blocking((id, names));
             }
         });
@@ -798,11 +806,12 @@ fn build_page(app: &Rc<App>, menu: &crate::model::MenuModel) -> MenuPage {
 
     let mut ordinary = Vec::new();
     let mut advanced = Vec::new();
-    for record in &menu.records {
+    let ranks = crate::model::group_ranks(&menu.records);
+    for (src_index, record) in menu.records.iter().enumerate() {
         if record.spec.hidden && !app.advanced.get() {
             continue;
         }
-        let row = build_control_row(app, record);
+        let row = build_control_row(app, record, src_index);
         if record.spec.advanced {
             advanced.push(row);
         } else {
@@ -810,8 +819,8 @@ fn build_page(app: &Rc<App>, menu: &crate::model::MenuModel) -> MenuPage {
         }
     }
 
-    ordinary.sort_by(|a, b| control_cmp(a, b));
-    advanced.sort_by(|a, b| control_cmp(a, b));
+    ordinary.sort_by(|a, b| control_cmp(a, b, &ranks));
+    advanced.sort_by(|a, b| control_cmp(a, b, &ranks));
 
     let mut inserts = build_insert_buttons(app, menu);
     add_grouped(&content, &ordinary, &mut inserts);
@@ -910,6 +919,20 @@ fn flush_inserts(content: &gtk::Box, inserts: &mut Vec<InsertButton>, group: &st
     }
 }
 
+/// Drop a leading `Add`/`add` from a snippet label so the button prefix does
+/// not double it when the label already reads "Add ...".
+fn strip_add_prefix(label: &str) -> String {
+    let trimmed = label.trim();
+    let lower = trimmed.to_lowercase();
+    if lower == "add" {
+        String::new()
+    } else if lower.starts_with("add ") {
+        trimmed[4..].trim().to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
 /// Build the "Add <snippet>" button for every `@insert` marker, resolving its
 /// target group from the marker, or from the record directly above it.
 fn build_insert_buttons(app: &Rc<App>, menu: &MenuModel) -> Vec<InsertButton> {
@@ -923,7 +946,13 @@ fn build_insert_buttons(app: &Rc<App>, menu: &MenuModel) -> Vec<InsertButton> {
             .clone()
             .or_else(|| (!snippet.label.is_empty()).then(|| snippet.label.clone()))
             .unwrap_or_else(|| marker.name.clone());
-        let button = gtk::Button::with_label(&format!("Add {label}"));
+        let label = strip_add_prefix(&label);
+        let text = if label.is_empty() {
+            "Add".to_string()
+        } else {
+            format!("Add {label}")
+        };
+        let button = gtk::Button::with_label(&text);
         button.add_css_class("pill");
         button.set_halign(gtk::Align::Start);
         {
@@ -959,26 +988,25 @@ fn preceding_group(menu: &MenuModel, offset: usize) -> String {
         .unwrap_or_default()
 }
 
-fn control_cmp(a: &ControlRow, b: &ControlRow) -> std::cmp::Ordering {
-    let ag = a.record.spec.group.clone().unwrap_or_default();
-    let bg = b.record.spec.group.clone().unwrap_or_default();
-    let ao = a.record.spec.order.unwrap_or(1000);
-    let bo = b.record.spec.order.unwrap_or(1000);
-    ag.cmp(&bg).then_with(|| ao.cmp(&bo)).then_with(|| {
-        control_label(a)
-            .to_lowercase()
-            .cmp(&control_label(b).to_lowercase())
-    })
+fn control_cmp(
+    a: &ControlRow,
+    b: &ControlRow,
+    ranks: &HashMap<String, usize>,
+) -> std::cmp::Ordering {
+    crate::model::record_order(&a.record, a.src_index, &b.record, b.src_index, ranks)
 }
 
-fn control_label(control: &ControlRow) -> String {
-    control
-        .record
-        .spec
-        .label
-        .clone()
-        .or_else(|| control.record.segments.last().cloned())
-        .unwrap_or_else(|| control.record.path())
+/// A control stays inline (label left, widget right) only for a `switch`, a
+/// `spin`, and a `dropdown` whose longest choice is short. Everything else
+/// stacks the widget below the label and fills the width.
+fn control_is_inline(editor: &Editor) -> bool {
+    match editor {
+        Editor::Switch(_) | Editor::Spin(_) => true,
+        Editor::Dropdown { choices, .. } => {
+            choices.iter().map(|c| c.chars().count()).max().unwrap_or(0) < 24
+        }
+        _ => false,
+    }
 }
 
 /// The flake's available module names per kind, collected from scan origins.
@@ -1018,16 +1046,17 @@ fn push_unique(list: &mut Vec<String>, name: &str) {
     }
 }
 
-fn build_control_row(app: &Rc<App>, record: &Record) -> Rc<ControlRow> {
-    let ctx = build_context(app);
+fn build_control_row(app: &Rc<App>, record: &Record, src_index: usize) -> Rc<ControlRow> {
+    let mut ctx = build_context(app);
+    ctx.advanced = app.advanced.get();
     let editor = widgets::build(record, None, &ctx);
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    let inline = control_is_inline(&editor);
+    let row = gtk::Box::new(gtk::Orientation::Vertical, 4);
     row.set_margin_top(4);
     row.set_margin_bottom(4);
 
-    let expands = editor.wants_width();
     let labels = gtk::Box::new(gtk::Orientation::Vertical, 2);
-    labels.set_hexpand(!expands);
+    labels.set_hexpand(true);
     let label_text = record
         .spec
         .label
@@ -1039,9 +1068,6 @@ fn build_control_row(app: &Rc<App>, record: &Record) -> Rc<ControlRow> {
         .xalign(0.0)
         .wrap(true)
         .build();
-    if expands {
-        name.set_max_width_chars(48);
-    }
     labels.append(&name);
 
     let desc = gtk::Label::builder()
@@ -1050,9 +1076,6 @@ fn build_control_row(app: &Rc<App>, record: &Record) -> Rc<ControlRow> {
         .wrap(true)
         .css_classes(["dim-label", "caption"])
         .build();
-    if expands {
-        desc.set_max_width_chars(48);
-    }
     labels.append(&desc);
 
     let dirty = gtk::Label::builder()
@@ -1063,34 +1086,44 @@ fn build_control_row(app: &Rc<App>, record: &Record) -> Rc<ControlRow> {
         .build();
     labels.append(&dirty);
 
-    if !record.origin.is_empty() {
-        let origin = gtk::Label::builder()
-            .label(format!("imported from {}", record.origin))
-            .xalign(0.0)
-            .ellipsize(gtk::pango::EllipsizeMode::End)
-            .css_classes(["dim-label", "caption"])
-            .build();
-        labels.append(&origin);
-    }
-
     let slot = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    if expands {
-        slot.set_hexpand(true);
-    } else {
-        slot.set_halign(gtk::Align::End);
-    }
     slot.set_valign(gtk::Align::Center);
+    if inline {
+        slot.set_halign(gtk::Align::End);
+    } else {
+        slot.set_hexpand(true);
+        slot.set_halign(gtk::Align::Fill);
+    }
 
     let reset = gtk::Button::from_icon_name("edit-undo-symbolic");
     reset.add_css_class("flat");
     reset.set_tooltip_text(Some("Reset to default"));
     reset.set_valign(gtk::Align::Center);
+    reset.set_halign(gtk::Align::End);
 
     slot.append(&editor.root());
     slot.append(&reset);
 
-    row.append(&labels);
-    row.append(&slot);
+    if inline {
+        let line = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        line.append(&labels);
+        line.append(&slot);
+        row.append(&line);
+    } else {
+        row.append(&labels);
+        row.append(&slot);
+    }
+
+    if !record.origin.is_empty() {
+        let origin = gtk::Label::builder()
+            .label(format!("imported from {}", record.origin))
+            .xalign(0.0)
+            .wrap(true)
+            .css_classes(["dim-label", "caption"])
+            .build();
+        row.append(&origin);
+    }
+
     row.set_tooltip_text(Some(&record.path()));
 
     let control = Rc::new(ControlRow {
@@ -1101,6 +1134,7 @@ fn build_control_row(app: &Rc<App>, record: &Record) -> Rc<ControlRow> {
         desc,
         dirty,
         reset,
+        src_index,
         dep_visible: Cell::new(true),
     });
 
@@ -1139,51 +1173,7 @@ fn connect_dirty(app: &Rc<App>, row: &ControlRow) {
 /// Connect `update` to the change signal of every widget owned by the editor,
 /// recursing into submodule children.
 fn connect_editor_signals(editor: &Editor, update: &Rc<dyn Fn()>) {
-    match editor {
-        Editor::Switch(widget) => {
-            let update = update.clone();
-            widget.connect_active_notify(move |_| update());
-        }
-        Editor::Dropdown { combo, .. } => {
-            let update = update.clone();
-            combo.connect_selected_notify(move |_| update());
-        }
-        Editor::Spin(widget) => {
-            let update = update.clone();
-            widget.connect_value_changed(move |_| update());
-        }
-        Editor::Slider(widget) => {
-            let update = update.clone();
-            widget.connect_value_changed(move |_| update());
-        }
-        Editor::Text(widget) | Editor::Path(widget) => {
-            let update = update.clone();
-            widget.connect_changed(move |_| update());
-        }
-        Editor::Package { entry, .. } => {
-            let update = update.clone();
-            entry.connect_changed(move |_| update());
-        }
-        Editor::Multiline { view, .. } | Editor::Raw { view, .. } => {
-            let update = update.clone();
-            view.buffer().connect_changed(move |_| update());
-        }
-        Editor::List { entries, .. } | Editor::ModuleList { entries, .. } => {
-            for entry in entries.borrow().iter() {
-                let update = update.clone();
-                entry.connect_changed(move |_| update());
-            }
-        }
-        Editor::Color(widget) => {
-            let update = update.clone();
-            widget.connect_rgba_notify(move |_| update());
-        }
-        Editor::Submodule { children, .. } => {
-            for (_, editor) in children {
-                connect_editor_signals(editor, update);
-            }
-        }
-    }
+    editor.connect_changed(update);
 }
 
 /// Recompute `dep_visible` for every control from the current values of the
@@ -2142,8 +2132,14 @@ fn template_for(displayname: &str, kind: &str, module_name: &str, path: &Path) -
 /// Prompt for a snippet's `%%token%%` values, render it, and insert it at the
 /// marker's line so the marker shifts down one line.
 fn open_snippet_dialog(app: &Rc<App>, file: &str, marker: &InsertMarker, snippet: &SnippetSpec) {
+    let title_label = strip_add_prefix(&snippet.label);
+    let title = if title_label.is_empty() {
+        "Add".to_string()
+    } else {
+        format!("Add {title_label}")
+    };
     let dialog = gtk::Dialog::builder()
-        .title(format!("Add {}", snippet.label))
+        .title(title)
         .transient_for(&app.window)
         .modal(true)
         .build();

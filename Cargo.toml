@@ -23,3 +23,9 @@ opt-level = 1
 codegen-units = 256
 panic = "abort"
 debug = false
+
+[build-dependencies]
+serde_yaml = "0.9.34"
+
+[dev-dependencies]
+serde_yaml = "0.9.34"

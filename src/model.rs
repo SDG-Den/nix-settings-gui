@@ -128,6 +128,63 @@ impl MenuModel {
     }
 }
 
+/// Rank the groups of a list of records. Groups with an explicit `groupOrder`
+/// come first, ordered by that value; the rest follow in order of first source
+/// appearance. The empty (ungrouped) group always ranks first.
+pub fn group_ranks(records: &[Record]) -> HashMap<String, usize> {
+    let mut info: HashMap<String, (Option<i64>, usize)> = HashMap::new();
+    for (index, record) in records.iter().enumerate() {
+        let group = record.spec.group.clone().unwrap_or_default();
+        if group.is_empty() {
+            continue;
+        }
+        let entry = info.entry(group).or_insert((None, index));
+        if let Some(order) = record.spec.group_order {
+            entry.0 = Some(entry.0.map_or(order, |existing| existing.min(order)));
+        }
+    }
+    let mut groups: Vec<(String, Option<i64>, usize)> = info
+        .into_iter()
+        .map(|(group, (order, index))| (group, order, index))
+        .collect();
+    groups.sort_by(|a, b| match (a.1, b.1) {
+        (Some(x), Some(y)) => x.cmp(&y).then(a.2.cmp(&b.2)),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => a.2.cmp(&b.2),
+    });
+    let mut ranks = HashMap::new();
+    ranks.insert(String::new(), 0);
+    for (rank, (group, _, _)) in groups.into_iter().enumerate() {
+        ranks.insert(group, rank + 1);
+    }
+    ranks
+}
+
+/// Order two records by group rank, then explicit `order`, then source index.
+/// Records with an explicit `order` sort before records without one.
+pub fn record_order(
+    a: &Record,
+    a_index: usize,
+    b: &Record,
+    b_index: usize,
+    ranks: &HashMap<String, usize>,
+) -> std::cmp::Ordering {
+    let ag = a.spec.group.clone().unwrap_or_default();
+    let bg = b.spec.group.clone().unwrap_or_default();
+    let ar = ranks.get(&ag).copied().unwrap_or(usize::MAX);
+    let br = ranks.get(&bg).copied().unwrap_or(usize::MAX);
+    let order = match (a.spec.order, b.spec.order) {
+        (Some(ao), Some(bo)) => ao.cmp(&bo),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
+    };
+    ar.cmp(&br)
+        .then_with(|| order)
+        .then_with(|| a_index.cmp(&b_index))
+}
+
 /// Group records into parent-path -> children nodes. Namespaces are the
 /// dotted-path prefixes of every defined key; keys are the leaf assignments.
 pub fn build_levels(records: &[Record]) -> HashMap<String, Vec<Node>> {
@@ -185,4 +242,75 @@ pub fn build_levels(records: &[Record]) -> HashMap<String, Vec<Node>> {
     }
 
     levels
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scan::scan_value;
+
+    fn spec_record(group: Option<&str>, order: Option<i64>, group_order: Option<i64>) -> Record {
+        let mut record = scan_value("{ x = 1; }").pop().unwrap();
+        record.spec.group = group.map(str::to_string);
+        record.spec.order = order;
+        record.spec.group_order = group_order;
+        record
+    }
+
+    #[test]
+    fn group_ranks_order_by_group_order_then_source() {
+        let records = vec![
+            spec_record(Some("Zeta"), None, None),
+            spec_record(Some("Alpha"), None, Some(5)),
+            spec_record(None, None, None),
+        ];
+        let ranks = group_ranks(&records);
+        assert_eq!(ranks.get(""), Some(&0));
+        assert_eq!(ranks.get("Alpha"), Some(&1));
+        assert_eq!(ranks.get("Zeta"), Some(&2));
+    }
+
+    #[test]
+    fn group_ranks_use_min_group_order_and_tiebreak_by_source() {
+        let records = vec![
+            spec_record(Some("B"), None, Some(5)),
+            spec_record(Some("A"), None, Some(5)),
+            spec_record(Some("C"), None, Some(1)),
+        ];
+        let ranks = group_ranks(&records);
+        assert_eq!(ranks.get("C"), Some(&1));
+        assert_eq!(ranks.get("B"), Some(&2));
+        assert_eq!(ranks.get("A"), Some(&3));
+    }
+
+    #[test]
+    fn record_order_ranks_groups_then_order_then_source() {
+        let mut ranks = HashMap::new();
+        ranks.insert(String::new(), 0);
+        ranks.insert("A".to_string(), 1);
+        ranks.insert("B".to_string(), 2);
+
+        let a_unordered = spec_record(Some("A"), None, None);
+        let a_first = spec_record(Some("A"), Some(1), None);
+        let a_second = spec_record(Some("A"), Some(2), None);
+        let b = spec_record(Some("B"), None, None);
+        let later = spec_record(Some("A"), None, None);
+
+        assert_eq!(
+            record_order(&a_unordered, 0, &b, 0, &ranks),
+            std::cmp::Ordering::Less
+        );
+        assert_eq!(
+            record_order(&a_second, 0, &a_unordered, 1, &ranks),
+            std::cmp::Ordering::Less
+        );
+        assert_eq!(
+            record_order(&a_first, 0, &a_second, 0, &ranks),
+            std::cmp::Ordering::Less
+        );
+        assert_eq!(
+            record_order(&a_unordered, 3, &later, 1, &ranks),
+            std::cmp::Ordering::Greater
+        );
+    }
 }

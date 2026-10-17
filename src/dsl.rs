@@ -208,6 +208,7 @@ pub enum MarkerKind {
     Template,
     Snippet,
     Insert,
+    TableItem,
 }
 
 /// Recognise a marker comment and parse its body. `inner` is the comment text
@@ -237,6 +238,7 @@ fn split_marker(s: &str) -> Option<(MarkerKind, &str)> {
         ("@template", MarkerKind::Template),
         ("@snippet", MarkerKind::Snippet),
         ("@insert", MarkerKind::Insert),
+        ("@table-item", MarkerKind::TableItem),
     ] {
         if let Some(rest) = s.strip_prefix(tag) {
             if rest.is_empty() || rest.starts_with(char::is_whitespace) {
@@ -265,6 +267,16 @@ pub enum WidgetKind {
     HmModules,
     Color,
     Submodule,
+    HorizontalSubmodule,
+    TableAttrset,
+    TableList,
+    Keybinds,
+    Monitors,
+    Theme,
+    Menu,
+    Plugins,
+    Bar,
+    Dock,
     Raw,
 }
 
@@ -286,6 +298,16 @@ impl WidgetKind {
             "hmmodules" | "hm-modules" | "homemanagermodules" => Self::HmModules,
             "color" => Self::Color,
             "submodule" => Self::Submodule,
+            "horizontal-submodule" | "horizontalsubmodule" => Self::HorizontalSubmodule,
+            "table-attrset" | "tableattrset" => Self::TableAttrset,
+            "table-list" | "tablelist" => Self::TableList,
+            "keybinds" => Self::Keybinds,
+            "monitors" => Self::Monitors,
+            "theme" => Self::Theme,
+            "menu" => Self::Menu,
+            "plugins" => Self::Plugins,
+            "bar" => Self::Bar,
+            "dock" => Self::Dock,
             "raw" => Self::Raw,
             _ => return None,
         })
@@ -366,7 +388,12 @@ pub struct OptionSpec {
     pub rows: Option<u32>,
     pub placeholder: Option<String>,
     pub group: Option<String>,
+    pub group_order: Option<i64>,
     pub order: Option<i64>,
+    pub max_columns: Option<u32>,
+    pub columns: Option<Vec<String>>,
+    pub key_editable: bool,
+    pub first_value_editable: bool,
     pub advanced: bool,
     pub hidden: bool,
     pub readonly: bool,
@@ -392,7 +419,12 @@ impl OptionSpec {
             rows: d.int("rows").map(|n| n.max(0) as u32),
             placeholder: d.string("placeholder"),
             group: d.string("group"),
+            group_order: d.int("groupOrder"),
             order: d.int("order"),
+            max_columns: d.int("maxColumns").map(|n| n.max(1) as u32),
+            columns: d.strings("columns"),
+            key_editable: d.bool("keyEditable").unwrap_or(false),
+            first_value_editable: d.bool("firstValueEditable").unwrap_or(false),
             advanced: d.bool("advanced").unwrap_or(false),
             hidden: d.bool("hidden").unwrap_or(false),
             readonly: d.bool("readonly").unwrap_or(false),
@@ -667,5 +699,54 @@ mod tests {
         assert_eq!(spec.name, "keybind");
         assert_eq!(spec.group.as_deref(), Some("Keybinds"));
         assert_eq!(spec.order, Some(10));
+    }
+
+    #[test]
+    fn parses_table_and_bespoke_widget_directives() {
+        let text = "/* @option widget = \"table-attrset\"; columns = [ \"enable\" \"url\" ]; keyEditable = true; firstValueEditable = true; maxColumns = 3; groupOrder = 20; */";
+        let (kind, d) = parse_comment(text).unwrap();
+        assert_eq!(kind, MarkerKind::Option);
+        let opt = OptionSpec::from_directives(&d);
+        assert_eq!(opt.widget, Some(WidgetKind::TableAttrset));
+        assert_eq!(opt.columns, Some(vec!["enable".into(), "url".into()]));
+        assert!(opt.key_editable);
+        assert!(opt.first_value_editable);
+        assert_eq!(opt.max_columns, Some(3));
+        assert_eq!(opt.group_order, Some(20));
+    }
+
+    #[test]
+    fn parses_bespoke_widget_names() {
+        assert_eq!(WidgetKind::parse("table-list"), Some(WidgetKind::TableList));
+        assert_eq!(
+            WidgetKind::parse("horizontal-submodule"),
+            Some(WidgetKind::HorizontalSubmodule)
+        );
+        assert_eq!(WidgetKind::parse("keybinds"), Some(WidgetKind::Keybinds));
+        assert_eq!(WidgetKind::parse("monitors"), Some(WidgetKind::Monitors));
+        assert_eq!(WidgetKind::parse("theme"), Some(WidgetKind::Theme));
+        assert_eq!(WidgetKind::parse("menu"), Some(WidgetKind::Menu));
+        assert_eq!(WidgetKind::parse("plugins"), Some(WidgetKind::Plugins));
+        assert_eq!(WidgetKind::parse("bar"), Some(WidgetKind::Bar));
+        assert_eq!(WidgetKind::parse("dock"), Some(WidgetKind::Dock));
+        assert_eq!(WidgetKind::parse("no-such-widget"), None);
+    }
+
+    #[test]
+    fn unknown_widget_name_yields_none_spec() {
+        let d = Directives::parse("widget = \"no-such-widget\"; label = \"X\";").unwrap();
+        let opt = OptionSpec::from_directives(&d);
+        assert_eq!(opt.widget, None);
+        assert_eq!(opt.label.as_deref(), Some("X"));
+    }
+
+    #[test]
+    fn parses_table_item_marker() {
+        let (kind, d) =
+            parse_comment("/* @table-item label = \"Main\"; hidden = true; */").unwrap();
+        assert_eq!(kind, MarkerKind::TableItem);
+        let spec = OptionSpec::from_directives(&d);
+        assert_eq!(spec.label.as_deref(), Some("Main"));
+        assert!(spec.hidden);
     }
 }

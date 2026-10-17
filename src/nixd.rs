@@ -343,12 +343,15 @@ impl Session {
             .unwrap_or("")
             .to_string();
         let mut cmd = Command::new("nixd");
-        cmd.arg("--config").arg(config.to_string())
+        cmd.arg("--config")
+            .arg(config.to_string())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
         set_death_signal(&mut cmd);
-        let mut child = cmd.spawn().map_err(|e| format!("failed to start nixd: {e}"))?;
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| format!("failed to start nixd: {e}"))?;
         let mut stdin = child.stdin.take().ok_or("nixd has no stdin")?;
         let mut reader = BufReader::new(child.stdout.take().ok_or("nixd has no stdout")?);
         handshake(&mut stdin, &mut reader, config)?;
@@ -536,13 +539,18 @@ fn collect_diagnostics(msg: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-
-pub fn complete_packages(flake_path: Option<&str>, prefix: &str, seq: u64) -> Result<Vec<String>, String> {
+pub fn complete_packages(
+    flake_path: Option<&str>,
+    prefix: &str,
+    seq: u64,
+) -> Result<Vec<String>, String> {
     let nixpkgs = nixpkgs_expr(flake_path);
     let config = json!({ "nixpkgs": { "expr": nixpkgs.clone() }, "options": {} });
     let key = format!("pkgs:{}:{}", flake_path.unwrap_or("<nixpkgs>"), nixpkgs);
     let prefix = prefix.to_string();
-    with_session(key, config, move |session| session.complete_packages(&prefix, seq))
+    with_session(key, config, move |session| {
+        session.complete_packages(&prefix, seq)
+    })
 }
 
 /// Query one option's type and description.

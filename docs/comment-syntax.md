@@ -5,13 +5,17 @@ nix-settings-gui renders a Nix configuration directory as a settings UI. Each
 block comments, so every annotated file stays valid Nix and keeps working in any
 other Nix tooling.
 
-There are three markers:
+There are six markers:
 
 - `/* @menu ... */` once at the top of a file, describing the menu.
 - `/* @option ... */` directly above an assignment, describing how that option
   is rendered.
+- `/* @table-item ... */` directly above a row assignment inside a table.
 - `/* @template ... */` at the top of a file under `templates/`, describing a
   scaffold offered by the "Add file" dialog.
+- `/* @snippet ... */` at the top of a file, defining a reusable fragment.
+- `/* @insert ... */` inside a module body, marking where a snippet's button
+  appears.
 
 Each marker body is a sequence of Nix assignments. The parser wraps the body in
 `{ ... }` and parses it with the same lossless Nix parser used for the rest of
@@ -74,7 +78,12 @@ services.pipewire.enable = true;
 | `rows`        | integer         | Visible height of a `multiline` or `raw` editor. |
 | `placeholder` | string          | Hint text for `text` and `multiline`. |
 | `group`       | string          | Sub-heading within the menu. |
-| `order`       | integer         | Sort key within the menu or group. |
+| `groupOrder`  | integer         | Rank of the control's group. Groups with `groupOrder` sort before groups without, ordered by the value; ties and unset groups fall back to first source appearance. |
+| `order`       | integer         | Sort key within the menu or group. Controls with an explicit `order` come first, ordered by value; the rest keep declaration order. |
+| `maxColumns`  | integer         | Maximum children per line for `horizontal-submodule` (default 4). |
+| `columns`     | list of strings | Field names (columns) for `table-attrset` and `table-list`. |
+| `keyEditable` | boolean         | Table: whether cell keys are editable (default `false`). |
+| `firstValueEditable` | boolean   | Table: whether the first cell's value is editable (default `false`). |
 | `advanced`    | boolean         | Collapses the control under "Advanced". |
 | `hidden`      | boolean         | Renders the control only while the Advanced toggle is on. |
 | `readonly`    | boolean         | Shows the control disabled. |
@@ -129,7 +138,98 @@ not written on save, so a disabled parent cannot commit its children.
 | `hmModules` | List of home-manager flake modules | `[ flake.modules.homeManager.a ... ]` or bare names under `with flake.modules.homeManager;` |
 | `color`     | Color button | `"#rrggbb"` |
 | `submodule` | Nested group of controls | recursive attribute set |
+| `horizontal-submodule` | Row of labelled controls, wrapping to an equal grid | recursive attribute set |
+| `table-attrset` | Editable table over an attribute set of sets | `{ key = { ... }; ... }` |
+| `table-list` | Editable table over a list of sets | `[ { ... } ... ]` |
+| `keybinds` | Bind list with a modifier+keys preview and edit popout | mode -> name -> bind set |
+| `monitors` | Draggable monitor layout canvas over `monitor_rule` | list of monitor sets |
+| `theme` | Scheme picker with colour swatches | short scheme name string |
+| `menu` | Nestable tree of menu entries | dotted-id keyed attribute set |
+| `plugins` | Plugin list with a settings form | name-keyed attribute set |
+| `bar` | Bar widget configuration | bar-name-keyed attribute set |
+| `dock` | Dock configuration | dock-name-keyed attribute set |
 | `raw`       | Monospace Nix editor | verbatim value |
+
+### Submodules
+
+A `submodule` renders an attribute set as a nested group of controls. Each level
+shows its own heading above the group and its own "imported from" footer below
+it, and indents 12px per level (up to four levels). Submodules nest: a child that
+is itself an attribute set annotated with `@option` renders as another
+`submodule`. Nested controls obey `hidden` and `advanced` the same way top-level
+controls do, re-evaluated live when the Advanced toggle changes.
+
+### Horizontal submodule
+
+`horizontal-submodule` lays its children side by side, each with just its name
+above the control. When a row does not fit, the children wrap to the next line
+and the grid keeps equal-width cells. It is not nestable and does not sort its
+children: declaration order is preserved. `maxColumns` caps how many children
+sit on one line (default 4). It is the intended control for grid-style blocks
+such as a desktop card's `col`/`row`/`width`/`height`.
+
+### Tables
+
+`table-attrset` and `table-list` edit a set of rows. Each row is an attribute set
+of fields. `columns` lists the field names; a field absent from `columns` is not
+shown. Column order follows `columns`, and rows keep source order.
+
+```nix
+/* @option
+   widget = "table-attrset";
+   label = "Monitors";
+   columns = [ "name" "width" "height" "primary" ];
+*/
+monitors = {
+  /* @table-item label = "Main"; */
+  "DP-1" = { name = "DP-1"; width = 2560; height = 1440; primary = true; };
+};
+```
+
+- `table-attrset`: the row's identity is the parent attribute name. Each row is
+  serialized as `key = { ... };`.
+- `table-list`: the row's identity is the first column's value. Each row is
+  serialized as a `{ ... }` entry in a list.
+
+Cells are typed automatically: a boolean becomes a switch, a number a spin
+button, anything else a text field, so a cell is never plain text.
+
+`keyEditable` (default `false`) makes each cell's key editable and shows it
+inline as `key = value`. `firstValueEditable` (default `false`) makes the first
+cell's value editable; with it off, the first cell renders as a `label:` with its
+key hidden and is assumed to be the row's name. With both off, the keys collapse
+into one header line above the table and each row shows only its values.
+
+An optional `@table-item` comment directly above a row assignment carries
+per-row settings and nothing else:
+
+| Key (`@table-item`) | Type | Default | Meaning |
+|---------------------|------|---------|---------|
+| `label` | string | the row identity | Row heading. |
+| `hidden` | boolean | false | Hides the row until the Advanced toggle is on. |
+| `visibleWhen.path` | string | none | Another option in the same menu; the row shows only while it satisfies the conditions. |
+| `visibleWhen.equals` | literal | none | Value the governing option must equal. |
+| `visibleWhen.notEquals` | literal | none | Value the governing option must not equal. |
+
+Rows are added and removed with built-in buttons, not `@snippet`: "add" appends a
+row scaffolded from `columns`, "remove" deletes the selected row.
+
+### Bespoke widgets
+
+These widgets hard-code the shape of a specific configuration and attach to the
+relevant option with `widget = "..."`. They render at the top level of a menu and
+provide their own add, remove, and reorder buttons. The template only names the
+widget; the field shape lives in the application.
+
+| Widget | Attach to | Shape |
+|--------|-----------|-------|
+| `keybinds` | a bind mode, e.g. `binds.default` | `name -> { modifier; keys; dispatcher; args; description; group; subcat; }`. Shows a `modifier+keys` preview per row and opens a popout to edit the fields. |
+| `monitors` | `mango.rules.monitor_rule` | a list of monitor sets. Renders the configured rules on a draggable canvas; dragging writes `x`/`y` only. Unset sizes default to a 1920x1080 rectangle (marked visually). |
+| `theme` | the scheme option | a scheme name string. Shows a swatch per bundled scheme and writes the short name (`base16-ocean` becomes `ocean`). `polarity` and `wallpaper` stay separate options. |
+| `menu` | `dankMenu.menu` | an attribute set keyed by dotted id. Splits the id on `.` and renders a nestable tree; leaves are editable rows. |
+| `plugins` | `dms.plugins` | a name-keyed attribute set of `{ enable; src; settings; dir; config; }`. `settings` renders as `raw` unless annotated as a typed submodule. |
+| `bar` | `barConfigs` | a name-keyed attribute set with id-keyed `left`/`center`/`right` widget lists plus layout and appearance. |
+| `dock` | `dockConfigs` | the same shape as `bar`, in its own control. |
 
 ## 4. Default type mapping
 
@@ -216,7 +316,9 @@ the modules its file defines is reachable from the selected host's
 configuration, following `imports` transitively. `@menu systems` overrides the
 graph when present, and the `hosts/<host>/` directory name is the fallback for
 files with no recoverable origin. A menu with no restriction is shared and
-shows in both modes.
+shows in both modes. The special system name `"all"` in a `systems` list matches
+every host, so `systems = [ "all" ]` keeps a menu available to all systems as if
+it were system-specific.
 
 A top-level `imports` list in a `flake.modules.nixos.*` body is detected as a
 `nixosModules` control; one in a `flake.modules.homeManager.*` body becomes

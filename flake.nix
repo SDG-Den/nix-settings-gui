@@ -4,12 +4,17 @@
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
+    tinted-theming = {
+      url = "github:tinted-theming/schemes";
+      flake = false;
+    };
   };
 
   outputs = {
     self,
     nixpkgs,
     flake-utils,
+    tinted-theming,
     ...
   }:
     flake-utils.lib.eachDefaultSystem (
@@ -49,6 +54,8 @@
             ];
           };
           cargoLock.lockFile = ./Cargo.lock;
+
+          TINTED_SCHEMES_DIR = "${tinted-theming}";
 
           RUSTFLAGS = "-C link-arg=-fuse-ld=mold";
           inherit nativeBuildInputs buildInputs;

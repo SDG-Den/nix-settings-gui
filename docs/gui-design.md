@@ -54,8 +54,28 @@ the `nixd` JSON-RPC client, and the span-patch plus `nixfmt` write path.
 - Header from the selected file's `@menu` (`displayname`, `description`).
 - Controls grouped by `@option group` and sorted by `order`; ungrouped
   controls come first.
+- Group order: groups with an explicit `groupOrder` come first ordered by value,
+  then the remaining groups in order of first source appearance. Within a group,
+  controls with an explicit `order` come first ordered by value, and the rest
+  keep declaration order. The same rule applies inside a submodule.
+- Control layout is vertical by default: the label and helper text sit above the
+  widget, left-aligned, and the widget fills the width underneath. A control
+  stays inline (label left, widget right) only for `switch`, `spin`, and
+  `dropdown` whose longest choice is under 24 characters. `slider` is vertical.
+  Width-hungry widgets (`text`, `multiline`, `path`, `package`, `packages`,
+  `list`, module lists, `submodule`, `horizontal-submodule`, tables, and `raw`)
+  are full-width.
+- The "imported from <origin>" footer sits below the widget body, last in the
+  control. A submodule shows its own label above the group and its own footer
+  below it, with each nested level indented 12px (capped at four levels).
+- A `horizontal-submodule` lays its labelled children out in a homogeneous
+  `FlowBox` that wraps to an equal grid, capped by `maxColumns`.
+- Tables (`table-attrset`, `table-list`) render one row per set, one cell per
+  `columns` entry, typed by value (switch/spin/text), with built-in add and
+  remove. A `@table-item` comment above a row sets its `label`, `hidden`, and
+  `visibleWhen`.
 - `advanced` controls collapse into an "Advanced" section; `hidden` controls
-  render only while the Advanced toggle is on.
+  render only while the Advanced toggle is on, including inside submodules.
 - A control with `visibleWhen` renders only while another option in the same
   menu satisfies the condition, re-evaluated live as values change. Hidden
   controls are not written on save.
@@ -122,7 +142,12 @@ In "current system only" mode, menus are filtered by the host's module import
 graph: a menu shows when a module its file defines is reachable from the host's
 configuration by following `imports` transitively. `@menu systems` overrides
 the graph, and the `hosts/<host>/` directory name is the fallback when no origin
-can be resolved.
+can be resolved. The special name `"all"` in a `systems` list matches every host.
+
+Bespoke controls (`keybinds`, `monitors`, `theme`, `menu`, `plugins`, `bar`,
+`dock`) render a configuration-specific UI for a single option, with their own
+add, remove, and reorder actions. Their field shapes are hard-coded in the
+application; the configuration only names the widget through `@option`.
 
 ## 7. Settings submenu
 
