@@ -25,6 +25,7 @@
 
         nativeBuildInputs = with pkgs; [
           pkg-config
+          mold
           wrapGAppsHook4
         ];
 
@@ -37,9 +38,19 @@
         nix-settings-gui = pkgs.rustPlatform.buildRustPackage {
           pname = "nix-settings-gui";
           version = "0.1.0";
-          src = lib.cleanSource ./.;
+          src = lib.fileset.toSource {
+            root = ./.;
+            fileset = lib.fileset.unions [
+              (lib.fileset.fileFilter (f: f.hasExt "rs") ./.)
+              (lib.fileset.fileFilter (f: f.name == "Cargo.toml" || f.name == "Cargo.lock" || f.name == "nix-settings-gui.desktop") ./.)
+              ./modules
+              ./src
+              ./tests
+            ];
+          };
           cargoLock.lockFile = ./Cargo.lock;
 
+          RUSTFLAGS = "-C link-arg=-fuse-ld=mold";
           inherit nativeBuildInputs buildInputs;
 
           doCheck = true;

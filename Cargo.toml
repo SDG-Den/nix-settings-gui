@@ -17,3 +17,9 @@ libc = "0.2"
 [[bin]]
 name = "nix-settings-gui"
 path = "src/main.rs"
+
+[profile.release]
+opt-level = 1
+codegen-units = 256
+panic = "abort"
+debug = false
