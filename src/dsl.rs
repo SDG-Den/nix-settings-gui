@@ -268,6 +268,7 @@ pub enum WidgetKind {
     Color,
     Submodule,
     HorizontalSubmodule,
+    GridConfiguration,
     TableAttrset,
     TableList,
     Keybinds,
@@ -299,6 +300,7 @@ impl WidgetKind {
             "color" => Self::Color,
             "submodule" => Self::Submodule,
             "horizontal-submodule" | "horizontalsubmodule" => Self::HorizontalSubmodule,
+            "grid-configuration" | "gridconfiguration" => Self::GridConfiguration,
             "table-attrset" | "tableattrset" => Self::TableAttrset,
             "table-list" | "tablelist" => Self::TableList,
             "keybinds" => Self::Keybinds,
@@ -387,6 +389,7 @@ pub struct OptionSpec {
     pub unit: Option<String>,
     pub rows: Option<u32>,
     pub placeholder: Option<String>,
+    pub width_chars: Option<u32>,
     pub group: Option<String>,
     pub group_order: Option<i64>,
     pub order: Option<i64>,
@@ -418,6 +421,7 @@ impl OptionSpec {
             unit: d.string("unit"),
             rows: d.int("rows").map(|n| n.max(0) as u32),
             placeholder: d.string("placeholder"),
+            width_chars: d.int("width").map(|n| n.clamp(1, i32::MAX as i64) as u32),
             group: d.string("group"),
             group_order: d.int("groupOrder"),
             order: d.int("order"),
@@ -661,6 +665,33 @@ mod tests {
         };
         assert!(ne.holds(Some("true")));
         assert!(!ne.holds(Some("false")));
+    }
+
+    #[test]
+    fn visibility_equality_matches_editor_literals() {
+        let bool_true = Visibility {
+            path: "a".into(),
+            equals: Some("true".into()),
+            not_equals: None,
+        };
+        assert!(bool_true.holds(Some("true")));
+        assert!(!bool_true.holds(Some("false")));
+
+        let bool_false = Visibility {
+            path: "a".into(),
+            equals: Some("false".into()),
+            not_equals: None,
+        };
+        assert!(bool_false.holds(Some("false")));
+        assert!(!bool_false.holds(Some("true")));
+
+        let string_eq = Visibility {
+            path: "a".into(),
+            equals: Some("\"firefox\"".into()),
+            not_equals: None,
+        };
+        assert!(string_eq.holds(Some("\"firefox\"")));
+        assert!(!string_eq.holds(Some("\"chrome\"")));
     }
 
     #[test]

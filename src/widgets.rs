@@ -5,8 +5,10 @@ use gtk::glib;
 use gtk::prelude::*;
 
 use crate::dsl::{OptionSpec, WidgetKind};
+use self::PluginFieldKind::{Bool, Float, Int, Text};
 use crate::edit::PendingEdit;
 use crate::model::Record;
+use crate::monitor_detect::DetectedMonitor;
 use crate::scan;
 use crate::value;
 
@@ -297,8 +299,23 @@ pub(crate) struct AttrsetRow {
     remove: gtk::Button,
 }
 
-/// One bind of the `keybinds` widget: the bind name, a `modifier+keys`
-/// preview, and the bind's fields.
+pub(crate) struct MenuRow {
+    section: String,
+    key: gtk::Entry,
+    orig_key: String,
+    icon: String,
+    label: gtk::Entry,
+    orig_label: String,
+    aliases: gtk::Entry,
+    orig_aliases: String,
+    popup_fields: Vec<AttrsetField>,
+    popup_box: gtk::Box,
+    row_box: gtk::Box,
+    remove: gtk::Button,
+}
+
+/// One bind of the `keybinds` widget: name and description on the main line,
+/// the bind's full field set in a hidden edit popup.
 pub(crate) struct KeybindRow {
     key: gtk::Entry,
     orig_key: String,
@@ -309,6 +326,7 @@ pub(crate) struct KeybindRow {
     fields: Vec<AttrsetField>,
     row_box: gtk::Box,
     remove: gtk::Button,
+    popup: gtk::Window,
 }
 
 /// One monitor rule of the `monitors` widget: core geometry editors plus the
@@ -321,21 +339,223 @@ pub(crate) struct MonitorRow {
     x: gtk::SpinButton,
     y: gtk::SpinButton,
     scale: gtk::SpinButton,
-    rr: gtk::Entry,
+    rr: Editor,
     extras: Vec<AttrsetField>,
     orig: Vec<(String, String)>,
     form_box: gtk::Box,
     remove: gtk::Button,
 }
 
-/// One plugin entry of the `plugins` widget: the plugin name, its enable
-/// switch, and the entry's remaining fields as nested child rows.
+/// One plugin entry of the `plugins` widget: the plugin id, its enable
+/// switch, and the entry's remaining settings as nested child rows.
 pub(crate) struct PluginRow {
     key: gtk::Entry,
     orig_key: String,
     enable: Editor,
+    enable_orig: String,
     enable_present: bool,
     children: Vec<(Record, Editor)>,
+    row_box: gtk::Box,
+    remove: gtk::Button,
+}
+
+/// The rows of a `plugins` editor, shared by construction and wiring.
+type PluginRows = Rc<RefCell<Vec<PluginRow>>>;
+
+pub(crate) struct GridRow {
+    id: String,
+    added: bool,
+    enabled: gtk::Switch,
+    order: gtk::SpinButton,
+    col: gtk::SpinButton,
+    row: gtk::SpinButton,
+    w: gtk::SpinButton,
+    h: gtk::SpinButton,
+    row_box: gtk::Box,
+    remove: gtk::Button,
+    orig: (bool, f64, f64, f64, f64, f64),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PluginFieldKind {
+    Bool,
+    Int,
+    Float,
+    Text,
+}
+
+/// One known setting of a known plugin: its dotted path under the plugin,
+/// the heading shown above the control, and the control the setting uses.
+#[derive(Debug, Clone, Copy)]
+pub struct PluginFieldSpec {
+    pub path: &'static str,
+    pub label: &'static str,
+    pub kind: PluginFieldKind,
+}
+
+/// One entry of the plugin registry: the id as written in configuration, its
+/// display name, and the settings the app knows how to label.
+#[derive(Debug, Clone, Copy)]
+pub struct PluginSpec {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub fields: &'static [PluginFieldSpec],
+}
+
+const fn pspec(
+    id: &'static str,
+    name: &'static str,
+    fields: &'static [PluginFieldSpec],
+) -> PluginSpec {
+    PluginSpec { id, name, fields }
+}
+
+const fn pfield(path: &'static str, label: &'static str, kind: PluginFieldKind) -> PluginFieldSpec {
+    PluginFieldSpec { path, label, kind }
+}
+
+const PLUGIN_REGISTRY_A: &[PluginSpec] = &[
+    pspec("dankMenu", "Dank Menu", &[]),
+    pspec(
+        "dankKDEConnect",
+        "KDE Connect",
+        &[pfield("settings.scanSubdirectories", "Scan subdirectories", Bool)],
+    ),
+    pspec(
+        "nixMonitor",
+        "Nix Monitor",
+        &[
+            pfield("settings.showGenerations", "Show generations", Bool),
+            pfield("settings.showStoreSize", "Show store size", Bool),
+            pfield("settings.updateInterval", "Update interval", Int),
+            pfield("settings.updateCheckInterval", "Check interval", Int),
+            pfield("settings.gcThresholdGB", "GC threshold", Int),
+        ],
+    ),
+];
+
+const PLUGIN_REGISTRY_B: &[PluginSpec] = &[
+    pspec(
+        "localServices",
+        "Local Services",
+        &[
+            pfield("settings.ignoredPorts", "Ignored ports", Text),
+            pfield("settings.exactWatches", "Exact watches", Text),
+            pfield("settings.labels", "Labels", Text),
+        ],
+    ),
+    pspec(
+        "scratchpadHelper",
+        "Scratchpad Helper",
+        &[
+            pfield("settings.hideBarWhenEmpty", "Hide bar when empty", Bool),
+            pfield("settings.namedManagerEnabled", "Named manager", Bool),
+        ],
+    ),
+    pspec("developerUtilities", "Developer Utilities", &[]),
+];
+
+const PLUGIN_REGISTRY_C: &[PluginSpec] = &[
+    pspec(
+        "screenCaptureToolbar",
+        "Screen Capture Toolbar",
+        &[
+            pfield("settings.enableAudioRecorder", "Audio recorder", Bool),
+            pfield("settings.multiMonitorScreenshot", "Multi monitor", Bool),
+            pfield("settings.showNotify", "Show notify", Bool),
+            pfield("settings.showRecPill", "Show record pill", Bool),
+            pfield("settings.toolbarOpacity", "Toolbar opacity", Float),
+            pfield("settings.pillOpacity", "Pill opacity", Float),
+        ],
+    ),
+    pspec(
+        "commandRunner",
+        "Command Runner",
+        &[
+            pfield("settings.terminal", "Terminal", Text),
+            pfield("settings.trigger", "Trigger", Text),
+            pfield("settings.execFlag", "Exec flag", Text),
+        ],
+    ),
+    pspec("webSearch", "Web Search", &[]),
+];
+
+/// Help text for a setting path, stored as path and tooltip.
+struct Help(&'static str, &'static str);
+
+const HELP_A: &[Help] = &[
+    Help("settings.scanSubdirectories", "Index nested plugin dirs"),
+    Help("settings.showGenerations", "List system generations"),
+    Help("settings.showStoreSize", "Show the nix store size"),
+    Help("settings.updateInterval", "Seconds between refreshes"),
+    Help("settings.updateCheckInterval", "Seconds between checks"),
+    Help("settings.gcThresholdGB", "Store size that suggests gc"),
+    Help("settings.ignoredPorts", "Comma separated ports to skip"),
+    Help("settings.exactWatches", "Paths watched exactly"),
+    Help("settings.labels", "Labels as an attrset"),
+    Help("settings.hideBarWhenEmpty", "Collapse the bar when idle"),
+];
+
+const HELP_B: &[Help] = &[
+    Help("settings.namedManagerEnabled", "Allow named scratchpads"),
+    Help("settings.enableAudioRecorder", "Include microphone audio"),
+    Help("settings.multiMonitorScreenshot", "Capture every monitor"),
+    Help("settings.showNotify", "Notify after capture"),
+    Help("settings.showRecPill", "Show the record pill"),
+    Help("settings.toolbarOpacity", "Opacity of the toolbar"),
+    Help("settings.pillOpacity", "Opacity of the pill"),
+    Help("settings.terminal", "Terminal for commands"),
+    Help("settings.trigger", "Key that opens the runner"),
+    Help("settings.execFlag", "Flag for exec mode"),
+];
+
+const HELP_TABLES: [&[Help]; 2] = [HELP_A, HELP_B];
+
+/// The help text recorded for a setting path, if any.
+fn plugin_field_help(path: &str) -> Option<&'static str> {
+    HELP_TABLES
+        .iter()
+        .find_map(|table| table.iter().find(|help| help.0 == path))
+        .map(|help| help.1)
+}
+
+/// Every registry table, so lookup and iteration share one source of truth.
+const PLUGIN_TABLES: [&[PluginSpec]; 3] = [
+    PLUGIN_REGISTRY_A,
+    PLUGIN_REGISTRY_B,
+    PLUGIN_REGISTRY_C,
+];
+
+/// The registry entry for a plugin id, if it is known.
+fn plugin_spec(id: &str) -> Option<&'static PluginSpec> {
+    PLUGIN_TABLES
+        .iter()
+        .find_map(|table| table.iter().find(|spec| spec.id == id))
+}
+
+/// The registry entry for one dotted setting path under a plugin.
+fn plugin_field(id: &str, path: &str) -> Option<&'static PluginFieldSpec> {
+    plugin_spec(id)
+        .and_then(|spec| spec.fields.iter().find(|field| field.path == path))
+}
+
+/// A heading from an identifier: split camel-case boundaries, turn snake case
+/// into spaces, and capitalize the first letter.
+fn humanize(raw: &str) -> String {
+    let mut out = String::new();
+    for (index, ch) in raw.chars().enumerate() {
+        if ch == '_' {
+            out.push(' ');
+        } else if ch.is_ascii_uppercase() && index > 0 && out.ends_with(char::is_lowercase) {
+            out.push(' ');
+            out.push(ch);
+        } else if index == 0 {
+            out.extend(ch.to_uppercase());
+        } else {
+            out.push(ch);
+        }
+    }
+    out
 }
 
 /// The editing control backing one option. Each variant knows how to render
@@ -389,6 +609,7 @@ pub enum Editor {
         root: gtk::Box,
         current: Rc<RefCell<String>>,
         list: gtk::ListBox,
+        entry: Option<gtk::Entry>,
     },
     Keybinds {
         root: gtk::Box,
@@ -402,7 +623,7 @@ pub enum Editor {
     },
     Menu {
         root: gtk::Box,
-        rows: Rc<RefCell<Vec<AttrsetRow>>>,
+        rows: Rc<RefCell<Vec<MenuRow>>>,
         on_change: ChangeHook,
     },
     Plugins {
@@ -426,6 +647,13 @@ pub enum Editor {
         root: gtk::Box,
         widgets: Rc<RefCell<Vec<AttrsetRow>>>,
         widgets_present: bool,
+        extras: Vec<(Record, Editor)>,
+        on_change: ChangeHook,
+    },
+    Grid {
+        root: gtk::Box,
+        rows: Rc<RefCell<Vec<GridRow>>>,
+        orig_ids: Vec<String>,
         extras: Vec<(Record, Editor)>,
         on_change: ChangeHook,
     },
@@ -459,6 +687,7 @@ impl Editor {
             Editor::Plugins { root, .. } => root.clone().upcast(),
             Editor::Bar { root, .. } => root.clone().upcast(),
             Editor::Dock { root, .. } => root.clone().upcast(),
+            Editor::Grid { root, .. } => root.clone().upcast(),
             Editor::Raw { root, .. } => root.clone().upcast(),
         }
     }
@@ -525,7 +754,7 @@ impl Editor {
             Editor::Theme { current, .. } => quote(&current.borrow()),
             Editor::Keybinds { rows, .. } => keybinds_nix(&rows.borrow()),
             Editor::Monitors { rows, .. } => monitors_nix(&rows.borrow()),
-            Editor::Menu { rows, .. } => attrset_rows_nix(&rows.borrow()),
+            Editor::Menu { rows, .. } => menu_rows_nix(&rows.borrow()),
             Editor::Plugins { rows, .. } => plugins_nix(&rows.borrow()),
             Editor::Bar {
                 left,
@@ -552,6 +781,7 @@ impl Editor {
                 extras,
                 ..
             } => dock_nix(widgets, *widgets_present, extras),
+            Editor::Grid { rows, extras, .. } => grid_nix(&rows.borrow(), extras),
             Editor::Raw { view, .. } => {
                 let buffer = view.buffer();
                 buffer
@@ -619,9 +849,10 @@ impl Editor {
                     && row.fields.iter().all(|f| f.editor.unchanged(&f.orig_value))
             }),
             Editor::Monitors { rows, .. } => rows.borrow().iter().all(monitor_row_unchanged),
-            Editor::Menu { rows, .. } => attrset_rows_unchanged(rows),
+            Editor::Menu { rows, .. } => menu_rows_unchanged(rows),
             Editor::Plugins { rows, .. } => rows.borrow().iter().all(|row| {
                 row.key.text() == row.orig_key
+                    && row.enable.unchanged(&row.enable_orig)
                     && row
                         .children
                         .iter()
@@ -646,6 +877,25 @@ impl Editor {
                 widgets, extras, ..
             } => {
                 attrset_rows_unchanged(widgets)
+                    && extras
+                        .iter()
+                        .all(|(record, editor)| editor.unchanged(&record.value))
+            }
+            Editor::Grid {
+                rows, orig_ids, extras, ..
+            } => {
+                let rows = rows.borrow();
+                rows.len() == orig_ids.len()
+                    && rows.iter().zip(orig_ids.iter()).all(|(row, id)| {
+                        row.id == *id
+                            && !row.added
+                            && row.enabled.is_active() == row.orig.0
+                            && (row.order.value() - row.orig.1).abs() < 1e-9
+                            && (row.col.value() - row.orig.2).abs() < 1e-9
+                            && (row.row.value() - row.orig.3).abs() < 1e-9
+                            && (row.w.value() - row.orig.4).abs() < 1e-9
+                            && (row.h.value() - row.orig.5).abs() < 1e-9
+                    })
                     && extras
                         .iter()
                         .all(|(record, editor)| editor.unchanged(&record.value))
@@ -738,7 +988,11 @@ impl Editor {
                     connect_table_row(row, update);
                 }
             }
-            Editor::Theme { list, .. } => {
+            Editor::Theme { list, entry, .. } => {
+                if let Some(entry) = entry {
+                    let update = update.clone();
+                    entry.connect_changed(move |_| update());
+                }
                 let update = update.clone();
                 list.connect_row_selected(move |_, _| update());
             }
@@ -763,7 +1017,7 @@ impl Editor {
             } => {
                 *on_change.borrow_mut() = Some(update.clone());
                 for row in rows.borrow().iter() {
-                    connect_attrset_row(row, update);
+                    connect_menu_row(row, update);
                 }
             }
             Editor::Plugins {
@@ -808,6 +1062,14 @@ impl Editor {
                     editor.connect_changed(update);
                 }
             }
+            Editor::Grid {
+                extras, on_change, ..
+            } => {
+                *on_change.borrow_mut() = Some(update.clone());
+                for (_, editor) in extras {
+                    editor.connect_changed(update);
+                }
+            }
         }
     }
 }
@@ -845,6 +1107,7 @@ pub fn build(record: &Record, type_str: Option<&str>, ctx: &BuildContext) -> Edi
         WidgetKind::Color => Editor::Color(build_color(value_text)),
         WidgetKind::Submodule => build_submodule(record, type_str, ctx),
         WidgetKind::HorizontalSubmodule => build_horizontal_submodule(record, type_str, ctx),
+        WidgetKind::GridConfiguration => build_grid_configuration(record, ctx),
         WidgetKind::TableAttrset => build_table(record, ctx, false),
         WidgetKind::TableList => build_table(record, ctx, true),
         WidgetKind::Theme => build_theme(value_text),
@@ -1010,6 +1273,33 @@ fn build_dropdown(choices: &[String], value_text: &str) -> Editor {
     }
 }
 
+const MONITOR_TRANSFORMS: &[(&str, &str)] = &[
+    ("0", "No transform"),
+    ("1", "90° counter-clockwise"),
+    ("2", "180° counter-clockwise"),
+    ("3", "270° counter-clockwise"),
+    ("4", "180° vertical flip"),
+    ("5", "Flip + 90° counter-clockwise"),
+    ("6", "Flip + 180° counter-clockwise"),
+    ("7", "Flip + 270° counter-clockwise"),
+];
+
+fn build_transform(value_text: &str) -> Editor {
+    let labels: Vec<&str> = MONITOR_TRANSFORMS.iter().map(|(_, label)| *label).collect();
+    let combo = gtk::DropDown::from_strings(&labels);
+    let current = value_text.trim().trim_matches('"');
+    let selected = MONITOR_TRANSFORMS
+        .iter()
+        .position(|(value, _)| *value == current)
+        .unwrap_or(0);
+    combo.set_selected(selected as u32);
+    combo.set_halign(gtk::Align::Start);
+    Editor::Dropdown {
+        combo,
+        choices: MONITOR_TRANSFORMS.iter().map(|(value, _)| (*value).to_string()).collect(),
+    }
+}
+
 fn build_spin(spec: &OptionSpec, value_text: &str) -> gtk::SpinButton {
     let min = spec.min.unwrap_or(-1.0e15);
     let max = spec.max.unwrap_or(1.0e15);
@@ -1038,7 +1328,11 @@ fn build_entry(value_text: &str, spec: &OptionSpec, monospace: bool) -> gtk::Ent
     let entry = gtk::Entry::new();
     entry.set_text(&unquoted);
     entry.set_hexpand(true);
-    entry.set_width_chars(44);
+    if let Some(width) = spec.width_chars {
+        entry.set_width_chars(width as i32);
+        entry.set_hexpand(false);
+        entry.set_halign(gtk::Align::Start);
+    }
     if monospace {
         entry.add_css_class("monospace");
     }
@@ -1430,6 +1724,16 @@ fn build_horizontal_submodule(
     Editor::HorizontalSubmodule { root, children }
 }
 
+fn table_row_identity_locked(list: bool, key_editable: bool, has_label: bool) -> bool {
+    !list && !key_editable && has_label
+}
+
+fn table_first_cell_static(
+    list: bool, is_first: bool, first_value_editable: bool,
+) -> bool {
+    list && is_first && !first_value_editable
+}
+
 /// A table over an attribute set of sets (`table-attrset`) or a list of sets
 /// (`table-list`), with automatic per-cell widgets and built-in row buttons.
 fn build_table(record: &Record, ctx: &BuildContext, list: bool) -> Editor {
@@ -1444,17 +1748,18 @@ fn build_table(record: &Record, ctx: &BuildContext, list: bool) -> Editor {
     let key_editable = record.spec.key_editable;
     let first_value_editable = record.spec.first_value_editable;
 
+    let scan_rows = scan::scan_table(&record.value, list);
+
     if !key_editable {
         let mut names = columns.clone();
-        if !first_value_editable && !names.is_empty() {
+        if list && !first_value_editable && !names.is_empty() {
             names.remove(0);
         }
         if !names.is_empty() {
-            let header = gtk::Label::builder()
-                .xalign(0.0)
-                .label(names.join("   "))
-                .css_classes(["dim-label", "caption"])
-                .build();
+            let header = make_table_header(&names, list, scan_rows.first());
+            let trailing = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+            trailing.set_size_request(34, -1);
+            header.append(&trailing);
             root.append(&header);
         }
     }
@@ -1462,7 +1767,7 @@ fn build_table(record: &Record, ctx: &BuildContext, list: bool) -> Editor {
     let rows: Rc<RefCell<Vec<TableRow>>> = Rc::new(RefCell::new(Vec::new()));
     let on_change: ChangeHook = Rc::new(RefCell::new(None));
 
-    for scan_row in scan::scan_table(&record.value, list) {
+    for scan_row in scan_rows {
         if scan_row.spec.hidden && !ctx.advanced {
             continue;
         }
@@ -1546,8 +1851,17 @@ fn make_table_row(
     key_entry.set_width_chars(12);
     if !list {
         key_entry.set_text(&scan_row.key);
-        key_entry.set_tooltip_text(Some("Row key"));
-        row_box.append(&key_entry);
+        if table_row_identity_locked(list, key_editable, scan_row.spec.label.is_some()) {
+            let heading = gtk::Label::builder()
+                .label(scan_row.spec.label.clone().unwrap_or_default())
+                .xalign(0.0)
+                .tooltip_text("Row key")
+                .build();
+            row_box.append(&heading);
+        } else {
+            key_entry.set_tooltip_text(Some("Row key"));
+            row_box.append(&key_entry);
+        }
         if let Some(update) = update {
             let update = update.clone();
             key_entry.connect_changed(move |_| update());
@@ -1571,7 +1885,7 @@ fn make_table_row(
             row_box.append(&cell_key);
             row_box.append(&gtk::Label::new(Some("=")));
             true
-        } else if is_first && !first_value_editable {
+        } else if table_first_cell_static(list, is_first, first_value_editable) {
             let label = gtk::Label::builder()
                 .label(entry_text(&field_value))
                 .xalign(0.0)
@@ -1626,6 +1940,39 @@ fn make_table_row(
         orig_key: scan_row.key.clone(),
         cells,
     }
+}
+
+fn column_expands(first_row: Option<&scan::TableRowScan>, column: &str) -> bool {
+    let sample = first_row
+        .and_then(|row| row.fields.iter().find(|(key, _)| key == column))
+        .map(|(_, value)| value.as_str())
+        .unwrap_or("null");
+    !matches!(
+        value::classify(sample),
+        value::ValueKind::Bool | value::ValueKind::Int | value::ValueKind::Float
+    )
+}
+
+fn make_table_header(
+    columns: &[String], list: bool, first_row: Option<&scan::TableRowScan>,
+) -> gtk::Box {
+    let header = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    header.set_hexpand(true);
+    if !list {
+        let spacer = gtk::Label::new(None);
+        spacer.set_width_chars(12);
+        header.append(&spacer);
+    }
+    for column in columns {
+        let label = gtk::Label::builder()
+            .label(column)
+            .xalign(0.0)
+            .hexpand(column_expands(first_row, column))
+            .css_classes(["dim-label", "caption"])
+            .build();
+        header.append(&label);
+    }
+    header
 }
 
 /// A cell editor inferred from the cell's value: a switch for a boolean, a spin
@@ -1720,12 +2067,11 @@ fn connect_table_row(row: &TableRow, update: &Rc<dyn Fn()>) {
 
 /// A scheme selector backed by the base16 palettes bundled at build time. Each
 /// row shows the scheme's sixteen colors and its name; the written value is the
-/// short scheme name. Degrades to a plain text field when no palettes are
-/// bundled (plain `cargo test`).
+/// short scheme name. With no palettes bundled (plain `cargo test`, or a build
+/// without TINTED_SCHEMES_DIR) it degrades to a labeled text entry.
 fn build_theme(value_text: &str) -> Editor {
     if schemes::SCHEMES.is_empty() {
-        let spec = OptionSpec::default();
-        return Editor::Text(build_entry(value_text, &spec, false));
+        return theme_text_fallback(value_text);
     }
 
     install_swatch_css();
@@ -1783,6 +2129,28 @@ fn build_theme(value_text: &str) -> Editor {
         root,
         current,
         list,
+        entry: None,
+    }
+}
+
+fn theme_text_fallback(value_text: &str) -> Editor {
+    let entry = build_entry(value_text, &OptionSpec::default(), false);
+    let current = Rc::new(RefCell::new(entry.text().to_string()));
+    let (entry_watch, current_watch) = (entry.clone(), current.clone());
+    entry.connect_changed(move |_| {
+        *current_watch.borrow_mut() = entry_watch.text().to_string();
+    });
+    let warning = gtk::Label::new(Some("No schemes bundled: set TINTED_SCHEMES_DIR and rebuild"));
+    warning.set_xalign(0.0);
+    let root = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    root.set_hexpand(true);
+    root.append(&warning);
+    root.append(&entry);
+    Editor::Theme {
+        root,
+        current,
+        list: gtk::ListBox::new(),
+        entry: Some(entry),
     }
 }
 
@@ -1801,6 +2169,28 @@ fn install_swatch_css() {
         }
         let provider = gtk::CssProvider::new();
         provider.load_from_data(&css);
+        if let Some(display) = gtk::gdk::Display::default() {
+            gtk::style_context_add_provider_for_display(
+                &display,
+                &provider,
+                gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+            );
+        }
+    });
+}
+
+/// Install the one-time stylesheet that paints the keybind preview pill.
+fn install_keybind_css() {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        let css = ".keybind-preview {
+            background-color: alpha(@window_fg_color, 0.08);
+            border-radius: 8px;
+            padding: 2px 8px;
+        }";
+        let provider = gtk::CssProvider::new();
+        provider.load_from_data(css);
         if let Some(display) = gtk::gdk::Display::default() {
             gtk::style_context_add_provider_for_display(
                 &display,
@@ -1886,62 +2276,368 @@ fn field_has_content(editor: &Editor) -> bool {
     }
 }
 
-fn attrset_field_nix(field: &AttrsetField) -> Option<String> {
-    if !field.orig_present && !field_has_content(&field.editor) {
+fn field_nix(
+    name: &str,
+    editor: &Editor,
+    _orig_value: &str,
+    orig_present: bool,
+) -> Option<String> {
+    if !orig_present && !field_has_content(editor) {
         return None;
     }
-    Some(format!(
-        "{} = {};",
-        attr_key(&field.name),
-        field.editor.to_nix()
-    ))
+    Some(format!("{} = {};", attr_key(name), editor.to_nix()))
 }
 
-/// One row of an id-keyed attribute set editor, with a key entry, one inferred
-/// editor per field, and a remove button.
-fn make_attrset_row(
-    key: &str,
-    fields: &[(String, String)],
-    indent_by_key: bool,
-    ctx: &BuildContext,
-) -> AttrsetRow {
+fn attrset_field_nix(field: &AttrsetField) -> Option<String> {
+    field_nix(
+        &field.name,
+        &field.editor,
+        &field.orig_value,
+        field.orig_present,
+    )
+}
+
+fn menu_aliases_text(raw: &str) -> String {
+    raw.split('"').skip(1).step_by(2).collect::<Vec<_>>().join(", ")
+}
+
+fn menu_aliases_nix(text: &str) -> Option<String> {
+    let items: Vec<String> = text
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .map(|s| expr_literal(&s))
+        .collect();
+    (!items.is_empty())
+        .then(|| format!("aliases = {};", value::serialize_list(&items)))
+}
+
+const WIDGET_NAMES: &[(&str, &str)] = &[
+    ("workspaceSwitcher", "Workspace switcher"),
+    ("dankKDEConnect", "KDE Connect"),
+    ("layout", "Layout indicator"),
+    ("scratchpadHelper", "Scratchpad helper"),
+    ("systemTray", "System tray"),
+    ("clipboard", "Clipboard"),
+    ("developerUtilities", "Developer utilities"),
+    ("nixMonitor", "Monitor widget"),
+    ("localServices", "Local services"),
+    ("controlCenterButton", "Control center button"),
+    ("dock_launcher", "Dock launcher"),
+    ("dock_apps", "Dock apps"),
+    ("dock_trash", "Dock trash"),
+    ("left", "Left"),
+    ("center", "Center"),
+    ("right", "Right"),
+    ("wifi", "Wi-Fi"),
+    ("vpn", "VPN"),
+    ("builtin_vpn", "Built-in VPN"),
+    ("builtinVpn", "Built-in VPN"),
+    ("uv", "UV"),
+];
+
+fn known_widget_name(id: &str) -> Option<&'static str> {
+    WIDGET_NAMES
+        .iter()
+        .find(|(key, _)| *key == id)
+        .map(|(_, name)| *name)
+}
+
+fn title_case_id(id: &str) -> String {
+    let expanded = id.replace('_', " ");
+    let mut out = String::new();
+    for (index, ch) in expanded.chars().enumerate() {
+        if ch.is_uppercase() && index > 0 && !out.ends_with(' ') {
+            out.push(' ');
+        }
+        out.push(ch);
+    }
+    let mut chars = out.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => out,
+    }
+}
+
+fn widget_display_name(id: &str) -> String {
+    known_widget_name(id)
+        .map(str::to_string)
+        .unwrap_or_else(|| title_case_id(id))
+}
+
+fn grid_registry(path: &str) -> Vec<String> {
+    let ids: &[&str] = if path.contains("controlCenterWidgets") {
+        &["user", "battery", "settings", "lock", "power", "brightnessSlider",
+          "volumeSlider", "inputVolumeSlider", "wifi", "bluetooth", "builtin_vpn",
+          "diskUsage", "nightMode", "doNotDisturb", "idleInhibitor", "runningApps"]
+    } else if path.contains("dashCards") {
+        &["clock", "weather", "notifications", "calendar", "media", "sysmon",
+          "network", "user"]
+    } else if path.contains("weather.widgets") {
+        &["conditions", "hourly", "humidity", "wind", "daily", "precipitation", "uv"]
+    } else {
+        &[]
+    };
+    ids.iter().map(|s| s.to_string()).collect()
+}
+
+const WIDGET_FIELD_HELP: &[(&str, &str)] = &[
+    ("enabled", "Whether this widget is shown."),
+    ("_order", "Sort position among sibling widgets; lower comes first."),
+    ("showOccupiedWorkspacesOnly", "Only list workspaces that have open windows."),
+    ("showWorkspaceIndex", "Show the workspace number."),
+    ("showWorkspacePadding", "Pad single-digit workspace numbers."),
+    ("workspacePaddingCount", "Pad workspace numbers up to this width."),
+    ("dwlShowAllTags", "Show every dwl tag, not only used ones."),
+    ("showAudioPercent", "Show the audio level as a percentage."),
+    ("showBatteryIcon", "Show the battery icon."),
+    ("showBrightnessIcon", "Show the brightness icon."),
+    ("showBrightnessPercent", "Show brightness as a percentage."),
+    ("showDoNotDisturbIcon", "Show the do not disturb icon."),
+    ("showIdleInhibitorIcon", "Show the idle inhibitor icon."),
+    ("showMicIcon", "Show the microphone icon."),
+    ("showMicPercent", "Show the mic level as a percentage."),
+    ("autoHide", "Hide the bar or dock when a window would overlap it."),
+    ("autoHideDelay", "Milliseconds before auto hide engages."),
+    ("position", "Screen edge: top or bottom."),
+];
+
+fn field_caption(name: &str) -> String {
+    if name == "_order" {
+        return "Position".to_string();
+    }
+    title_case_id(name)
+}
+
+fn field_help(name: &str) -> Option<&'static str> {
+    WIDGET_FIELD_HELP
+        .iter()
+        .find(|(key, _)| *key == name)
+        .map(|(_, help)| *help)
+}
+
+fn widget_row_header(key: &str, ctx: &BuildContext) -> (gtk::Box, gtk::Entry) {
     let row_box = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     row_box.set_hexpand(true);
-    if indent_by_key {
-        let depth = key.matches('.').count().min(4);
-        row_box.set_margin_start((depth * 12) as i32);
-    }
-
+    let friendly = gtk::Label::builder()
+        .xalign(0.0)
+        .label(widget_display_name(key))
+        .css_classes(["heading"])
+        .build();
+    row_box.append(&friendly);
     let key_entry = gtk::Entry::new();
     key_entry.set_width_chars(14);
     key_entry.set_text(key);
     key_entry.set_tooltip_text(Some("Id"));
+    let known = WIDGET_NAMES.iter().any(|(id, _)| *id == key);
+    key_entry.set_visible(ctx.advanced || !known);
     row_box.append(&key_entry);
+    (row_box, key_entry)
+}
 
+fn widget_field_cell(name: &str, raw: &str, ctx: &BuildContext) -> (gtk::Box, AttrsetField) {
+    let field = make_attrset_field(name, raw, ctx);
+    let cell = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    let caption = gtk::Label::builder()
+        .xalign(0.0)
+        .label(field_caption(name))
+        .css_classes(["dim-label", "caption"])
+        .build();
+    if let Some(help) = field_help(name) {
+        caption.set_tooltip_text(Some(help));
+    }
+    cell.append(&caption);
+    cell.append(&field.editor.root());
+    (cell, field)
+}
+
+fn collect_widget_fields(
+    row_box: &gtk::Box,
+    fields: &[(String, String)],
+    ctx: &BuildContext,
+) -> (Vec<AttrsetField>, Option<gtk::Box>, gtk::Box) {
     let mut attr_fields = Vec::new();
+    let mut position_cell = None;
+    let tuning = gtk::Box::new(gtk::Orientation::Vertical, 4);
     for (name, raw) in fields {
-        let field = make_attrset_field(name, raw, ctx);
-        let cell = gtk::Box::new(gtk::Orientation::Vertical, 2);
-        let label = gtk::Label::builder()
-            .xalign(0.0)
-            .label(&field.name)
-            .css_classes(["dim-label", "caption"])
-            .build();
-        cell.append(&label);
-        cell.append(&field.editor.root());
-        row_box.append(&cell);
+        let (cell, field) = widget_field_cell(name, raw, ctx);
+        match name.as_str() {
+            "_order" => position_cell = Some(cell),
+            "enabled" => row_box.append(&cell),
+            _ => tuning.append(&cell),
+        }
         attr_fields.push(field);
     }
+    (attr_fields, position_cell, tuning)
+}
 
+fn append_widget_trailing(
+    row_box: &gtk::Box,
+    position_cell: Option<gtk::Box>,
+    tuning: &gtk::Box,
+) -> gtk::Button {
+    let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    spacer.set_hexpand(true);
+    row_box.append(&spacer);
+    if let Some(cell) = position_cell {
+        row_box.append(&cell);
+    }
+    if tuning.first_child().is_some() {
+        let expander = gtk::Expander::new(Some("Tuning"));
+        expander.set_child(Some(tuning));
+        row_box.append(&expander);
+    }
     let remove = gtk::Button::from_icon_name("user-trash-symbolic");
     remove.add_css_class("flat");
     remove.set_tooltip_text(Some("Remove"));
     row_box.append(&remove);
+    remove
+}
 
+fn make_widget_row(
+    key: &str,
+    fields: &[(String, String)],
+    ctx: &BuildContext,
+) -> AttrsetRow {
+    let (row_box, key_entry) = widget_row_header(key, ctx);
+    let (attr_fields, position_cell, tuning) = collect_widget_fields(&row_box, fields, ctx);
+    let remove = append_widget_trailing(&row_box, position_cell, &tuning);
     AttrsetRow {
         key: key_entry,
         orig_key: key.to_string(),
         fields: attr_fields,
+        row_box,
+        remove,
+    }
+}
+
+fn menu_popup_fields(fields: &[AttrsetField]) -> gtk::Box {
+    let vbox = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    for field in fields.iter().take(3) {
+        vbox.append(&dim_line(&field.name, &field.editor.root()));
+    }
+    let advanced = gtk::Expander::new(Some("Advanced conditions"));
+    let inner = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    for field in fields.iter().skip(3) {
+        inner.append(&dim_line(&field.name, &field.editor.root()));
+    }
+    advanced.set_child(Some(&inner));
+    vbox.append(&advanced);
+    vbox
+}
+
+fn connect_menu_edit(
+    edit: &gtk::Button,
+    row_box: &gtk::Box,
+    popup_box: &gtk::Box,
+    popup: &gtk::Window,
+    popup_content: &gtk::Box,
+) {
+    let row_box = row_box.clone();
+    let popup_box = popup_box.clone();
+    let popup = popup.clone();
+    let popup_content = popup_content.clone();
+    edit.connect_clicked(move |_| {
+        while let Some(child) = popup_content.first_child() {
+            popup_content.remove(&child);
+        }
+        if let Some(win) = row_box.root().and_then(|w| w.downcast::<gtk::Window>().ok()) {
+            popup.set_transient_for(Some(&win));
+        }
+        popup_content.append(&popup_box);
+        popup.present();
+    });
+}
+
+fn make_menu_row(
+    section: &str,
+    rel_key: &str,
+    fields: &[(String, String)],
+    ctx: &BuildContext,
+    popup: &gtk::Window,
+    popup_content: &gtk::Box,
+) -> MenuRow {
+    let raw_of = |name: &str| {
+        fields
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, r)| r.trim().to_string())
+            .unwrap_or_default()
+    };
+    let unquote = |raw: &str| raw.trim().trim_matches('"').to_string();
+
+    let key = gtk::Entry::new();
+    key.set_width_chars(16);
+    key.set_text(rel_key);
+    let orig_key = if rel_key.is_empty() {
+        section.to_string()
+    } else {
+        format!("{section}.{rel_key}")
+    };
+
+    let icon = unquote(&raw_of("icon"));
+    let label = gtk::Entry::new();
+    label.set_text(&unquote(&raw_of("label")));
+    let orig_label = label.text().to_string();
+    let aliases = gtk::Entry::new();
+    aliases.set_text(&menu_aliases_text(&raw_of("aliases")));
+    let orig_aliases = aliases.text().to_string();
+
+    let popup_fields: Vec<AttrsetField> = ["provider", "target", "action", "checked", "when"]
+        .iter()
+        .map(|name| make_attrset_field(name, &raw_of(name), ctx))
+        .collect();
+    let popup_box = menu_popup_fields(&popup_fields);
+
+    let icon_widget: gtk::Widget = if icon.is_empty() {
+        gtk::Label::new(Some(&orig_label.chars().next().unwrap_or(' ').to_string()))
+            .upcast()
+    } else {
+        gtk::Image::from_icon_name(&icon).upcast()
+    };
+    let kind = match (raw_of("target").as_str(), raw_of("action").as_str()) {
+        (t, _) if !t.is_empty() && t != "null" => "link",
+        (_, a) if !a.is_empty() && a != "null" => "shell",
+        _ => "group",
+    };
+    let caption = gtk::Label::new(Some(kind));
+    caption.add_css_class("dim-label");
+    caption.add_css_class("caption");
+
+    let main = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    main.set_hexpand(true);
+    main.append(&icon_widget);
+    if !rel_key.is_empty() {
+        main.append(&key);
+    }
+    label.set_hexpand(true);
+    main.append(&label);
+    main.append(&aliases);
+    main.append(&caption);
+
+    let edit = gtk::Button::with_label("Edit");
+    let remove = gtk::Button::from_icon_name("user-trash-symbolic");
+    remove.add_css_class("flat");
+    main.append(&edit);
+    main.append(&remove);
+
+    let row_box = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    row_box.set_hexpand(true);
+    row_box.append(&main);
+
+    connect_menu_edit(&edit, &row_box, &popup_box, popup, popup_content);
+
+    MenuRow {
+        section: section.to_string(),
+        key,
+        orig_key,
+        icon,
+        label,
+        orig_label,
+        aliases,
+        orig_aliases,
+        popup_fields,
+        popup_box,
         row_box,
         remove,
     }
@@ -1962,6 +2658,36 @@ fn attrset_rows_nix(rows: &[AttrsetRow]) -> String {
     format!("{{ {} }}", parts.join(" "))
 }
 
+fn menu_rows_nix(rows: &[MenuRow]) -> String {
+    let parts: Vec<String> = rows
+        .iter()
+        .map(|row| {
+            let full = if row.key.text().is_empty() {
+                row.section.clone()
+            } else {
+                format!("{}.{}", row.section, row.key.text())
+            };
+            let mut fields: Vec<String> = Vec::new();
+            if !row.icon.is_empty() {
+                fields.push(format!("icon = {};", string_literal(&row.icon)));
+            }
+            if !row.orig_label.is_empty() || !row.label.text().is_empty() {
+                fields.push(format!("label = {};", string_literal(&row.label.text())));
+            }
+            if let Some(line) = menu_aliases_nix(&row.aliases.text()) {
+                fields.push(line);
+            }
+            for field in &row.popup_fields {
+                if let Some(line) = attrset_field_nix(field) {
+                    fields.push(line);
+                }
+            }
+            format!("{} = {{ {} }};", attr_key(&full), fields.join(" "))
+        })
+        .collect();
+    format!("{{ {} }}", parts.join(" "))
+}
+
 fn attrset_rows_unchanged(rows: &Rc<RefCell<Vec<AttrsetRow>>>) -> bool {
     rows.borrow().iter().all(|row| {
         row.key.text() == row.orig_key
@@ -1969,10 +2695,39 @@ fn attrset_rows_unchanged(rows: &Rc<RefCell<Vec<AttrsetRow>>>) -> bool {
     })
 }
 
+fn menu_rows_unchanged(rows: &Rc<RefCell<Vec<MenuRow>>>) -> bool {
+    rows.borrow().iter().all(|row| {
+        let full = if row.key.text().is_empty() {
+            row.section.clone()
+        } else {
+            format!("{}.{}", row.section, row.key.text())
+        };
+        full == row.orig_key
+            && row.label.text() == row.orig_label
+            && row.aliases.text() == row.orig_aliases
+            && row
+                .popup_fields
+                .iter()
+                .all(|f| f.editor.unchanged(&f.orig_value))
+    })
+}
+
 fn connect_attrset_row(row: &AttrsetRow, update: &Rc<dyn Fn()>) {
     let update_key = update.clone();
     row.key.connect_changed(move |_| update_key());
     for field in &row.fields {
+        field.editor.connect_changed(update);
+    }
+}
+
+fn connect_menu_row(row: &MenuRow, update: &Rc<dyn Fn()>) {
+    let update_key = update.clone();
+    row.key.connect_changed(move |_| update_key());
+    let update_label = update.clone();
+    row.label.connect_changed(move |_| update_label());
+    let update_aliases = update.clone();
+    row.aliases.connect_changed(move |_| update_aliases());
+    for field in &row.popup_fields {
         field.editor.connect_changed(update);
     }
 }
@@ -2004,14 +2759,127 @@ fn attach_attrset_row(
     rows.borrow_mut().push(row);
 }
 
-/// Build the shared id-keyed attribute set editor: scanned rows, an add
-/// button that scaffolds a row from `scaffold` fields, and optional key-based
-/// indentation for dotted ids.
+fn attach_menu_row(
+    container: &gtk::Box,
+    rows: &Rc<RefCell<Vec<MenuRow>>>,
+    row: MenuRow,
+    on_change: &ChangeHook,
+    popup_content: &gtk::Box,
+) {
+    {
+        let container = container.clone();
+        let rows = rows.clone();
+        let row_box = row.row_box.clone();
+        let key = row.key.clone();
+        let popup_box = row.popup_box.clone();
+        let popup_content = popup_content.clone();
+        let on_change = on_change.clone();
+        row.remove.connect_clicked(move |_| {
+            container.remove(&row_box);
+            if popup_box.parent() == Some(popup_content.clone().upcast::<gtk::Widget>()) {
+                popup_box.unparent();
+            }
+            rows.borrow_mut().retain(|r| r.key != key);
+            if let Some(cb) = on_change.borrow().as_ref() {
+                cb();
+            }
+        });
+    }
+    container.append(&row.row_box);
+    rows.borrow_mut().push(row);
+}
+
+fn connect_grid_row(row: &GridRow, update: &Rc<dyn Fn()>) {
+    let update_enabled = update.clone();
+    row.enabled.connect_active_notify(move |_| update_enabled());
+    let update_order = update.clone();
+    row.order.connect_value_changed(move |_| update_order());
+    let update_col = update.clone();
+    row.col.connect_value_changed(move |_| update_col());
+    let update_row = update.clone();
+    row.row.connect_value_changed(move |_| update_row());
+    let update_w = update.clone();
+    row.w.connect_value_changed(move |_| update_w());
+    let update_h = update.clone();
+    row.h.connect_value_changed(move |_| update_h());
+}
+
+fn attach_grid_row(
+    container: &gtk::Box,
+    rows: &Rc<RefCell<Vec<GridRow>>>,
+    row: GridRow,
+    on_change: &ChangeHook,
+) {
+    let hook: Rc<dyn Fn()> = {
+        let on_change = on_change.clone();
+        Rc::new(move || {
+            if let Some(cb) = on_change.borrow().as_ref() {
+                cb();
+            }
+        })
+    };
+    connect_grid_row(&row, &hook);
+    let target = row.row_box.clone();
+    let rows_for_remove = rows.clone();
+    let hook_for_remove = hook.clone();
+    row.remove.connect_clicked(move |_| {
+        rows_for_remove.borrow_mut().retain(|r| r.row_box != target);
+        hook_for_remove();
+    });
+    container.append(&row.row_box);
+    rows.borrow_mut().push(row);
+}
+
+fn build_grid_adder(
+    container: &gtk::Box,
+    rows: &Rc<RefCell<Vec<GridRow>>>,
+    available: &[String],
+    on_change: &ChangeHook,
+) -> gtk::Box {
+    let bar = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let labels: Vec<String> = available.iter().map(|id| widget_display_name(id)).collect();
+    let label_refs: Vec<&str> = labels.iter().map(String::as_str).collect();
+    let combo = gtk::DropDown::from_strings(&label_refs);
+    let entry = gtk::Entry::new();
+    entry.set_placeholder_text(Some("Custom id"));
+    entry.set_width_chars(14);
+    let add = gtk::Button::with_label("Add widget");
+    bar.append(&combo);
+    bar.append(&entry);
+    bar.append(&add);
+    let rows = rows.clone();
+    let container = container.clone();
+    let available = available.to_vec();
+    let on_change = on_change.clone();
+    add.connect_clicked(move |_| {
+        let custom = entry.text().trim().to_string();
+        let selected = available.get(combo.selected() as usize).cloned().unwrap_or_default();
+        let id = if custom.is_empty() { selected } else { custom };
+        if id.is_empty() || rows.borrow().iter().any(|row| row.id == id) {
+            return;
+        }
+        let next_order = rows.borrow().iter().map(|row| row.order.value()).fold(0.0, f64::max) + 10.0;
+        let scaffold = format!(
+            "{{ enabled = true; _order = {}; col = 0; row = 0; w = 1; h = 1; }}",
+            next_order as i64
+        );
+        let mut row = build_grid_row(&id, &scaffold);
+        row.added = true;
+        container.append(&row.row_box);
+        rows.borrow_mut().push(row);
+        if let Some(cb) = on_change.borrow().as_ref() {
+            cb();
+        }
+    });
+    bar
+}
+
+/// Build the shared id-keyed attribute set editor: scanned widget rows and an
+/// add button that scaffolds a row from `scaffold` fields.
 fn build_attrset_rows(
     value: &str,
     ctx: &BuildContext,
     scaffold: &[(&str, &str)],
-    indent_by_key: bool,
     on_change: &ChangeHook,
 ) -> (gtk::Box, Rc<RefCell<Vec<AttrsetRow>>>) {
     let root = gtk::Box::new(gtk::Orientation::Vertical, 6);
@@ -2021,7 +2889,7 @@ fn build_attrset_rows(
     let rows = Rc::new(RefCell::new(Vec::new()));
 
     for scan_row in scan::scan_table(value, false) {
-        let row = make_attrset_row(&scan_row.key, &scan_row.fields, indent_by_key, ctx);
+        let row = make_widget_row(&scan_row.key, &scan_row.fields, ctx);
         attach_attrset_row(&container, &rows, row, on_change);
     }
 
@@ -2037,7 +2905,7 @@ fn build_attrset_rows(
             .map(|(name, value)| (name.to_string(), value.to_string()))
             .collect();
         add.connect_clicked(move |_| {
-            let mut row = make_attrset_row("", &scaffold, indent_by_key, &ctx);
+            let mut row = make_widget_row("", &scaffold, &ctx);
             row.orig_key = "\0".to_string();
             attach_attrset_row(&container, &rows, row, &on_change);
             if let Some(cb) = on_change.borrow().as_ref() {
@@ -2068,66 +2936,181 @@ fn build_bespoke_child(record: &Record, ctx: &BuildContext) -> Editor {
     }
 }
 
-/// One bind of the `keybinds` widget: name and preview on the main line, the
-/// bind's fields behind an expander.
+fn build_position_dropdown(value_text: &str, tooltip: Option<&str>) -> Editor {
+    let combo = gtk::DropDown::from_strings(&["Top", "Bottom"]);
+    combo.set_selected(if value_text.trim() == "1" { 1 } else { 0 });
+    combo.set_halign(gtk::Align::Start);
+    if let Some(text) = tooltip {
+        combo.set_tooltip_text(Some(text));
+    }
+    Editor::Dropdown {
+        combo,
+        choices: vec!["0".to_string(), "1".to_string()],
+    }
+}
+
+fn build_extra_editor(record: &Record, ctx: &BuildContext) -> Editor {
+    let name = record.segments.last().map(String::as_str).unwrap_or_default();
+    if name == "position" {
+        build_position_dropdown(&record.value, record.spec.description.as_deref())
+    } else {
+        build_bespoke_child(record, ctx)
+    }
+}
+
+fn build_pair_row(
+    first: &Record,
+    first_editor: &Editor,
+    second: &Record,
+    second_editor: &Editor,
+) -> gtk::Widget {
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    row.set_margin_start(12);
+    for (record, editor) in [(first, first_editor), (second, second_editor)] {
+        let name = record.segments.last().cloned().unwrap_or_default();
+        let cell = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        let caption = gtk::Label::builder()
+            .xalign(0.0)
+            .label(record.spec.label.clone().unwrap_or_else(|| field_caption(&name)))
+            .css_classes(["dim-label"])
+            .build();
+        if let Some(help) = record.spec.description.as_deref().or_else(|| field_help(&name)) {
+            caption.set_tooltip_text(Some(help));
+        }
+        cell.append(&caption);
+        cell.append(&editor.root());
+        row.append(&cell);
+    }
+    row.upcast()
+}
+
+/// A horizontal line of a dim caption label and a child control, used in the
+/// keybind edit popup.
+fn dim_line(name: &str, child: &impl gtk::prelude::IsA<gtk::Widget>) -> gtk::Box {
+    let line = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let label = gtk::Label::builder()
+        .xalign(0.0)
+        .width_chars(12)
+        .label(name)
+        .css_classes(["dim-label", "caption"])
+        .build();
+    line.append(&label);
+    line.append(child);
+    line
+}
+
+/// One bind of the `keybinds` widget: name and description on the main line,
+/// the preview pill, and an edit popup holding every field.
 fn make_keybind_row(scan_row: &scan::TableRowScan, ctx: &BuildContext) -> KeybindRow {
+    install_keybind_css();
     let row_box = gtk::Box::new(gtk::Orientation::Vertical, 4);
     row_box.set_hexpand(true);
     let main = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let title_stack = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    title_stack.set_hexpand(true);
 
     let key_entry = gtk::Entry::new();
-    key_entry.set_width_chars(14);
+    key_entry.set_hexpand(true);
+    key_entry.set_placeholder_text(Some("Bind name"));
     key_entry.set_text(&scan_row.key);
-    key_entry.set_tooltip_text(Some("Bind name"));
-    main.append(&key_entry);
+    title_stack.append(&key_entry);
+
+    let desc_caption = gtk::Label::builder()
+        .xalign(0.0)
+        .ellipsize(gtk::pango::EllipsizeMode::End)
+        .label(&entry_text(field(&scan_row.fields, "description").unwrap_or("")))
+        .css_classes(["dim-label", "caption"])
+        .build();
+    title_stack.append(&desc_caption);
+    main.append(&title_stack);
 
     let modifier = gtk::Entry::new();
     modifier.set_width_chars(16);
     modifier.set_tooltip_text(Some("Modifiers, comma separated"));
-    modifier.set_text(&list_text(
-        field(&scan_row.fields, "modifier").unwrap_or(""),
-    ));
-    main.append(&modifier);
+    modifier.set_text(&list_text(field(&scan_row.fields, "modifier").unwrap_or("")));
 
     let keys = gtk::Entry::new();
     keys.set_width_chars(12);
     keys.set_tooltip_text(Some("Keys, comma separated"));
     keys.set_text(&list_text(field(&scan_row.fields, "keys").unwrap_or("")));
-    main.append(&keys);
 
     let preview = gtk::Label::builder()
-        .xalign(0.0)
-        .hexpand(true)
         .label(bind_preview(&modifier.text(), &keys.text()))
-        .css_classes(["dim-label", "caption"])
+        .css_classes(["keybind-preview", "caption"])
+        .halign(gtk::Align::End)
+        .valign(gtk::Align::Center)
         .build();
     main.append(&preview);
 
-    let expander = gtk::Expander::new(Some("Edit"));
-    let detail = gtk::Box::new(gtk::Orientation::Vertical, 4);
     let mut fields = Vec::new();
     for name in ["dispatcher", "args", "description", "group", "subcat"] {
-        let field = make_attrset_field(name, field(&scan_row.fields, name).unwrap_or(""), ctx);
-        let line = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        let label = gtk::Label::builder()
-            .xalign(0.0)
-            .width_chars(12)
-            .label(name)
-            .css_classes(["dim-label", "caption"])
-            .build();
-        line.append(&label);
-        line.append(&field.editor.root());
-        detail.append(&line);
-        fields.push(field);
+        fields.push(make_attrset_field(name, field(&scan_row.fields, name).unwrap_or(""), ctx));
     }
-    expander.set_child(Some(&detail));
-    main.append(&expander);
+
+    let popup = gtk::Window::builder()
+        .title(&scan_row.key)
+        .modal(true)
+        .default_width(440)
+        .hide_on_close(true)
+        .build();
+    let popup_box = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    popup_box.set_margin_top(12);
+    popup_box.set_margin_bottom(12);
+    popup_box.set_margin_start(12);
+    popup_box.set_margin_end(12);
+
+    let popup_name = gtk::Entry::new();
+    popup_name.set_hexpand(true);
+    popup_name.set_text(&key_entry.text());
+    popup_box.append(&dim_line("name", &popup_name));
+    popup_box.append(&dim_line("modifier", &modifier));
+    popup_box.append(&dim_line("keys", &keys));
+    for f in &fields {
+        popup_box.append(&dim_line(&f.name, &f.editor.root()));
+    }
+    popup.set_child(Some(&popup_box));
+
+    {
+        let key_entry_sync = key_entry.clone();
+        popup_name.connect_changed(move |entry| {
+            if key_entry_sync.text() != entry.text() {
+                key_entry_sync.set_text(&entry.text());
+            }
+        });
+        let popup_name_sync = popup_name.clone();
+        key_entry.connect_changed(move |entry| {
+            if popup_name_sync.text() != entry.text() {
+                popup_name_sync.set_text(&entry.text());
+            }
+        });
+    }
+    if let Some(desc) = fields.iter().find(|f| f.name == "description") {
+        if let Editor::Text(entry) = &desc.editor {
+            let entry_cb = entry.clone();
+            let caption = desc_caption.clone();
+            entry.connect_changed(move |_| caption.set_label(&entry_cb.text()));
+        }
+    }
+
+    let edit = gtk::Button::with_label("Edit");
+    {
+        let popup = popup.clone();
+        let edit_probe = edit.clone();
+        edit.connect_clicked(move |_| {
+            if popup.transient_for().is_none() {
+                if let Some(parent) = edit_probe.root().and_downcast::<gtk::Window>() {
+                    popup.set_transient_for(Some(&parent));
+                }
+            }
+            popup.present();
+        });
+    }
+    main.append(&edit);
 
     let remove = gtk::Button::from_icon_name("user-trash-symbolic");
     remove.add_css_class("flat");
     remove.set_tooltip_text(Some("Remove bind"));
     main.append(&remove);
-
     row_box.append(&main);
 
     {
@@ -2156,6 +3139,7 @@ fn make_keybind_row(scan_row: &scan::TableRowScan, ctx: &BuildContext) -> Keybin
         fields,
         row_box,
         remove,
+        popup,
     }
 }
 
@@ -2234,7 +3218,9 @@ fn build_keybinds(record: &Record) -> Editor {
             let on_change = on_change.clone();
             let row_box = row.row_box.clone();
             let key = row.key.clone();
+            let popup = row.popup.clone();
             row.remove.connect_clicked(move |_| {
+                popup.destroy();
                 container.remove(&row_box);
                 rows.borrow_mut().retain(|r| r.key != key);
                 if let Some(cb) = on_change.borrow().as_ref() {
@@ -2269,7 +3255,9 @@ fn build_keybinds(record: &Record) -> Editor {
                 let on_change = on_change.clone();
                 let row_box = row.row_box.clone();
                 let key = row.key.clone();
+                let popup = row.popup.clone();
                 row.remove.connect_clicked(move |_| {
+                    popup.destroy();
                     container.remove(&row_box);
                     rows.borrow_mut().retain(|r| r.key != key);
                     if let Some(cb) = on_change.borrow().as_ref() {
@@ -2320,26 +3308,60 @@ fn monitor_orig<'a>(row: &'a MonitorRow, name: &str) -> &'a str {
         .unwrap_or("")
 }
 
+fn snap_axis(value: f64, size: f64, targets: &[f64], tolerance: f64) -> f64 {
+    let mut best = value;
+    let mut best_distance = tolerance + 1.0;
+    for target in targets {
+        for candidate in [value, value + size] {
+            let distance = (candidate - target).abs();
+            if distance <= tolerance && distance < best_distance {
+                best_distance = distance;
+                best = value + (target - candidate);
+            }
+        }
+    }
+    best
+}
+
+fn snap_monitor(
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    others: &[(f64, f64, f64, f64)],
+    tolerance: f64,
+) -> (f64, f64) {
+    let mut xs = Vec::new();
+    let mut ys = Vec::new();
+    for (ox, oy, ow, oh) in others {
+        xs.push(*ox);
+        xs.push(ox + ow);
+        ys.push(*oy);
+        ys.push(oy + oh);
+    }
+    (snap_axis(x, w, &xs, tolerance), snap_axis(y, h, &ys, tolerance))
+}
+
 fn monitor_row_unchanged(row: &MonitorRow) -> bool {
     let text_same =
         |entry: &gtk::Entry, name: &str| entry.text() == entry_text(monitor_orig(row, name));
-    let spin_same =
-        |spin: &gtk::SpinButton, name: &str| match monitor_orig(row, name).parse::<f64>() {
+    let spin_same = |spin: &gtk::SpinButton, name: &str, default: f64| {
+        match monitor_orig(row, name).parse::<f64>() {
             Ok(value) => (spin.value() - value).abs() < 1e-9,
-            Err(_) => spin.value() == 0.0,
-        };
+            Err(_) => (spin.value() - default).abs() < 1e-9,
+        }
+    };
+    let rr_same =
+        monitor_orig(row, "rr").is_empty() || row.rr.unchanged(monitor_orig(row, "rr"));
     text_same(&row.name, "name")
-        && spin_same(&row.width, "width")
-        && spin_same(&row.height, "height")
-        && spin_same(&row.refresh, "refresh")
-        && spin_same(&row.x, "x")
-        && spin_same(&row.y, "y")
-        && spin_same(&row.scale, "scale")
-        && text_same(&row.rr, "rr")
-        && row
-            .extras
-            .iter()
-            .all(|field| field.editor.unchanged(&field.orig_value))
+        && spin_same(&row.width, "width", 0.0)
+        && spin_same(&row.height, "height", 0.0)
+        && spin_same(&row.refresh, "refresh", 0.0)
+        && spin_same(&row.x, "x", 0.0)
+        && spin_same(&row.y, "y", 0.0)
+        && spin_same(&row.scale, "scale", 1.0)
+        && rr_same
+        && row.extras.iter().all(|field| field.editor.unchanged(&field.orig_value))
 }
 
 fn monitor_row_nix(row: &MonitorRow) -> String {
@@ -2360,12 +3382,12 @@ fn monitor_row_nix(row: &MonitorRow) -> String {
     number(&mut parts, "refresh", &row.refresh);
     number(&mut parts, "x", &row.x);
     number(&mut parts, "y", &row.y);
-    if row.scale.value() != 0.0 || orig_has("scale") {
+    if row.scale.value() != 1.0 || orig_has("scale") {
         parts.push(format!("scale = {};", number_literal(row.scale.value(), 2)));
     }
-    let rr = row.rr.text().trim().to_string();
-    if !rr.is_empty() || orig_has("rr") {
-        parts.push(format!("rr = {};", quote(&rr)));
+    let rr = row.rr.to_nix();
+    if orig_has("rr") || rr != "0" {
+        parts.push(format!("rr = {rr};"));
     }
     for field in &row.extras {
         if let Some(line) = attrset_field_nix(field) {
@@ -2383,8 +3405,7 @@ fn monitors_nix(rows: &[MonitorRow]) -> String {
 fn connect_monitor_row(row: &MonitorRow, update: &Rc<dyn Fn()>) {
     let update_entry = update.clone();
     row.name.connect_changed(move |_| update_entry());
-    let update_rr = update.clone();
-    row.rr.connect_changed(move |_| update_rr());
+    row.rr.connect_changed(update);
     for spin in [
         &row.width,
         &row.height,
@@ -2432,12 +3453,10 @@ fn attach_cell(grid: &gtk::Grid, row: i32, col: i32, label: &str, widget: &impl 
 /// "Extra rules" expander, and a remove button.
 fn make_monitor_row(scan_row: &scan::TableRowScan, ctx: &BuildContext) -> MonitorRow {
     let get = |name: &str| field(&scan_row.fields, name).unwrap_or("");
-    let number_spin = |value: &str, min: f64, max: f64, step: f64| {
+    let number_spin = |value: &str, default: f64, min: f64, max: f64, step: f64| {
         let spin = gtk::SpinButton::with_range(min, max, step);
         spin.set_digits(0);
-        if let Ok(parsed) = value.parse::<f64>() {
-            spin.set_value(parsed);
-        }
+        spin.set_value(value.parse::<f64>().unwrap_or(default));
         spin
     };
 
@@ -2445,19 +3464,15 @@ fn make_monitor_row(scan_row: &scan::TableRowScan, ctx: &BuildContext) -> Monito
     name.set_text(entry_text(get("name")).as_str());
     name.set_tooltip_text(Some("Output name"));
 
-    let width = number_spin(get("width"), 0.0, 16384.0, 1.0);
-    let height = number_spin(get("height"), 0.0, 16384.0, 1.0);
-    let refresh = number_spin(get("refresh"), 0.0, 1000.0, 1.0);
-    let x = number_spin(get("x"), -16384.0, 16384.0, 1.0);
-    let y = number_spin(get("y"), -16384.0, 16384.0, 1.0);
+    let width = number_spin(get("width"), 0.0, 0.0, 16384.0, 1.0);
+    let height = number_spin(get("height"), 0.0, 0.0, 16384.0, 1.0);
+    let refresh = number_spin(get("refresh"), 0.0, 0.0, 1000.0, 1.0);
+    let x = number_spin(get("x"), 0.0, 0.0, 16384.0, 1.0);
+    let y = number_spin(get("y"), 0.0, 0.0, 16384.0, 1.0);
     let scale = gtk::SpinButton::with_range(0.0, 16.0, 0.05);
     scale.set_digits(2);
-    if let Ok(parsed) = get("scale").parse::<f64>() {
-        scale.set_value(parsed);
-    }
-    let rr = gtk::Entry::new();
-    rr.set_tooltip_text(Some("Transform, 0-7"));
-    rr.set_text(entry_text(get("rr")).as_str());
+    scale.set_value(get("scale").parse::<f64>().unwrap_or(1.0));
+    let rr = build_transform(get("rr"));
 
     let form_box = gtk::Box::new(gtk::Orientation::Vertical, 6);
     form_box.set_margin_top(4);
@@ -2473,7 +3488,7 @@ fn make_monitor_row(scan_row: &scan::TableRowScan, ctx: &BuildContext) -> Monito
     attach_cell(&grid, 2, 0, "X", &x);
     attach_cell(&grid, 2, 2, "Y", &y);
     attach_cell(&grid, 3, 0, "Scale", &scale);
-    attach_cell(&grid, 3, 2, "RR", &rr);
+    attach_cell(&grid, 3, 2, "Transform", &rr.root());
     form_box.append(&grid);
 
     let mut extras = Vec::new();
@@ -2554,6 +3569,81 @@ struct MonitorView {
     min_y: f64,
 }
 
+fn open_monitor_picker<F: Fn(Option<DetectedMonitor>) + 'static>(
+    anchor: &gtk::Widget,
+    detected: Vec<DetectedMonitor>,
+    on_pick: F,
+) {
+    if detected.is_empty() {
+        on_pick(None);
+        return;
+    }
+    let on_pick: Rc<dyn Fn(Option<DetectedMonitor>)> = Rc::new(on_pick);
+    let popover = gtk::Popover::new();
+    popover.set_parent(anchor);
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    let list = gtk::ListBox::new();
+    list.set_selection_mode(gtk::SelectionMode::Single);
+    for monitor in detected {
+        let text = format!(
+            "{} ({}x{}, {:.0} Hz)",
+            monitor.name, monitor.width, monitor.height, monitor.refresh
+        );
+        let label = gtk::Label::builder().label(&text).xalign(0.0).build();
+        label.set_margin_top(6);
+        label.set_margin_bottom(6);
+        label.set_margin_start(6);
+        label.set_margin_end(6);
+        let row = gtk::ListBoxRow::new();
+        row.set_child(Some(&label));
+        list.append(&row);
+        let on_pick = on_pick.clone();
+        let picked = monitor.clone();
+        let popover = popover.clone();
+        row.connect_activate(move |_| {
+            on_pick(Some(picked.clone()));
+            popover.popdown();
+        });
+    }
+    content.append(&list);
+    let custom = gtk::Button::with_label("Add monitor manually");
+    let on_pick_manual = on_pick.clone();
+    let popover_manual = popover.clone();
+    custom.connect_clicked(move |_| {
+        on_pick_manual(None);
+        popover_manual.popdown();
+    });
+    content.append(&custom);
+    popover.set_child(Some(&content));
+    popover.connect_closed(|popover| popover.unparent());
+    popover.popup();
+}
+
+fn attach_monitor_row(
+    form: &gtk::Box,
+    rows: &Rc<RefCell<Vec<MonitorRow>>>,
+    on_change: &ChangeHook,
+    row: MonitorRow,
+) -> usize {
+    let row_box = row.form_box.clone();
+    {
+        let form = form.clone();
+        let rows = rows.clone();
+        let on_change = on_change.clone();
+        row.remove.connect_clicked(move |_| {
+            form.remove(&row_box);
+            rows.borrow_mut().retain(|r| r.form_box != row_box);
+            if let Some(cb) = on_change.borrow().as_ref() {
+                cb();
+            }
+        });
+    }
+    form.append(&row.form_box);
+    let index = rows.borrow().len();
+    rows.borrow_mut().push(row);
+    index
+}
+
 fn build_monitors(record: &Record) -> Editor {
     let ctx = BuildContext::default();
     let root = gtk::Box::new(gtk::Orientation::Vertical, 6);
@@ -2569,14 +3659,18 @@ fn build_monitors(record: &Record) -> Editor {
 
     let canvas = gtk::DrawingArea::builder()
         .content_width(640)
-        .content_height(240)
+        .content_height(320)
         .build();
     canvas.set_hexpand(true);
+    canvas.set_size_request(-1, 320);
     canvas.set_draw_func({
         let rows = rows.clone();
         let selected = selected.clone();
         let view = view.clone();
         move |_, cr, width, height| {
+            cr.set_source_rgb(0.08, 0.08, 0.10);
+            cr.rectangle(0.0, 0.0, width as f64, height as f64);
+            cr.fill().ok();
             let rows = rows.borrow();
             let mut min_x = f64::MAX;
             let mut min_y = f64::MAX;
@@ -2708,13 +3802,29 @@ fn build_monitors(record: &Record) -> Editor {
             let (prev_x, prev_y) = last.get();
             last.set((offset_x, offset_y));
             let scale = view.get().scale;
-            if let Some(row) = rows.borrow().get(selected.get()) {
-                row.x.set_value(row.x.value() + (offset_x - prev_x) / scale);
-                row.y.set_value(row.y.value() + (offset_y - prev_y) / scale);
-                redraw.queue_draw();
-                if let Some(cb) = on_change.borrow().as_ref() {
-                    cb();
-                }
+            let rows = rows.borrow();
+            let Some(row) = rows.get(selected.get()) else {
+                return;
+            };
+            let (x, y, w, h, _, _) = monitor_geometry(row);
+            let others: Vec<(f64, f64, f64, f64)> = rows
+                .iter()
+                .filter(|other| !std::ptr::eq(*other, row))
+                .map(|other| {
+                    let (ox, oy, ow, oh, _, _) = monitor_geometry(other);
+                    (ox, oy, ow, oh)
+                })
+                .collect();
+            let candidate_x = x + (offset_x - prev_x) / scale;
+            let candidate_y = y + (offset_y - prev_y) / scale;
+            let (snapped_x, snapped_y) =
+                snap_monitor(candidate_x, candidate_y, w, h, &others, 12.0 / scale);
+            row.x.set_value(snapped_x);
+            row.y.set_value(snapped_y);
+            drop(rows);
+            redraw.queue_draw();
+            if let Some(cb) = on_change.borrow().as_ref() {
+                cb();
             }
         });
         canvas.add_controller(drag);
@@ -2728,38 +3838,28 @@ fn build_monitors(record: &Record) -> Editor {
         let on_change = on_change.clone();
         let canvas = canvas.clone();
         let selected = selected.clone();
-        add.connect_clicked(move |_| {
-            let scan_row = scan::TableRowScan {
-                key: String::new(),
-                fields: vec![("name".to_string(), "\"\"".to_string())],
-                spec: OptionSpec::default(),
-            };
-            let row = make_monitor_row(&scan_row, &ctx);
-            let index = rows.borrow().len();
-            row.form_box.set_visible(true);
-            {
-                let form = form.clone();
-                let rows = rows.clone();
-                let on_change = on_change.clone();
-                let row_box = row.form_box.clone();
-                row.remove.connect_clicked(move |_| {
-                    form.remove(&row_box);
-                    rows.borrow_mut().retain(|r| r.form_box != row_box);
-                    if let Some(cb) = on_change.borrow().as_ref() {
-                        cb();
-                    }
-                });
-            }
-            form.append(&row.form_box);
-            rows.borrow_mut().push(row);
-            selected.set(index);
-            for (row_index, other) in rows.borrow().iter().enumerate() {
-                other.form_box.set_visible(row_index == index);
-            }
-            canvas.queue_draw();
-            if let Some(cb) = on_change.borrow().as_ref() {
-                cb();
-            }
+        add.connect_clicked(move |button| {
+            let anchor = button.clone().upcast::<gtk::Widget>();
+            let detected = crate::monitor_detect::detect();
+            let form = form.clone();
+            let rows = rows.clone();
+            let on_change = on_change.clone();
+            let canvas = canvas.clone();
+            let selected = selected.clone();
+            let ctx = ctx.clone();
+            open_monitor_picker(&anchor, detected, move |picked| {
+                let scan_row = monitor_scaffold(&rows.borrow(), picked.as_ref());
+                let row = make_monitor_row(&scan_row, &ctx);
+                let index = attach_monitor_row(&form, &rows, &on_change, row);
+                selected.set(index);
+                for (position, item) in rows.borrow().iter().enumerate() {
+                    item.form_box.set_visible(position == index);
+                }
+                canvas.queue_draw();
+                if let Some(cb) = on_change.borrow().as_ref() {
+                    cb();
+                }
+            });
         });
     }
     root.append(&add);
@@ -2771,15 +3871,168 @@ fn build_monitors(record: &Record) -> Editor {
     }
 }
 
+fn monitor_scaffold(rows: &[MonitorRow], picked: Option<&DetectedMonitor>) -> scan::TableRowScan {
+    let (name, width, height, refresh) = match picked {
+        Some(monitor) => (
+            monitor.name.clone(),
+            monitor.width,
+            monitor.height,
+            monitor.refresh,
+        ),
+        None => (String::new(), 1920, 1080, 60.0),
+    };
+    let x = rows
+        .iter()
+        .map(|row| {
+            let (rx, _, rw, _, _, _) = monitor_geometry(row);
+            rx + rw
+        })
+        .fold(0.0f64, f64::max);
+    let mut fields = vec![
+        ("width".to_string(), width.to_string()),
+        ("height".to_string(), height.to_string()),
+        ("refresh".to_string(), format!("{refresh}")),
+        ("x".to_string(), (x as i64).to_string()),
+        ("y".to_string(), "0".to_string()),
+        ("scale".to_string(), "1.0".to_string()),
+        ("rr".to_string(), "0".to_string()),
+    ];
+    if !name.is_empty() {
+        fields.insert(0, ("name".to_string(), quote(&name)));
+    }
+    scan::TableRowScan {
+        key: String::new(),
+        fields,
+        spec: OptionSpec::default(),
+    }
+}
+
 fn build_menu(record: &Record, ctx: &BuildContext) -> Editor {
     let on_change: ChangeHook = Rc::new(RefCell::new(None));
-    let (root, rows) =
-        build_attrset_rows(&record.value, ctx, &[("label", "\"\"")], true, &on_change);
+    let root = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    root.set_hexpand(true);
+    let rows = Rc::new(RefCell::new(Vec::new()));
+
+    let popup = gtk::Window::builder()
+        .hide_on_close(true)
+        .default_width(440)
+        .title("Entry details")
+        .build();
+    let popup_content = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    popup_content.set_margin_top(12);
+    popup_content.set_margin_bottom(12);
+    popup_content.set_margin_start(12);
+    popup_content.set_margin_end(12);
+    popup.set_child(Some(&popup_content));
+
+    let mut sections: Vec<(String, gtk::Box)> = Vec::new();
+    for scan_row in scan::scan_table(&record.value, false) {
+        let (section, rel) = match scan_row.key.split_once('.') {
+            Some((p, c)) => (p.to_string(), c.to_string()),
+            None => (scan_row.key.clone(), String::new()),
+        };
+        let container = match sections.iter().find(|(name, _)| *name == section) {
+            Some((_, c)) => c.clone(),
+            None => {
+                let header = gtk::Label::builder()
+                    .xalign(0.0)
+                    .label(&widget_display_name(&section))
+                    .css_classes(["heading"])
+                    .build();
+                let vbox = gtk::Box::new(gtk::Orientation::Vertical, 6);
+                vbox.set_hexpand(true);
+                vbox.set_margin_start(12);
+                root.append(&header);
+                root.append(&vbox);
+                sections.push((section.clone(), vbox.clone()));
+                vbox
+            }
+        };
+        let row = make_menu_row(&section, &rel, &scan_row.fields, ctx, &popup, &popup_content);
+        attach_menu_row(&container, &rows, row, &on_change, &popup_content);
+    }
+
+    let add_box = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let names: Vec<String> = sections
+        .iter()
+        .map(|(name, _)| widget_display_name(name))
+        .collect();
+    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+    let parent_menu = gtk::DropDown::from_strings(&refs);
+    let child = gtk::Entry::new();
+    child.set_placeholder_text(Some("child-id"));
+    child.set_width_chars(14);
+    let new_label = gtk::Entry::new();
+    new_label.set_placeholder_text(Some("Label"));
+    new_label.set_hexpand(true);
+    let add = gtk::Button::with_label("Add");
+    add_box.append(&parent_menu);
+    add_box.append(&child);
+    add_box.append(&new_label);
+    add_box.append(&add);
+    root.append(&add_box);
+    {
+        let child = child.clone();
+        let new_label = new_label.clone();
+        let parent_menu = parent_menu.clone();
+        let sections = sections.clone();
+        let rows = rows.clone();
+        let on_change = on_change.clone();
+        let popup = popup.clone();
+        let popup_content = popup_content.clone();
+        let ctx = ctx.clone();
+        add.connect_clicked(move |_| {
+            let idx = parent_menu.selected() as usize;
+            let Some((section, container)) = sections.get(idx) else { return };
+            let fields = vec![
+                ("label".to_string(), string_literal(&new_label.text())),
+                ("icon".to_string(), String::new()),
+            ];
+            let row = make_menu_row(section, &child.text(), &fields, &ctx, &popup, &popup_content);
+            let hook: Rc<dyn Fn()> = {
+                let on_change = on_change.clone();
+                Rc::new(move || {
+                    if let Some(cb) = on_change.borrow().as_ref() {
+                        cb();
+                    }
+                })
+            };
+            connect_menu_row(&row, &hook);
+            attach_menu_row(container, &rows, row, &on_change, &popup_content);
+            if let Some(cb) = on_change.borrow().as_ref() {
+                cb();
+            }
+        });
+    }
     Editor::Menu {
         root,
         rows,
         on_change,
     }
+}
+
+/// Group the plugin value's flattened leaves by plugin id, rebasing each
+/// leaf's path under its plugin. The bool reports whether the row is shown.
+fn plugin_groups(record: &Record, ctx: &BuildContext) -> Vec<(String, Vec<Record>, bool)> {
+    let mut groups: Vec<(String, Vec<Record>, bool)> = Vec::new();
+    for child in scan_children(record, true) {
+        let Some(id) = child.segments.first().cloned() else { continue };
+        let visible = ctx.advanced || !child.spec.hidden;
+        let leaves = if child.segments.len() > 1 {
+            let mut leaf = child;
+            leaf.segments.remove(0);
+            vec![leaf]
+        } else if value::classify(&child.value) == value::ValueKind::AttrSet {
+            scan_children(&child, true)
+        } else {
+            Vec::new()
+        };
+        match groups.iter_mut().find(|(gid, _, _)| *gid == id) {
+            Some((_, existing, shown)) => { existing.extend(leaves); *shown &= visible; }
+            None => groups.push((id, leaves, visible)),
+        }
+    }
+    groups
 }
 
 fn build_plugins(record: &Record, ctx: &BuildContext) -> Editor {
@@ -2790,127 +4043,35 @@ fn build_plugins(record: &Record, ctx: &BuildContext) -> Editor {
     let rows: Rc<RefCell<Vec<PluginRow>>> = Rc::new(RefCell::new(Vec::new()));
     let on_change: ChangeHook = Rc::new(RefCell::new(None));
 
-    for child in scan_children(record, true) {
-        let visible = !(child.spec.hidden && !ctx.advanced);
-        let key = child.segments.last().cloned().unwrap_or_default();
-        let fields = scan_children(&child, true);
-        let enable_record = fields
-            .iter()
-            .find(|f| f.segments.as_slice() == ["enable"])
-            .cloned();
-        let enable_present = enable_record.is_some();
-        let enable = match &enable_record {
-            Some(record) => build(record, None, ctx),
-            None => Editor::Switch(build_switch("false")),
-        };
-        let children: Vec<(Record, Editor)> = fields
-            .iter()
-            .filter(|f| f.segments.as_slice() != ["enable"])
-            .map(|f| (f.clone(), build_bespoke_child(f, ctx)))
-            .collect();
-
-        let row_box = gtk::Box::new(gtk::Orientation::Vertical, 4);
-        row_box.set_hexpand(true);
-        let main = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        let key_entry = gtk::Entry::new();
-        key_entry.set_width_chars(16);
-        key_entry.set_text(&key);
-        key_entry.set_tooltip_text(Some("Plugin name"));
-        main.append(&key_entry);
-        main.append(&enable.root());
-        let remove = gtk::Button::from_icon_name("user-trash-symbolic");
-        remove.add_css_class("flat");
-        remove.set_tooltip_text(Some("Remove plugin"));
-        main.append(&remove);
-        row_box.append(&main);
-
-        let body = gtk::Box::new(gtk::Orientation::Vertical, 4);
-        body.set_margin_start(18);
-        for (field_record, editor) in &children {
-            if field_record.spec.hidden && !ctx.advanced {
-                continue;
-            }
-            body.append(&build_child_row(field_record, editor, 1));
-        }
-        row_box.append(&body);
-        if visible {
-            container.append(&row_box);
-        }
-
-        {
-            let container = container.clone();
-            let rows = rows.clone();
-            let on_change = on_change.clone();
-            let row_box = row_box.clone();
-            let key = key_entry.clone();
-            remove.connect_clicked(move |_| {
-                container.remove(&row_box);
-                rows.borrow_mut().retain(|r| r.key != key);
-                if let Some(cb) = on_change.borrow().as_ref() {
-                    cb();
-                }
-            });
-        }
-
-        rows.borrow_mut().push(PluginRow {
-            key: key_entry,
-            orig_key: key,
-            enable,
-            enable_present,
-            children,
-        });
+    for (id, leaves, shown) in &plugin_groups(record, ctx) {
+        let row = make_plugin_row(id, leaves, ctx);
+        attach_plugin_row(&container, &rows, row, &on_change, *shown);
     }
 
-    let add = gtk::Button::with_label("Add plugin");
-    add.set_halign(gtk::Align::Start);
-    {
-        let container = container.clone();
-        let rows = rows.clone();
-        let on_change = on_change.clone();
-        add.connect_clicked(move |_| {
-            let key_entry = gtk::Entry::new();
-            key_entry.set_width_chars(16);
-            key_entry.set_tooltip_text(Some("Plugin name"));
-            let enable = Editor::Switch(build_switch("true"));
-            let remove = gtk::Button::from_icon_name("user-trash-symbolic");
-            remove.add_css_class("flat");
-            let main = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-            main.append(&key_entry);
-            main.append(&enable.root());
-            main.append(&remove);
-            let row_box = gtk::Box::new(gtk::Orientation::Vertical, 4);
-            row_box.append(&main);
-            let body = gtk::Box::new(gtk::Orientation::Vertical, 4);
-            row_box.append(&body);
-            key_entry.set_text("");
-            {
-                let container = container.clone();
-                let rows = rows.clone();
-                let on_change = on_change.clone();
-                let row_box = row_box.clone();
-                let key = key_entry.clone();
-                remove.connect_clicked(move |_| {
-                    container.remove(&row_box);
-                    rows.borrow_mut().retain(|r| r.key != key);
-                    if let Some(cb) = on_change.borrow().as_ref() {
-                        cb();
-                    }
-                });
-            }
-            container.append(&row_box);
-            let row = PluginRow {
-                key: key_entry,
-                orig_key: "\0".to_string(),
-                enable,
-                enable_present: false,
-                children: Vec::new(),
-            };
-            rows.borrow_mut().push(row);
-            if let Some(cb) = on_change.borrow().as_ref() {
-                cb();
-            }
-        });
-    }
+    let list = gtk::ListBox::new();
+    list.set_selection_mode(gtk::SelectionMode::None);
+    let popover = gtk::Popover::builder().child(&list).build();
+    let add = gtk::MenuButton::builder()
+        .label("Add plugin")
+        .halign(gtk::Align::Start)
+        .popover(&popover)
+        .build();
+    let picker_container = container.clone();
+    let picker_rows = rows.clone();
+    let picker_on_change = on_change.clone();
+    let picker_ctx = ctx.clone();
+    let picker_list = list.clone();
+    let picker_popover = popover.clone();
+    popover.connect_map(move |_| {
+        populate_plugin_picker(
+            &picker_list,
+            &picker_rows,
+            &picker_on_change,
+            &picker_ctx,
+            &picker_container,
+            &picker_popover,
+        );
+    });
 
     root.append(&container);
     root.append(&add);
@@ -2919,6 +4080,17 @@ fn build_plugins(record: &Record, ctx: &BuildContext) -> Editor {
         rows,
         on_change,
     }
+}
+
+/// Serialize a setting's rebased path as a dotted attribute path, quoting
+/// each segment that is not a plain identifier.
+fn plugin_path_nix(record: &Record) -> String {
+    record
+        .segments
+        .iter()
+        .map(|segment| attr_key(segment))
+        .collect::<Vec<String>>()
+        .join(".")
 }
 
 fn plugins_nix(rows: &[PluginRow]) -> String {
@@ -2934,14 +4106,9 @@ fn plugins_nix(rows: &[PluginRow]) -> String {
                 fields.push(format!("enable = {};", row.enable.to_nix()));
             }
             for (record, editor) in &row.children {
-                let name = record.segments.last().cloned().unwrap_or_default();
-                fields.push(format!("{} = {};", attr_key(&name), editor.to_nix()));
+                fields.push(format!("{} = {};", plugin_path_nix(record), editor.to_nix()));
             }
-            format!(
-                "{} = {{ {} }};",
-                attr_key(&row.key.text()),
-                fields.join(" ")
-            )
+            format!("{} = {{ {} }};", attr_key(&row.key.text()), fields.join(" "))
         })
         .collect();
     format!("{{ {} }}", parts.join(" "))
@@ -2953,6 +4120,281 @@ fn connect_plugin_row(row: &PluginRow, update: &Rc<dyn Fn()>) {
     row.enable.connect_changed(update);
     for (_, editor) in &row.children {
         editor.connect_changed(update);
+    }
+}
+
+fn autohide_delay_pair<'a>(
+    extras: &'a [(Record, Editor)],
+    index: usize,
+) -> Option<&'a (Record, Editor)> {
+    let (record, _) = extras.get(index)?;
+    if record.segments.last().map(String::as_str) != Some("autoHide") {
+        return None;
+    }
+    let (next, _) = extras.get(index + 1)?;
+    if next.segments.last().map(String::as_str) == Some("autoHideDelay") {
+        extras.get(index + 1)
+    } else {
+        None
+    }
+}
+
+fn append_settings_rows(
+    root: &gtk::Box,
+    extras: &[(Record, Editor)],
+    ctx: &BuildContext,
+) {
+    let mut skip = false;
+    for (index, (record, editor)) in extras.iter().enumerate() {
+        if skip {
+            skip = false;
+            continue;
+        }
+        if record.spec.hidden && !ctx.advanced {
+            continue;
+        }
+        match autohide_delay_pair(extras, index) {
+            Some((delay_record, delay_editor)) => {
+                root.append(&build_pair_row(record, editor, delay_record, delay_editor));
+                skip = true;
+            }
+            None => root.append(&build_child_row(record, editor, 1)),
+        }
+    }
+}
+
+/// The enable control of one plugin: the switch, the value it started from
+/// (a registry default when the binding is absent), and whether the binding
+/// exists in configuration.
+fn plugin_enable(id: &str, leaves: &[Record]) -> (Editor, String, bool) {
+    let record = leaves.iter().find(|field| field.segments.as_slice() == ["enable"]);
+    let present = record.is_some();
+    let fallback = if plugin_spec(id).is_some() { "true" } else { "false" };
+    let original = record
+        .map(|field| field.value.clone())
+        .unwrap_or_else(|| fallback.to_string());
+    let value = record.map(|field| field.value.as_str()).unwrap_or(fallback);
+    (Editor::Switch(build_switch(value)), original, present)
+}
+
+/// A plugin setting's control: the registry decides between a switch, a
+/// number field, and a text field; anything unknown falls back to the value's
+/// own shape.
+fn build_plugin_child(id: &str, record: &Record, ctx: &BuildContext) -> Editor {
+    let path = record.segments.join(".");
+    match plugin_field(id, &path).map(|field| field.kind) {
+        Some(PluginFieldKind::Bool) => Editor::Switch(build_switch(&record.value)),
+        Some(PluginFieldKind::Int | PluginFieldKind::Float) => {
+            let spec = OptionSpec {
+                min: Some(0.0),
+                ..OptionSpec::default()
+            };
+            Editor::Spin(build_spin(&spec, &record.value))
+        }
+        Some(PluginFieldKind::Text) => {
+            Editor::Text(build_entry(&record.value, &OptionSpec::default(), false))
+        }
+        None => build_bespoke_child(record, ctx),
+    }
+}
+
+/// One setting of a plugin row: a heading from the registry, the field's own
+/// label, or the leaf name, with help text as its tooltip.
+fn build_plugin_setting_row(id: &str, record: &Record, editor: &Editor) -> gtk::Widget {
+    let path = record.segments.join(".");
+    let leaf = record.segments.last().cloned().unwrap_or_else(|| path.clone());
+    let label = plugin_field(id, &path)
+        .map(|field| field.label.to_string())
+        .or_else(|| record.spec.label.clone())
+        .unwrap_or_else(|| humanize(&leaf));
+    let cell = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    let heading = gtk::Label::builder()
+        .xalign(0.0)
+        .label(label)
+        .css_classes(["dim-label", "caption"])
+        .build();
+    if let Some(help) = record.spec.description.as_deref().or(plugin_field_help(&path)) {
+        heading.set_tooltip_text(Some(help));
+    }
+    cell.append(&heading);
+    cell.append(&editor.root());
+    cell.upcast()
+}
+
+/// The settings of one plugin behind an expander, hidden fields dropped while
+/// Advanced is off.
+fn plugin_settings_box(id: &str, children: &[(Record, Editor)], ctx: &BuildContext) -> gtk::Widget {
+    let detail = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    detail.set_margin_start(18);
+    for (record, editor) in children {
+        if record.spec.hidden && !ctx.advanced {
+            continue;
+        }
+        detail.append(&build_plugin_setting_row(id, record, editor));
+    }
+    let expander = gtk::Expander::new(Some("Settings"));
+    expander.set_child(Some(&detail));
+    expander.upcast()
+}
+
+/// The main line of a plugin row: id entry, enable switch, settings expander
+/// when the plugin has fields, and a remove button.
+fn plugin_main_line(
+    id: &str,
+    enable: &Editor,
+    settings: Option<gtk::Widget>,
+) -> (gtk::Box, gtk::Entry, gtk::Button) {
+    let main = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    main.set_hexpand(true);
+    let id_entry = gtk::Entry::new();
+    id_entry.set_width_chars(16);
+    id_entry.set_text(id);
+    id_entry.set_tooltip_text(Some("Plugin name"));
+    main.append(&id_entry);
+    main.append(&enable.root());
+    if let Some(settings) = settings {
+        main.append(&settings);
+    }
+    let remove = gtk::Button::from_icon_name("user-trash-symbolic");
+    remove.add_css_class("flat");
+    remove.set_tooltip_text(Some("Remove plugin"));
+    main.append(&remove);
+    (main, id_entry, remove)
+}
+
+/// Assemble one plugin row from its leaves: enable control, child editors,
+/// optional settings expander, and the structural handles.
+fn make_plugin_row(id: &str, leaves: &[Record], ctx: &BuildContext) -> PluginRow {
+    let (enable, enable_orig, enable_present) = plugin_enable(id, leaves);
+    let children: Vec<(Record, Editor)> = leaves
+        .iter()
+        .filter(|field| field.segments.as_slice() != ["enable"])
+        .map(|field| (field.clone(), build_plugin_child(id, field, ctx)))
+        .collect();
+    let settings = (!children.is_empty()).then(|| plugin_settings_box(id, &children, ctx));
+    let (row_box, key_entry, remove) = plugin_main_line(id, &enable, settings);
+    PluginRow {
+        key: key_entry,
+        orig_key: id.to_string(),
+        enable,
+        enable_orig,
+        enable_present,
+        children,
+        row_box,
+        remove,
+    }
+}
+
+/// Wire a row's remove button to drop it from the container and the row list.
+/// The change hook is read at click time so rows added before the app
+/// connects still notify.
+fn wire_plugin_remove(
+    row: &PluginRow,
+    container: &gtk::Box,
+    rows: &PluginRows,
+    on_change: &ChangeHook,
+) {
+    let container = container.clone();
+    let rows = rows.clone();
+    let row_box = row.row_box.clone();
+    let key = row.key.clone();
+    let on_change = on_change.clone();
+    row.remove.connect_clicked(move |_| {
+        container.remove(&row_box);
+        rows.borrow_mut().retain(|r| r.key != key);
+        if let Some(cb) = on_change.borrow().as_ref() {
+            cb();
+        }
+    });
+}
+
+/// Register a row with the row list and wire its remove button. `show` keeps
+/// a hidden row in the data while leaving it out of the container.
+fn attach_plugin_row(
+    container: &gtk::Box,
+    rows: &PluginRows,
+    row: PluginRow,
+    on_change: &ChangeHook,
+    show: bool,
+) {
+    wire_plugin_remove(&row, container, rows, on_change);
+    if show {
+        container.append(&row.row_box);
+    }
+    rows.borrow_mut().push(row);
+}
+
+/// Wrap the change hook so a row added after wiring still notifies the app's
+/// handler, which the hook only holds once editing has begun.
+fn hook_notify(on_change: &ChangeHook) -> Rc<dyn Fn()> {
+    let hook = on_change.clone();
+    Rc::new(move || {
+        if let Some(cb) = hook.borrow().as_ref() {
+            cb();
+        }
+    })
+}
+
+/// Add a fresh plugin row for `id`: an unset original key marks it for
+/// writing, and the hook notifies the change handler.
+fn scaffold_plugin_row(
+    id: &str,
+    container: &gtk::Box,
+    rows: &PluginRows,
+    on_change: &ChangeHook,
+    ctx: &BuildContext,
+) {
+    let mut row = make_plugin_row(id, &[], ctx);
+    row.orig_key = "\0".to_string();
+    connect_plugin_row(&row, &hook_notify(on_change));
+    attach_plugin_row(container, rows, row, on_change, true);
+    if let Some(cb) = on_change.borrow().as_ref() {
+        cb();
+    }
+}
+
+/// One button of the add-plugin popover: the registry name with the id as
+/// tooltip, scaffolding the row when clicked.
+fn plugin_picker_button(
+    spec: &'static PluginSpec,
+    container: &gtk::Box,
+    rows: &PluginRows,
+    on_change: &ChangeHook,
+    ctx: &BuildContext,
+    popover: &gtk::Popover,
+) -> gtk::Button {
+    let button = gtk::Button::with_label(spec.name);
+    button.add_css_class("flat");
+    button.set_tooltip_text(Some(spec.id));
+    let (container, rows) = (container.clone(), rows.clone());
+    let (on_change, ctx) = (on_change.clone(), ctx.clone());
+    let (popover, id) = (popover.clone(), spec.id.to_string());
+    button.connect_clicked(move |_| {
+        scaffold_plugin_row(&id, &container, &rows, &on_change, &ctx);
+        popover.popdown();
+    });
+    button
+}
+
+/// Refill the picker's list with registry plugins the page does not already
+/// have, so a plugin can only be added once.
+fn populate_plugin_picker(
+    list: &gtk::ListBox,
+    rows: &PluginRows,
+    on_change: &ChangeHook,
+    ctx: &BuildContext,
+    container: &gtk::Box,
+    popover: &gtk::Popover,
+) {
+    clear_rows(list);
+    let taken: Vec<String> = rows.borrow().iter().map(|row| row.key.text().to_string()).collect();
+    let available: Vec<&PluginSpec> = PLUGIN_TABLES
+        .iter()
+        .flat_map(|table| table.iter())
+        .filter(|spec| !taken.iter().any(|id| id == spec.id))
+        .collect();
+    for spec in available {
+        list.append(&plugin_picker_button(spec, container, rows, on_change, ctx, popover));
     }
 }
 
@@ -2991,7 +4433,6 @@ fn build_bar(record: &Record, ctx: &BuildContext) -> Editor {
         left_value.as_deref().unwrap_or("{ }"),
         ctx,
         &[("enabled", "true")],
-        false,
         &on_change,
     );
     root.append(&left_root);
@@ -3012,26 +4453,23 @@ fn build_bar(record: &Record, ctx: &BuildContext) -> Editor {
         right_value.as_deref().unwrap_or("{ }"),
         ctx,
         &[("enabled", "true")],
-        false,
         &on_change,
     );
     root.append(&right_root);
 
     let extras: Vec<(Record, Editor)> = extras
         .into_iter()
-        .map(|record| (record.clone(), build_bespoke_child(&record, ctx)))
+        .map(|record| {
+            let editor = build_extra_editor(&record, ctx);
+            (record, editor)
+        })
         .collect();
     if extras
         .iter()
         .any(|(record, _)| !(record.spec.hidden && !ctx.advanced))
     {
         root.append(&heading("Settings"));
-        for (record, editor) in &extras {
-            if record.spec.hidden && !ctx.advanced {
-                continue;
-            }
-            root.append(&build_child_row(record, editor, 1));
-        }
+        append_settings_rows(&root, &extras, ctx);
     }
 
     Editor::Bar {
@@ -3076,6 +4514,42 @@ fn bar_nix(
     format!("{{ {} }}", parts.join(" "))
 }
 
+fn build_grid_configuration(record: &Record, ctx: &BuildContext) -> Editor {
+    let root = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    root.set_hexpand(true);
+    let on_change: ChangeHook = Rc::new(RefCell::new(None));
+    let container = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    container.set_hexpand(true);
+    let rows = Rc::new(RefCell::new(Vec::new()));
+    let mut orig_ids = Vec::new();
+    let mut extras = Vec::new();
+    for child in scan_children(record, ctx.advanced) {
+        if value::classify(&child.value) == value::ValueKind::AttrSet {
+            let id = child.segments.last().cloned().unwrap_or_default();
+            orig_ids.push(id.clone());
+            let row = build_grid_row(&id, &child.value);
+            attach_grid_row(&container, &rows, row, &on_change);
+        } else {
+            extras.push(child);
+        }
+    }
+    let available: Vec<String> = grid_registry(&record.path())
+        .into_iter()
+        .filter(|id| !orig_ids.contains(id))
+        .collect();
+    root.append(&container);
+    root.append(&build_grid_adder(&container, &rows, &available, &on_change));
+    let extras: Vec<(Record, Editor)> = extras.into_iter().map(|child| {
+        let visible = !(child.spec.hidden && !ctx.advanced);
+        let editor = build_bespoke_child(&child, ctx);
+        if visible {
+            root.append(&build_child_row(&child, &editor, 1));
+        }
+        (child, editor)
+    }).collect();
+    Editor::Grid { root, rows, orig_ids, extras, on_change }
+}
+
 fn build_dock(record: &Record, ctx: &BuildContext) -> Editor {
     let root = gtk::Box::new(gtk::Orientation::Vertical, 8);
     root.set_hexpand(true);
@@ -3102,30 +4576,29 @@ fn build_dock(record: &Record, ctx: &BuildContext) -> Editor {
         widgets_value.as_deref().unwrap_or("{ }"),
         ctx,
         &[("enabled", "true")],
-        false,
         &on_change,
     );
     root.append(&widgets_root);
 
-    if !extras.is_empty() {
+    let extras: Vec<(Record, Editor)> = extras
+        .into_iter()
+        .map(|record| {
+            let editor = build_extra_editor(&record, ctx);
+            (record, editor)
+        })
+        .collect();
+    if extras
+        .iter()
+        .any(|(record, _)| !(record.spec.hidden && !ctx.advanced))
+    {
         let settings = gtk::Label::builder()
             .xalign(0.0)
             .label("Settings")
             .css_classes(["heading"])
             .build();
         root.append(&settings);
+        append_settings_rows(&root, &extras, ctx);
     }
-    let extras: Vec<(Record, Editor)> = extras
-        .into_iter()
-        .map(|record| {
-            let visible = !(record.spec.hidden && !ctx.advanced);
-            let editor = build_bespoke_child(&record, ctx);
-            if visible {
-                root.append(&build_child_row(&record, &editor, 1));
-            }
-            (record, editor)
-        })
-        .collect();
 
     Editor::Dock {
         root,
@@ -3153,6 +4626,86 @@ fn dock_nix(
     format!("{{ {} }}", parts.join(" "))
 }
 
+fn grid_nix(rows: &[GridRow], extras: &[(Record, Editor)]) -> String {
+    let mut parts = Vec::new();
+    for row in rows {
+        parts.push(format!(
+            "{} = {{ enabled = {}; _order = {}; col = {}; row = {}; w = {}; h = {}; }};",
+            attr_key(&row.id),
+            row.enabled.is_active(),
+            row.order.value() as i64,
+            row.col.value() as i64,
+            row.row.value() as i64,
+            row.w.value() as i64,
+            row.h.value() as i64,
+        ));
+    }
+    for (record, editor) in extras {
+        let name = record.segments.last().cloned().unwrap_or_default();
+        parts.push(format!("{} = {};", attr_key(&name), editor.to_nix()));
+    }
+    format!("{{ {} }}", parts.join(" "))
+}
+
+fn parse_grid_fields(text: &str) -> (bool, f64, f64, f64, f64, f64) {
+    let mut enabled = true;
+    let mut order = 0.0;
+    let mut col = 0.0;
+    let mut grid_row = 0.0;
+    let mut w = 1.0;
+    let mut h = 1.0;
+    for child in scan::scan_value(text) {
+        let name = child.segments.last().map(String::as_str).unwrap_or("");
+        let value = child.value.trim();
+        match name {
+            "enabled" => enabled = value == "true",
+            "_order" => order = value.parse().unwrap_or(0.0),
+            "col" => col = value.parse().unwrap_or(0.0),
+            "row" => grid_row = value.parse().unwrap_or(0.0),
+            "w" => w = value.parse().unwrap_or(1.0),
+            "h" => h = value.parse().unwrap_or(1.0),
+            _ => {}
+        }
+    }
+    (enabled, order, col, grid_row, w, h)
+}
+
+fn grid_spin(value: f64, max: f64) -> gtk::SpinButton {
+    let spin = gtk::SpinButton::with_range(0.0, max, 1.0);
+    spin.set_value(value);
+    spin
+}
+
+fn build_grid_row(id: &str, value_text: &str) -> GridRow {
+    let fields = parse_grid_fields(value_text);
+    let (enabled, order, col, row, w, h) = fields;
+    let row_box = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    row_box.set_hexpand(true);
+    let enabled_switch = gtk::Switch::new();
+    enabled_switch.set_active(enabled);
+    row_box.append(&enabled_switch);
+    let name = gtk::Label::builder()
+        .xalign(0.0).hexpand(true)
+        .label(widget_display_name(id))
+        .css_classes(["dim-label"])
+        .build();
+    row_box.append(&name);
+    let order_spin = grid_spin(order, 9999.0);
+    let col_spin = grid_spin(col, 64.0);
+    let row_spin = grid_spin(row, 64.0);
+    let w_spin = grid_spin(w, 32.0);
+    let h_spin = grid_spin(h, 32.0);
+    for spin in [&order_spin, &col_spin, &row_spin, &w_spin, &h_spin] {
+        row_box.append(spin);
+    }
+    let remove = gtk::Button::from_icon_name("edit-delete-symbolic");
+    remove.add_css_class("flat");
+    row_box.append(&remove);
+    GridRow { id: id.to_string(), added: false, enabled: enabled_switch,
+        order: order_spin, col: col_spin, row: row_spin, w: w_spin, h: h_spin,
+        row_box, remove, orig: fields }
+}
+
 /// Scan a submodule value's direct children into offset records, dropping
 /// hidden controls while the Advanced toggle is off.
 fn scan_children(record: &Record, advanced: bool) -> Vec<Record> {
@@ -3172,17 +4725,25 @@ fn scan_children(record: &Record, advanced: bool) -> Vec<Record> {
 fn build_child_row(record: &Record, editor: &Editor, depth: usize) -> gtk::Widget {
     let row = gtk::Box::new(gtk::Orientation::Vertical, 2);
     row.set_margin_start((depth.min(4) * 12) as i32);
+    let name = record.segments.last().cloned().unwrap_or_default();
     let label = record
         .spec
         .label
         .clone()
-        .or_else(|| record.segments.last().cloned())
-        .unwrap_or_else(|| record.path());
+        .unwrap_or_else(|| field_caption(&name));
     let heading = gtk::Label::builder()
         .xalign(0.0)
         .label(label)
         .css_classes(["dim-label"])
         .build();
+    if let Some(help) = record
+        .spec
+        .description
+        .as_deref()
+        .or_else(|| field_help(&name))
+    {
+        heading.set_tooltip_text(Some(help));
+    }
     row.append(&heading);
     row.append(&editor.root());
     if !record.origin.is_empty() {
@@ -3248,7 +4809,8 @@ pub fn literal_for_widget(widget: WidgetKind, value: &str) -> String {
         | WidgetKind::Menu
         | WidgetKind::Plugins
         | WidgetKind::Bar
-        | WidgetKind::Dock => expr_literal(value),
+        | WidgetKind::Dock
+        | WidgetKind::GridConfiguration => expr_literal(value),
     }
 }
 
@@ -3567,6 +5129,35 @@ mod tests {
 
         let all = scan_children(&record, true);
         assert_eq!(all.len(), 2);
+    }
+
+    #[test]
+    fn header_expand_follows_cell_editor_kind() {
+        let row = scan::TableRowScan {
+            key: "youtube".into(),
+            fields: vec![
+                ("enable".into(), "true".into()),
+                ("name".into(), "\"YouTube\"".into()),
+                ("icon".into(), "null".into()),
+            ],
+            spec: OptionSpec::default(),
+        };
+        assert!(!column_expands(Some(&row), "enable"));
+        assert!(column_expands(Some(&row), "name"));
+        assert!(column_expands(Some(&row), "icon"));
+        assert!(column_expands(None, "url"));
+    }
+
+    #[test]
+    fn craftapps_rows_lock_names_and_edit_first_cell() {
+        assert!(table_row_identity_locked(false, false, true));
+        assert!(!table_row_identity_locked(false, false, false));
+        assert!(!table_row_identity_locked(false, true, true));
+        assert!(!table_row_identity_locked(true, false, true));
+        assert!(table_first_cell_static(true, true, false));
+        assert!(!table_first_cell_static(false, true, false));
+        assert!(!table_first_cell_static(true, false, false));
+        assert!(!table_first_cell_static(true, true, true));
     }
 
     #[test]

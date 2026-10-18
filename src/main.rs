@@ -10,6 +10,7 @@ mod edit;
 mod metadata;
 #[allow(dead_code)]
 mod model;
+mod monitor_detect;
 mod nixd;
 mod scan;
 #[allow(dead_code)]

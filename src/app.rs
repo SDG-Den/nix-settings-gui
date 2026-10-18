@@ -8,7 +8,7 @@ use gtk::glib;
 use gtk::prelude::*;
 
 use crate::config::AppConfig;
-use crate::dsl::{SnippetSpec, WidgetKind};
+use crate::dsl::{SnippetSpec, Visibility, WidgetKind};
 use crate::edit;
 use crate::metadata::{self, Target};
 use crate::model::{InsertMarker, MenuModel, Record};
@@ -169,6 +169,7 @@ struct App {
     advanced: Cell<bool>,
     manual_host: Cell<bool>,
     pending_rebuild: Cell<bool>,
+    watchers: RefCell<Vec<gio::FileMonitor>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -376,6 +377,7 @@ fn build_ui(app: &adw::Application, tx: &Tx) -> Rc<App> {
         advanced: Cell::new(false),
         manual_host: Cell::new(false),
         pending_rebuild: Cell::new(false),
+        watchers: RefCell::new(Vec::new()),
     });
 
     wire(
@@ -674,6 +676,25 @@ fn menu_matches(menu: &crate::model::MenuModel, query: &str) -> bool {
     })
 }
 
+const FALLBACK_MENU_ICON: &str = "preferences-system-symbolic";
+
+fn pick_icon_name(has_icon: impl Fn(&str) -> bool, icon: Option<&str>) -> Option<String> {
+    let name = icon?;
+    if has_icon(name) {
+        return Some(name.to_string());
+    }
+    if has_icon(FALLBACK_MENU_ICON) {
+        return Some(FALLBACK_MENU_ICON.to_string());
+    }
+    None
+}
+
+fn resolve_menu_icon(icon: Option<&str>) -> Option<String> {
+    let display = gtk::gdk::Display::default()?;
+    let theme = gtk::IconTheme::for_display(&display);
+    pick_icon_name(|name| theme.has_icon(name), icon)
+}
+
 fn rebuild_menu_list(app: &Rc<App>) {
     while let Some(child) = app.list.first_child() {
         app.list.remove(&child);
@@ -721,8 +742,8 @@ fn rebuild_menu_list(app: &Rc<App>) {
         let row = gtk::ListBoxRow::new();
         row.set_widget_name(&menu.file);
         let content = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        if let Some(icon) = &menu.spec.icon {
-            content.append(&gtk::Image::from_icon_name(icon));
+        if let Some(icon) = resolve_menu_icon(menu.spec.icon.as_deref()) {
+            content.append(&gtk::Image::from_icon_name(icon.as_str()));
         }
         content.append(&label);
         row.set_child(Some(&content));
@@ -1005,6 +1026,10 @@ fn control_is_inline(editor: &Editor) -> bool {
         Editor::Dropdown { choices, .. } => {
             choices.iter().map(|c| c.chars().count()).max().unwrap_or(0) < 24
         }
+        Editor::Text(_)
+        | Editor::Path(_)
+        | Editor::Multiline { .. }
+        | Editor::Package { .. } => false,
         _ => false,
     }
 }
@@ -1190,9 +1215,28 @@ fn refresh_dependencies(app: &Rc<App>) {
     apply_control_filter(app);
 }
 
-/// Set each control's `dep_visible` from its `visibleWhen` condition. A
-/// governing option that is absent fails open, so a stale path never hides a
-/// setting.
+/// Current value of `path` in `values`, tolerating the `config.` prefix the
+/// scanner records for annotated assignments inside a module's `config = { }`
+/// wrapper: annotation paths omit that wrapper, so both spellings are tried.
+fn resolve_dependency_value<'a>(
+    values: &'a HashMap<String, String>,
+    path: &str,
+) -> Option<&'a String> {
+    values
+        .get(path)
+        .or_else(|| values.get(&format!("config.{path}")))
+        .or_else(|| path.strip_prefix("config.").and_then(|s| values.get(s)))
+}
+
+/// Whether `vis` holds for the governing value found in `values`.
+fn dependency_visible(vis: &Visibility, values: &HashMap<String, String>) -> bool {
+    let current = resolve_dependency_value(values, &vis.path).map(String::as_str);
+    vis.holds(current)
+}
+
+/// Set each control's `dep_visible` from its `visibleWhen` condition, looking
+/// the governing value up through `resolve_dependency_value`. A governing
+/// option that is absent fails open, so a stale path never hides a setting.
 fn evaluate_dependencies(controls: &[Rc<ControlRow>]) {
     let mut values: HashMap<String, String> = HashMap::new();
     for control in controls {
@@ -1202,7 +1246,7 @@ fn evaluate_dependencies(controls: &[Rc<ControlRow>]) {
     }
     for control in controls {
         let visible = match &control.record.spec.visible_when {
-            Some(vis) => vis.holds(values.get(&vis.path).map(String::as_str)),
+            Some(vis) => dependency_visible(vis, &values),
             None => true,
         };
         control.dep_visible.set(visible);
@@ -1440,6 +1484,11 @@ fn run_changes_prompt(app: &Rc<App>, on_save: Box<dyn Fn()>) {
                 match edit::apply(&edits, &root) {
                     Ok(count) => {
                         state.status.set_text(&format!("Saved {count} file(s)"));
+                        let base = state.base.borrow().clone();
+                        spawn(&state.tx, move |tx| {
+                            let result = scan::scan_root(&base);
+                            let _ = tx.send_blocking(Msg::Scanned(result));
+                        });
                         on_save();
                     }
                     Err(e) => {
@@ -2420,6 +2469,46 @@ fn build_assignment_block(option_path: &str, widget: &str, label: &str, value: &
 // message pump
 // ---------------------------------------------------------------------------
 
+fn watch_files(app: &Rc<App>) {
+    app.watchers.borrow_mut().clear();
+    let mut files: Vec<String> = Vec::new();
+    {
+        let scan = app.scan.borrow();
+        let Some(scan) = scan.as_ref() else {
+            return;
+        };
+        for menu in &scan.menus {
+            for record in &menu.records {
+                if !record.file.is_empty() && !files.contains(&record.file) {
+                    files.push(record.file.clone());
+                }
+            }
+        }
+    }
+    for file in files {
+        let Ok(monitor) = gio::File::for_path(&file)
+            .monitor_file(gio::FileMonitorFlags::NONE, gio::Cancellable::NONE)
+        else {
+            continue;
+        };
+        let handler_app = app.clone();
+        monitor.connect_changed(move |_, _, _, _| {
+            if collect_edits(&handler_app).is_empty() {
+                let base = handler_app.base.borrow().clone();
+                spawn(&handler_app.tx, move |tx| {
+                    let result = scan::scan_root(&base);
+                    let _ = tx.send_blocking(Msg::Scanned(result));
+                });
+            } else {
+                handler_app
+                    .status
+                    .set_text("File changed on disk; reload to refresh");
+            }
+        });
+        app.watchers.borrow_mut().push(monitor);
+    }
+}
+
 fn handle_msg(app: &Rc<App>, tx: &Tx, msg: Msg) {
     match msg {
         Msg::Scanned(Ok(result)) => {
@@ -2476,6 +2565,7 @@ fn handle_msg(app: &Rc<App>, tx: &Tx, msg: Msg) {
                 .unwrap_or(path);
             app.title.set_text(&format!("nix-settings-gui - {name}"));
             *app.scan.borrow_mut() = Some(result);
+            watch_files(app);
             app.status.set_text("Ready");
             rebuild_view(app);
         }
@@ -2766,5 +2856,63 @@ mod tests {
             parent_segments_from_text("  services.pipewire."),
             vec!["services".to_string(), "pipewire".to_string()]
         );
+    }
+
+    #[test]
+    fn resolves_dependency_paths_across_config_wrapper() {
+        let mut values = HashMap::new();
+        values.insert(
+            "config.ojuny.browser.selected".to_string(),
+            "\"firefox\"".to_string(),
+        );
+        assert_eq!(
+            resolve_dependency_value(&values, "ojuny.browser.selected").map(String::as_str),
+            Some("\"firefox\"")
+        );
+        values.insert("programs.steam.enable".to_string(), "false".to_string());
+        assert_eq!(
+            resolve_dependency_value(&values, "programs.steam.enable").map(String::as_str),
+            Some("false")
+        );
+        assert_eq!(
+            resolve_dependency_value(&values, "config.programs.steam.enable").map(String::as_str),
+            Some("false")
+        );
+        assert_eq!(resolve_dependency_value(&values, "missing.path"), None);
+    }
+
+    #[test]
+    fn visible_when_resolves_config_wrapped_scan_paths() {
+        let text = "{ config = {\n  # @option widget = \"switch\"; label = \"Set gaps per edge\";\n  ojuny.style.customGaps = false;\n  # @option widget = \"spin\"; label = \"Gap size\"; visibleWhen.path = \"ojuny.style.customGaps\"; visibleWhen.equals = false;\n  ojuny.style.gaps = 4;\n}; }";
+        let records = scan::scan_value(text);
+        let mut values: HashMap<String, String> = records
+            .iter()
+            .map(|record| (record.path(), record.value.clone()))
+            .collect();
+        let gated = records
+            .iter()
+            .find(|record| record.spec.visible_when.is_some())
+            .unwrap();
+        let vis = gated.spec.visible_when.as_ref().unwrap();
+        assert_eq!(vis.path, "ojuny.style.customGaps");
+        assert!(values.contains_key("config.ojuny.style.customGaps"));
+        assert!(dependency_visible(vis, &values));
+        values.insert("config.ojuny.style.customGaps".to_string(), "true".to_string());
+        assert!(!dependency_visible(vis, &values));
+    }
+
+    #[test]
+    fn missing_menu_icon_falls_back_to_generic() {
+        let only_fallback = |name: &str| name == "preferences-system-symbolic";
+        assert_eq!(
+            pick_icon_name(only_fallback, Some("preferences-system-displays-symbolic")).as_deref(),
+            Some("preferences-system-symbolic")
+        );
+        let all_present = |_: &str| true;
+        assert_eq!(
+            pick_icon_name(all_present, Some("web-browser-symbolic")).as_deref(),
+            Some("web-browser-symbolic")
+        );
+        assert_eq!(pick_icon_name(only_fallback, None), None);
     }
 }

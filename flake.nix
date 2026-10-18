@@ -110,6 +110,7 @@
               nixfmt
             ]);
 
+          TINTED_SCHEMES_DIR = "${tinted-theming}";
           RUST_SRC_PATH = pkgs.rustPlatform.rustLibSrc;
         };
       }
