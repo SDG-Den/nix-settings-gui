@@ -1,0 +1,344 @@
+use std::collections::HashMap;
+use std::rc::Rc;
+
+use gtk::prelude::*;
+
+use crate::edit;
+use crate::scan;
+use crate::widgets;
+
+use super::pump::{show_error, spawn};
+use super::state::{App, Msg, Tx};
+
+// ---------------------------------------------------------------------------
+// save and rebuild
+// ---------------------------------------------------------------------------
+
+/// Every staged edit across every page, in page order. Controls hidden by a
+/// `visibleWhen` dependency are skipped, so a disabled parent cannot commit
+/// its children's staged edits.
+pub(super) fn collect_edits(app: &Rc<App>) -> Vec<edit::PendingEdit> {
+    let mut edits = Vec::new();
+    for page in app.pages.borrow().iter() {
+        for control in &page.controls {
+            if !control.dep_visible.get() {
+                continue;
+            }
+            let editor = control.editor.borrow();
+            edits.extend(editor.edits(&control.record));
+        }
+    }
+    edits
+}
+
+/// Package assignments that changed, as `(path, literal)` pairs to validate
+/// with nixd before writing. Hidden-by-dependency controls are skipped.
+fn collect_package_checks(app: &Rc<App>) -> Vec<(String, String)> {
+    let mut checks = Vec::new();
+    for page in app.pages.borrow().iter() {
+        for control in &page.controls {
+            if !control.dep_visible.get() {
+                continue;
+            }
+            if !widgets::is_package(&control.record) {
+                continue;
+            }
+            let editor = control.editor.borrow();
+            if editor.unchanged(&control.record.value) {
+                continue;
+            }
+            checks.push((
+                control.record.path(),
+                format!("with pkgs; {}", editor.to_nix()),
+            ));
+        }
+    }
+    checks
+}
+
+pub(super) fn save_all(app: &Rc<App>, tx: &Tx, rebuild: bool) {
+    let edits = collect_edits(app);
+    if edits.is_empty() {
+        clear_busy(app);
+        app.status.set_text("Nothing to save");
+        if rebuild {
+            run_rebuild(app);
+        }
+        return;
+    }
+    let root = app.base.borrow().clone();
+    let checks = collect_package_checks(app);
+    let flake = app.config.borrow().flake_path.clone();
+    set_busy(app, "Saving...", 0.0);
+    spawn(tx, move |tx| {
+        const VALIDATE_END: f64 = 0.7;
+        let report_tx = tx.clone();
+        let report = move |done: usize, total: usize| {
+            let fraction = if total == 0 {
+                VALIDATE_END
+            } else {
+                VALIDATE_END * done as f64 / total as f64
+            };
+            let label = if done == 0 {
+                "Validating package changes...".to_string()
+            } else {
+                format!("Validated {done} of {total} package change(s)...")
+            };
+            let _ = report_tx.send_blocking(Msg::SaveProgress(fraction, label));
+        };
+        if let Ok(errors) = crate::nixd::query_errors(flake.as_deref(), checks, report) {
+            if !errors.is_empty() {
+                let _ = tx.send_blocking(Msg::Invalid(errors));
+                return;
+            }
+        }
+        let _ = tx.send_blocking(Msg::SaveProgress(
+            VALIDATE_END,
+            "Writing changes...".to_string(),
+        ));
+        let result = edit::apply(&edits, &root);
+        let _ = tx.send_blocking(Msg::SaveProgress(1.0, "Saved".to_string()));
+        let _ = tx.send_blocking(Msg::Saved(result));
+    });
+    app.pending_rebuild.set(rebuild);
+}
+
+/// Show the busy indicators (spinner and progress bar) with a status message.
+pub(super) fn set_busy(app: &Rc<App>, message: &str, fraction: f64) {
+    app.spinner.set_visible(true);
+    app.spinner.start();
+    app.progress.set_visible(true);
+    app.progress.set_fraction(fraction);
+    app.status.set_text(message);
+}
+
+/// Hide the busy indicators once a long-running task finishes.
+pub(super) fn clear_busy(app: &Rc<App>) {
+    app.spinner.stop();
+    app.spinner.set_visible(false);
+    app.progress.set_visible(false);
+    app.progress.set_fraction(0.0);
+}
+
+/// What the unsaved-changes dialog should do for a response.
+#[derive(Debug, PartialEq, Eq)]
+enum ChangesAction {
+    Save,
+    Discard,
+    Cancel,
+}
+
+fn changes_action(response: gtk::ResponseType) -> ChangesAction {
+    match response {
+        gtk::ResponseType::Yes => ChangesAction::Save,
+        gtk::ResponseType::No => ChangesAction::Discard,
+        _ => ChangesAction::Cancel,
+    }
+}
+
+/// Prompt to save, discard, or cancel staged edits. `on_save` runs after a
+/// successful save or an explicit discard, never after cancel.
+pub(super) fn run_changes_prompt(app: &Rc<App>, on_save: Box<dyn Fn()>) {
+    let dialog = gtk::Dialog::builder()
+        .title("Unsaved changes")
+        .transient_for(&app.window)
+        .modal(true)
+        .build();
+    dialog.add_button("Cancel", gtk::ResponseType::Cancel);
+    dialog.add_button("Discard", gtk::ResponseType::No);
+    let save = dialog.add_button("Save", gtk::ResponseType::Yes);
+    save.add_css_class("suggested-action");
+    dialog.set_default_response(gtk::ResponseType::Yes);
+
+    let message = gtk::Label::builder()
+        .label("You have unsaved changes. Save them before closing?")
+        .xalign(0.0)
+        .wrap(true)
+        .margin_top(12)
+        .margin_bottom(12)
+        .margin_start(12)
+        .margin_end(12)
+        .build();
+    dialog.content_area().append(&message);
+
+    let on_save: Rc<dyn Fn()> = Rc::from(on_save);
+    let state = app.clone();
+    dialog.connect_response(move |dialog, response| {
+        match changes_action(response) {
+            ChangesAction::Save => {
+                let edits = collect_edits(&state);
+                let root = state.base.borrow().clone();
+                match edit::apply(&edits, &root) {
+                    Ok(count) => {
+                        state.status.set_text(&format!("Saved {count} file(s)"));
+                        let base = state.base.borrow().clone();
+                        spawn(&state.tx, move |tx| {
+                            let result = scan::scan_root(&base);
+                            let _ = tx.send_blocking(Msg::Scanned(result));
+                        });
+                        on_save();
+                    }
+                    Err(e) => {
+                        state.status.set_text("Save failed");
+                        show_error(&state.window, &e);
+                    }
+                }
+            }
+            ChangesAction::Discard => {
+                discard_changes(&state);
+                on_save();
+            }
+            ChangesAction::Cancel => {}
+        }
+        dialog.close();
+    });
+    dialog.present();
+}
+
+/// Drop every staged edit by rebuilding the editors from the scanned records.
+pub(super) fn discard_changes(app: &Rc<App>) {
+    super::menu::rebuild_view(app);
+    app.status.set_text("Changes discarded");
+}
+
+pub(super) fn reload(app: &Rc<App>, tx: &Tx) {
+    if collect_edits(app).is_empty() {
+        rescan(app, tx);
+        return;
+    }
+    let app_for_save = app.clone();
+    let tx_for_save = tx.clone();
+    run_changes_prompt(app, Box::new(move || rescan(&app_for_save, &tx_for_save)));
+}
+
+/// Re-read every file under the current root, exactly like `open_flake`.
+fn rescan(app: &Rc<App>, tx: &Tx) {
+    let base = app.base.borrow().clone();
+    app.status.set_text("Scanning...");
+    spawn(tx, move |tx| {
+        let result = scan::scan_root(&base);
+        let _ = tx.send_blocking(Msg::Scanned(result));
+    });
+}
+
+/// Show the pending span patches as a unified diff, old text read from disk.
+pub(super) fn preview_changes(app: &Rc<App>, _tx: &Tx) {
+    let edits = collect_edits(app);
+    let dialog = gtk::Dialog::builder()
+        .title("Pending changes")
+        .transient_for(&app.window)
+        .modal(true)
+        .default_width(720)
+        .default_height(480)
+        .build();
+    dialog.add_button("Close", gtk::ResponseType::Close);
+
+    let view = gtk::TextView::builder()
+        .editable(false)
+        .monospace(true)
+        .build();
+    let buffer = view.buffer();
+    if edits.is_empty() {
+        buffer.set_text("No pending changes.");
+    } else {
+        let mut cache: HashMap<String, String> = HashMap::new();
+        let mut diff = String::new();
+        for pending in &edits {
+            let text = cache
+                .entry(pending.file.clone())
+                .or_insert_with(|| std::fs::read_to_string(&pending.file).unwrap_or_default());
+            let old = text.get(pending.start..pending.end).unwrap_or("");
+            diff.push_str(&format!(
+                "--- {}\n-{}\n+{}\n\n",
+                pending.file, old, pending.value
+            ));
+        }
+        buffer.set_text(&diff);
+    }
+
+    let scrolled = gtk::ScrolledWindow::builder()
+        .child(&view)
+        .vexpand(true)
+        .hexpand(true)
+        .min_content_height(360)
+        .build();
+    dialog.content_area().append(&scrolled);
+    dialog.connect_response(|dialog, _| dialog.close());
+    dialog.present();
+}
+
+pub(super) fn run_rebuild(app: &Rc<App>) {
+    let config = app.config.borrow();
+    let base = app.base.borrow().clone();
+    let Some(command) = config.rebuild_command.clone() else {
+        app.status.set_text("No rebuild command configured");
+        return;
+    };
+    let terminal = config.terminal_command.clone();
+    let mut process = match terminal {
+        Some(prefix) if prefix.contains("{cmd}") => {
+            let full = prefix.replace("{cmd}", &command);
+            let mut parts = shell_words(&full);
+            if parts.is_empty() {
+                app.status.set_text("Empty terminal command");
+                return;
+            }
+            let program = parts.remove(0);
+            let mut cmd = std::process::Command::new(program);
+            cmd.args(parts);
+            cmd
+        }
+        Some(prefix) => {
+            let parts = shell_words(&prefix);
+            if parts.is_empty() {
+                app.status.set_text("Empty terminal command");
+                return;
+            }
+            let program = parts[0].clone();
+            let mut cmd = std::process::Command::new(program);
+            cmd.args(&parts[1..]);
+            cmd.arg(&command);
+            cmd
+        }
+        None => {
+            let mut cmd = std::process::Command::new("sh");
+            cmd.arg("-c").arg(&command);
+            cmd
+        }
+    };
+    process.current_dir(base);
+    match process.spawn() {
+        Ok(_) => app.status.set_text("Rebuild started in terminal"),
+        Err(e) => app.status.set_text(&format!("Cannot start rebuild: {e}")),
+    }
+}
+
+fn shell_words(input: &str) -> Vec<String> {
+    input
+        .split_whitespace()
+        .map(|word| word.trim_matches('\'').trim_matches('"').to_string())
+        .filter(|word| !word.is_empty())
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn maps_prompt_responses() {
+        assert_eq!(changes_action(gtk::ResponseType::Yes), ChangesAction::Save);
+        assert_eq!(
+            changes_action(gtk::ResponseType::No),
+            ChangesAction::Discard
+        );
+        assert_eq!(
+            changes_action(gtk::ResponseType::Cancel),
+            ChangesAction::Cancel
+        );
+        assert_eq!(
+            changes_action(gtk::ResponseType::DeleteEvent),
+            ChangesAction::Cancel
+        );
+    }
+}
