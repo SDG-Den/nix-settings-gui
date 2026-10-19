@@ -26,6 +26,7 @@
           nix
           nixd
           nixfmt
+          wlr-randr
         ]);
 
         nativeBuildInputs = with pkgs; [

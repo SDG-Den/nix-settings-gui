@@ -209,6 +209,8 @@ pub enum MarkerKind {
     Snippet,
     Insert,
     TableItem,
+    WidgetPreset,
+    WidgetPresetField,
 }
 
 /// Recognise a marker comment and parse its body. `inner` is the comment text
@@ -239,6 +241,8 @@ fn split_marker(s: &str) -> Option<(MarkerKind, &str)> {
         ("@snippet", MarkerKind::Snippet),
         ("@insert", MarkerKind::Insert),
         ("@table-item", MarkerKind::TableItem),
+        ("@widget-preset", MarkerKind::WidgetPreset),
+        ("@widget-preset-field", MarkerKind::WidgetPresetField),
     ] {
         if let Some(rest) = s.strip_prefix(tag) {
             if rest.is_empty() || rest.starts_with(char::is_whitespace) {
@@ -394,7 +398,10 @@ pub struct OptionSpec {
     pub group_order: Option<i64>,
     pub order: Option<i64>,
     pub max_columns: Option<u32>,
+    pub grid_columns: Option<i64>,
     pub columns: Option<Vec<String>>,
+    pub column_types: Option<Vec<String>>,
+    pub horizontal: bool,
     pub key_editable: bool,
     pub first_value_editable: bool,
     pub advanced: bool,
@@ -426,7 +433,10 @@ impl OptionSpec {
             group_order: d.int("groupOrder"),
             order: d.int("order"),
             max_columns: d.int("maxColumns").map(|n| n.max(1) as u32),
+            grid_columns: d.int("gridColumns"),
             columns: d.strings("columns"),
+            column_types: d.strings("columnTypes"),
+            horizontal: d.bool("horizontal").unwrap_or(false),
             key_editable: d.bool("keyEditable").unwrap_or(false),
             first_value_editable: d.bool("firstValueEditable").unwrap_or(false),
             advanced: d.bool("advanced").unwrap_or(false),
@@ -734,12 +744,13 @@ mod tests {
 
     #[test]
     fn parses_table_and_bespoke_widget_directives() {
-        let text = "/* @option widget = \"table-attrset\"; columns = [ \"enable\" \"url\" ]; keyEditable = true; firstValueEditable = true; maxColumns = 3; groupOrder = 20; */";
+        let text = "/* @option widget = \"table-attrset\"; columns = [ \"enable\" \"url\" ]; columnTypes = [ \"bool\" \"str\" ]; keyEditable = true; firstValueEditable = true; maxColumns = 3; groupOrder = 20; */";
         let (kind, d) = parse_comment(text).unwrap();
         assert_eq!(kind, MarkerKind::Option);
         let opt = OptionSpec::from_directives(&d);
         assert_eq!(opt.widget, Some(WidgetKind::TableAttrset));
         assert_eq!(opt.columns, Some(vec!["enable".into(), "url".into()]));
+        assert_eq!(opt.column_types, Some(vec!["bool".into(), "str".into()]));
         assert!(opt.key_editable);
         assert!(opt.first_value_editable);
         assert_eq!(opt.max_columns, Some(3));
@@ -779,5 +790,63 @@ mod tests {
         let spec = OptionSpec::from_directives(&d);
         assert_eq!(spec.label.as_deref(), Some("Main"));
         assert!(spec.hidden);
+    }
+}
+
+/// A widget preset defined by an `@widget-preset` marker (for the add-picker).
+#[derive(Debug, Clone, Default)]
+pub struct WidgetPresetSpec {
+    pub id: String,
+    pub label: String,
+    pub description: Option<String>,
+    pub icon: Option<String>,
+    pub sections: Vec<String>,
+    pub has_settings: bool,
+    pub defaults: Vec<(String, Lit)>,
+}
+
+impl WidgetPresetSpec {
+    pub fn from_directives(d: &Directives) -> Self {
+        Self {
+            id: d.string("id").unwrap_or_default(),
+            label: d.string("label").unwrap_or_default(),
+            description: d.string("description"),
+            icon: d.string("icon"),
+            sections: d.strings("sections").unwrap_or_default(),
+            has_settings: d.bool("hasSettings").unwrap_or(false),
+            defaults: d.sub("defaults").iter().cloned().collect(),
+        }
+    }
+}
+
+/// A field spec for a widget preset, defined by `@widget-preset-field`.
+#[derive(Debug, Clone, Default)]
+pub struct PresetFieldSpec {
+    pub preset: String,
+    pub name: String,
+    pub widget: Option<WidgetKind>,
+    pub label: Option<String>,
+    pub description: Option<String>,
+    pub choices: Option<Vec<String>>,
+    pub min: Option<f64>,
+    pub max: Option<f64>,
+    pub step: Option<f64>,
+    pub unit: Option<String>,
+}
+
+impl PresetFieldSpec {
+    pub fn from_directives(d: &Directives) -> Self {
+        Self {
+            preset: d.string("preset").unwrap_or_default(),
+            name: d.string("name").unwrap_or_default(),
+            widget: d.string("widget").and_then(|w| WidgetKind::parse(&w)),
+            label: d.string("label"),
+            description: d.string("description"),
+            choices: d.strings("choices"),
+            min: d.number("min"),
+            max: d.number("max"),
+            step: d.number("step"),
+            unit: d.string("unit"),
+        }
     }
 }

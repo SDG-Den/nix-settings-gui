@@ -7,12 +7,18 @@ mod build_support;
 
 fn main() {
     println!("cargo:rerun-if-env-changed=TINTED_SCHEMES_DIR");
+    let schemes_dir = env::var("TINTED_SCHEMES_DIR").ok();
     let mut schemes: Vec<(String, [String; 16])> = Vec::new();
-    if let Ok(dir) = env::var("TINTED_SCHEMES_DIR") {
-        build_support::collect(Path::new(&dir), &mut schemes);
+    if let Some(dir) = &schemes_dir {
+        build_support::collect(Path::new(dir), &mut schemes);
     }
     schemes.sort_by(|a, b| a.0.cmp(&b.0));
     schemes.dedup_by(|a, b| a.0 == b.0);
+    match (&schemes_dir, schemes.is_empty()) {
+        (None, _) => println!("cargo:warning=TINTED_SCHEMES_DIR unset; theme page will be a text field"),
+        (Some(d), true) => println!("cargo:warning={d} yielded no base16 schemes; check layout"),
+        _ => {}
+    }
 
     let mut out = String::from("pub static SCHEMES: &[(&str, [&str; 16])] = &[\n");
     for (name, palette) in &schemes {

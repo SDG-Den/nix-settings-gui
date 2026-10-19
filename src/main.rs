@@ -12,6 +12,7 @@ mod metadata;
 mod model;
 mod monitor_detect;
 mod nixd;
+mod plugin_list;
 mod scan;
 #[allow(dead_code)]
 mod templates;

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::dsl::{MenuSpec, OptionSpec, SnippetSpec};
+use crate::dsl::{MenuSpec, OptionSpec, PresetFieldSpec, SnippetSpec, WidgetPresetSpec};
 
 /// One config assignment found by the scanner, tied to its `@option`
 /// annotation. Spans index the original file text so the edit engine can
@@ -100,6 +100,8 @@ pub struct MenuModel {
     pub snippets: Vec<SnippetSpec>,
     /// `@insert` markers in the file, in source order.
     pub inserts: Vec<InsertMarker>,
+    /// Widget presets declared in this file.
+    pub widget_presets: Vec<(WidgetPresetSpec, Vec<PresetFieldSpec>)>,
     /// Module origins this file defines, used to filter by host import graph.
     pub origins: Vec<String>,
     /// Whether the file carries an `@menu` block. Files without one are never

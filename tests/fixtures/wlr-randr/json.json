@@ -1,0 +1,28 @@
+[
+  {
+    "name": "eDP-1",
+    "description": "Some Panel",
+    "make": "BOE",
+    "model": "0x095f",
+    "serial": "0x00000000",
+    "physical_size": { "width": 344, "height": 194 },
+    "enabled": true,
+    "modes": [
+      { "width": 1920, "height": 1080, "refresh": 60.01, "preferred": true, "current": true },
+      { "width": 1920, "height": 1080, "refresh": 48.0, "preferred": false, "current": false },
+      { "width": 1280, "height": 720, "refresh": 59.94, "preferred": false, "current": false }
+    ],
+    "position": { "x": 0, "y": 0 },
+    "transform": "normal",
+    "scale": 1.0,
+    "adaptive_sync": "disabled"
+  },
+  {
+    "name": "HDMI-A-1",
+    "description": "",
+    "make": null,
+    "model": null,
+    "enabled": false,
+    "modes": []
+  }
+]

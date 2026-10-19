@@ -1,5 +1,5 @@
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -71,6 +71,8 @@ struct MenuPage {
     controls: Vec<Rc<ControlRow>>,
     root: gtk::Widget,
     content: gtk::Box,
+    group_headers: Vec<(bool, String, gtk::Label)>,
+    group_inserts: Vec<(String, gtk::Button)>,
 }
 
 /// An "Add <snippet>" button placed at an `@insert` marker's group.
@@ -844,13 +846,29 @@ fn build_page(app: &Rc<App>, menu: &crate::model::MenuModel) -> MenuPage {
     advanced.sort_by(|a, b| control_cmp(a, b, &ranks));
 
     let mut inserts = build_insert_buttons(app, menu);
-    add_grouped(&content, &ordinary, &mut inserts);
+    let mut headers = Vec::new();
+    let mut group_inserts: Vec<(String, gtk::Button)> = Vec::new();
+    add_grouped(
+        &content,
+        &ordinary,
+        &mut inserts,
+        false,
+        &mut headers,
+        &mut group_inserts,
+    );
     if !advanced.is_empty() {
         let expander = gtk::Expander::new(Some("Advanced"));
         let inner = gtk::Box::new(gtk::Orientation::Vertical, 12);
         inner.set_margin_top(6);
         let mut no_inserts = Vec::new();
-        add_grouped(&inner, &advanced, &mut no_inserts);
+        add_grouped(
+            &inner,
+            &advanced,
+            &mut no_inserts,
+            true,
+            &mut headers,
+            &mut group_inserts,
+        );
         expander.set_child(Some(&inner));
         content.append(&expander);
     }
@@ -896,16 +914,25 @@ fn build_page(app: &Rc<App>, menu: &crate::model::MenuModel) -> MenuPage {
         controls,
         root: scrolled.upcast(),
         content,
+        group_headers: headers,
+        group_inserts,
     }
 }
 
-fn add_grouped(content: &gtk::Box, controls: &[Rc<ControlRow>], inserts: &mut Vec<InsertButton>) {
+fn add_grouped(
+    content: &gtk::Box,
+    controls: &[Rc<ControlRow>],
+    inserts: &mut Vec<InsertButton>,
+    advanced: bool,
+    headers: &mut Vec<(bool, String, gtk::Label)>,
+    group_inserts: &mut Vec<(String, gtk::Button)>,
+) {
     let mut last_group: Option<String> = None;
     for control in controls {
         let group = control.record.spec.group.clone().unwrap_or_default();
         if last_group.as_deref() != Some(group.as_str()) {
             if let Some(previous) = last_group.take() {
-                flush_inserts(content, inserts, &previous);
+                flush_inserts(content, inserts, &previous, group_inserts);
             }
             if !group.is_empty() {
                 let label = gtk::Label::builder()
@@ -915,24 +942,31 @@ fn add_grouped(content: &gtk::Box, controls: &[Rc<ControlRow>], inserts: &mut Ve
                     .css_classes(["group-header"])
                     .build();
                 content.append(&label);
+                headers.push((advanced, group.clone(), label.clone()));
             }
             last_group = Some(group);
         }
         content.append(&control.row);
     }
     if let Some(previous) = last_group.take() {
-        flush_inserts(content, inserts, &previous);
+        flush_inserts(content, inserts, &previous, group_inserts);
     }
 }
 
 /// Append the insert buttons assigned to `group`, in `order`, then drop them so
 /// they are not placed again.
-fn flush_inserts(content: &gtk::Box, inserts: &mut Vec<InsertButton>, group: &str) {
+fn flush_inserts(
+    content: &gtk::Box,
+    inserts: &mut Vec<InsertButton>,
+    group: &str,
+    group_inserts: &mut Vec<(String, gtk::Button)>,
+) {
     inserts.sort_by_key(|insert| insert.order);
     let mut index = 0;
     while index < inserts.len() {
         if inserts[index].group == group {
             let insert = inserts.remove(index);
+            group_inserts.push((group.to_string(), insert.button.clone()));
             content.append(&insert.button);
         } else {
             index += 1;
@@ -1047,6 +1081,13 @@ fn build_context(app: &Rc<App>) -> widgets::BuildContext {
                     push_unique(&mut ctx.hm_modules, name);
                 }
             }
+            let mut presets = HashMap::new();
+            for menu in &scan.menus {
+                if !menu.widget_presets.is_empty() {
+                    presets.insert(menu.file.clone(), menu.widget_presets.clone());
+                }
+            }
+            ctx.presets = std::rc::Rc::new(presets);
         }
     }
     ctx.nixos_modules.sort();
@@ -1098,10 +1139,13 @@ fn build_control_row(app: &Rc<App>, record: &Record, src_index: usize) -> Rc<Con
     let desc = gtk::Label::builder()
         .label(record.spec.description.clone().unwrap_or_default())
         .xalign(0.0)
+        .hexpand(true)
+        .halign(gtk::Align::Fill)
         .wrap(true)
+        .wrap_mode(gtk::pango::WrapMode::WordChar)
         .css_classes(["dim-label", "caption"])
         .build();
-    labels.append(&desc);
+    desc.set_visible(!desc.label().is_empty());
 
     let dirty = gtk::Label::builder()
         .label("•")
@@ -1138,6 +1182,7 @@ fn build_control_row(app: &Rc<App>, record: &Record, src_index: usize) -> Rc<Con
         row.append(&labels);
         row.append(&slot);
     }
+    row.append(&desc);
 
     if !record.origin.is_empty() {
         let origin = gtk::Label::builder()
@@ -1253,6 +1298,18 @@ fn evaluate_dependencies(controls: &[Rc<ControlRow>]) {
     }
 }
 
+fn visible_group_names(
+    rows: impl IntoIterator<Item = ((bool, String), bool)>,
+) -> HashSet<(bool, String)> {
+    let mut set = HashSet::new();
+    for ((advanced, group), row_visible) in rows {
+        if row_visible && !group.is_empty() {
+            set.insert((advanced, group));
+        }
+    }
+    set
+}
+
 fn apply_control_filter(app: &Rc<App>) {
     let query = app.search.text().to_lowercase();
     let current = app.current_file.borrow().clone();
@@ -1261,6 +1318,7 @@ fn apply_control_filter(app: &Rc<App>) {
             continue;
         }
         let mut first_match: Option<&Rc<ControlRow>> = None;
+        let mut visible_rows: Vec<((bool, String), bool)> = Vec::new();
         for control in &page.controls {
             control.row.remove_css_class("search-hit");
             let matches = query.is_empty()
@@ -1276,6 +1334,25 @@ fn apply_control_filter(app: &Rc<App>) {
             control.row.set_visible(visible);
             if visible && !query.is_empty() && first_match.is_none() {
                 first_match = Some(control);
+            }
+            let advanced = control.record.spec.advanced;
+            let group = control.record.spec.group.clone().unwrap_or_default();
+            visible_rows.push(((advanced, group), visible));
+        }
+        let visible_groups = visible_group_names(visible_rows);
+        for (advanced, group_name, label) in &page.group_headers {
+            let visible = visible_groups.contains(&(*advanced, group_name.clone()));
+            label.set_visible(visible);
+        }
+        for (group_name, button) in &page.group_inserts {
+            let has_header = !group_name.is_empty()
+                && page
+                    .group_headers
+                    .iter()
+                    .any(|(adv, name, _)| !*adv && name == group_name);
+            if has_header {
+                let visible = visible_groups.contains(&(false, group_name.clone()));
+                button.set_visible(visible);
             }
         }
         if let Some(control) = first_match {
@@ -1814,6 +1891,7 @@ fn apply_infos(app: &Rc<App>, file: &str, infos: &[(String, OptionInfo)]) {
             };
             if !info.description.is_empty() {
                 control.desc.set_text(&info.description);
+                control.desc.set_visible(true);
             }
             if let Some(type_str) = &info.type_str {
                 if let Some(widget) = type_widget(type_str) {
@@ -2819,6 +2897,40 @@ mod tests {
     fn offsets_scroll_above_the_target() {
         assert_eq!(scroll_offset(120.0), 108.0);
         assert_eq!(scroll_offset(0.0), -12.0);
+    }
+
+    #[test]
+    fn hides_group_when_all_rows_invisible() {
+        let visible = visible_group_names([
+            ((false, "Firefox".to_string()), false),
+            ((false, "Firefox".to_string()), false),
+        ]);
+        assert!(!visible.contains(&(false, "Firefox".to_string())));
+    }
+
+    #[test]
+    fn shows_group_when_one_row_visible() {
+        let visible = visible_group_names([
+            ((false, "Chrome".to_string()), false),
+            ((false, "Chrome".to_string()), true),
+        ]);
+        assert!(visible.contains(&(false, "Chrome".to_string())));
+    }
+
+    #[test]
+    fn separates_same_group_name_by_section() {
+        let visible = visible_group_names([
+            ((false, "Theme".to_string()), false),
+            ((true, "Theme".to_string()), true),
+        ]);
+        assert!(!visible.contains(&(false, "Theme".to_string())));
+        assert!(visible.contains(&(true, "Theme".to_string())));
+    }
+
+    #[test]
+    fn empty_rows_yield_empty_visible_set() {
+        let visible = visible_group_names(Vec::<((bool, String), bool)>::new());
+        assert!(visible.is_empty());
     }
 
     #[test]

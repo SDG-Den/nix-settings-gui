@@ -44,10 +44,15 @@ pub fn parse_scheme_text(text: &str, stem: &str) -> Option<(String, [String; 16]
 }
 
 pub fn is_base16(path: &Path) -> bool {
-    path.file_stem()
+    let prefixed = path
+        .file_stem()
         .and_then(|s| s.to_str())
-        .map(|stem| stem.starts_with("base16-"))
-        .unwrap_or(false)
+        .is_some_and(|s| s.starts_with("base16-"));
+    let parent = path
+        .parent()
+        .and_then(|p| p.file_name())
+        .and_then(|s| s.to_str());
+    prefixed || parent == Some("base16")
 }
 
 pub fn slug(stem: &str) -> String {

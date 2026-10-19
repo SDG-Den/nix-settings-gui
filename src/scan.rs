@@ -5,7 +5,7 @@ use rnix::ast::{Attr, AttrSet, AttrpathValue, Expr, HasEntry, InterpolPart, List
 use rnix::{NodeOrToken, SyntaxKind, SyntaxNode};
 use rowan::ast::AstNode;
 
-use crate::dsl::{self, InsertSpec, MarkerKind, MenuSpec, OptionSpec, SnippetSpec};
+use crate::dsl::{self, InsertSpec, MarkerKind, MenuSpec, OptionSpec, PresetFieldSpec, SnippetSpec, WidgetPresetSpec};
 use crate::model::{InsertMarker, MenuModel, Record};
 
 /// Everything the scanner learns from one file.
@@ -20,6 +20,7 @@ pub struct FileScan {
     pub snippets: Vec<SnippetSpec>,
     /// `@insert` markers in the file, in source order.
     pub inserts: Vec<InsertMarker>,
+    pub widget_presets: Vec<(WidgetPresetSpec, Vec<PresetFieldSpec>)>,
     pub targets: Vec<String>,
     /// Module origins this file defines, e.g. `modules.nixos.audio`.
     pub origins: Vec<String>,
@@ -142,6 +143,7 @@ pub fn scan_root(root: &str) -> Result<ScanResult, String> {
             records: scan.records,
             snippets: scan.snippets,
             inserts: scan.inserts,
+            widget_presets: scan.widget_presets.clone(),
             origins: scan.origins,
             has_menu: scan.has_menu,
         });
@@ -188,7 +190,8 @@ pub fn scan_file(path: &Path, text: &str) -> FileScan {
         ..FileScan::default()
     };
 
-    let Ok(root) = rnix::Root::parse(text).ok() else {
+    let parsed = rnix::Root::parse(text);
+    let Some(root) = rnix::Root::cast(parsed.syntax()) else {
         return scan;
     };
     if let Some(spec) = find_menu(root.syntax()) {
@@ -197,6 +200,7 @@ pub fn scan_file(path: &Path, text: &str) -> FileScan {
     }
     scan.snippets = find_snippets(root.syntax());
     scan.inserts = find_inserts(text, root.syntax());
+    scan.widget_presets = find_widget_presets(text, root.syntax());
 
     let Some(expr) = root.expr() else {
         return scan;
@@ -217,7 +221,8 @@ pub fn scan_file(path: &Path, text: &str) -> FileScan {
 /// submodule control. Returned spans are relative to `text`, so a caller adds
 /// the parent value's file offset to turn them into whole-file spans.
 pub fn scan_value(text: &str) -> Vec<Record> {
-    let Ok(root) = rnix::Root::parse(text).ok() else {
+    let parsed = rnix::Root::parse(text);
+    let Some(root) = rnix::Root::cast(parsed.syntax()) else {
         return Vec::new();
     };
     let Some(expr) = root.expr() else {
@@ -408,6 +413,49 @@ fn insert_body(expr: &Expr) -> Option<AttrSet> {
             .or_else(|| cond.else_body().and_then(|body| insert_body(&body))),
         _ => None,
     }
+}
+
+/// Find all widget presets and their field specs in a file. Field specs are
+/// matched to their preset by id after the whole file has been scanned, so a
+/// field marker does not have to immediately follow its preset.
+pub fn find_widget_presets(
+    _text: &str,
+    root: &SyntaxNode,
+) -> Vec<(WidgetPresetSpec, Vec<PresetFieldSpec>)> {
+    let mut presets: Vec<WidgetPresetSpec> = Vec::new();
+    let mut fields: Vec<PresetFieldSpec> = Vec::new();
+    for element in root.descendants_with_tokens() {
+        let Some(token) = element.into_token() else {
+            continue;
+        };
+        if token.kind() != SyntaxKind::TOKEN_COMMENT {
+            continue;
+        }
+        if let Some((MarkerKind::WidgetPreset, directives)) = dsl::parse_comment(token.text()) {
+            let spec = WidgetPresetSpec::from_directives(&directives);
+            if !spec.id.is_empty() {
+                presets.push(spec);
+            }
+            continue;
+        }
+        if let Some((MarkerKind::WidgetPresetField, directives)) = dsl::parse_comment(token.text()) {
+            let spec = PresetFieldSpec::from_directives(&directives);
+            if !spec.preset.is_empty() && !spec.name.is_empty() {
+                fields.push(spec);
+            }
+        }
+    }
+    presets
+        .into_iter()
+        .map(|preset| {
+            let own: Vec<PresetFieldSpec> = fields
+                .iter()
+                .filter(|f| f.preset == preset.id)
+                .cloned()
+                .collect();
+            (preset, own)
+        })
+        .collect()
 }
 
 /// The first `@menu` comment anywhere in the file is the menu header.
@@ -965,6 +1013,42 @@ mod tests {
         assert!(with.has_menu);
         let without = scan("{ a = 1; }\n");
         assert!(!without.has_menu);
+    }
+
+    #[test]
+    fn recovers_menu_and_records_from_malformed_file() {
+        let text = r#"/* @menu displayname = "User"; */
+
+{ config, ... }:
+
+{
+  config = {
+    /* @option widget = "text"; label = "Description"; */
+    description = "Primary account";
+  };
+"#;
+        let scan = scan(text);
+        assert!(scan.has_menu);
+        assert_eq!(scan.spec.displayname.as_deref(), Some("User"));
+        let paths: Vec<String> = scan.records.iter().map(Record::path).collect();
+        assert_eq!(paths, vec!["config.description"]);
+    }
+
+    #[test]
+    fn valid_file_scan_is_unchanged_by_best_effort_parse() {
+        let text = r#"/* @menu displayname = "System"; */
+
+{ config, ... }:
+
+{
+  /* @option widget = "text"; label = "Hostname"; */
+  networking.hostName = "demo";
+}
+"#;
+        let scan = scan(text);
+        assert!(scan.has_menu);
+        let paths: Vec<String> = scan.records.iter().map(Record::path).collect();
+        assert_eq!(paths, vec!["networking.hostName"]);
     }
 
     #[test]
