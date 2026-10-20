@@ -60,9 +60,18 @@ pub(crate) fn build_slider(spec: &OptionSpec, value_text: &str) -> gtk::Scale {
     let scale = gtk::Scale::with_range(gtk::Orientation::Horizontal, min, max, step);
     scale.set_value(value_text.trim().parse::<f64>().unwrap_or(min));
     scale.set_draw_value(true);
+    let digits = spec.digits.unwrap_or_else(|| step_digits(step));
+    scale.set_digits(digits as i32);
     scale.set_hexpand(true);
     attach_focus_gated_scroll(&scale);
     scale
+}
+
+fn step_digits(step: f64) -> u32 {
+    if step <= 0.0 {
+        return 0;
+    }
+    (-step.log10()).ceil().max(0.0) as u32
 }
 
 fn forwarded_scroll_delta(delta: f64, unit: gtk::gdk::ScrollUnit, page_size: f64) -> f64 {

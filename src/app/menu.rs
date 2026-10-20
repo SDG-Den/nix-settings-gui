@@ -73,7 +73,7 @@ fn menu_matches(menu: &crate::model::MenuModel, query: &str) -> bool {
 
 const FALLBACK_MENU_ICON: &str = "preferences-system-symbolic";
 
-pub(super) fn pick_icon_name(
+pub(crate) fn pick_icon_name(
     has_icon: impl Fn(&str) -> bool,
     icon: Option<&str>,
 ) -> Option<String> {

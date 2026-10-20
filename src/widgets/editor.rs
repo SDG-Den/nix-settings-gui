@@ -156,7 +156,7 @@ impl Editor {
                 .cloned()
                 .unwrap_or_else(|| quote("")),
             Editor::Spin(w) => number_literal(w.value(), w.digits()),
-            Editor::Slider(w) => number_literal(w.value(), 0),
+            Editor::Slider(w) => number_literal(w.value(), w.digits() as u32),
             Editor::Text(w) => string_literal(&w.text()),
             Editor::Multiline { view, .. } => {
                 let buffer = view.buffer();

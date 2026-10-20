@@ -12,7 +12,7 @@ mod controls;
 mod dialogs;
 mod enrich;
 mod git;
-mod menu;
+pub(crate) mod menu;
 mod pump;
 mod save;
 mod state;

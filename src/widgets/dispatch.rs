@@ -79,7 +79,11 @@ pub(crate) fn choose_widget(record: &Record, type_str: Option<&str>) -> WidgetKi
     let spec = &record.spec;
     let value_text = &record.value;
     if let Some(widget) = spec.widget {
-        if widget == WidgetKind::Spin && spec.min.is_some() && spec.max.is_some() {
+        if widget == WidgetKind::Spin
+            && spec.min.is_some()
+            && spec.max.is_some()
+            && spec.horizontal
+        {
             return WidgetKind::Slider;
         }
         if matches!(widget, WidgetKind::List | WidgetKind::Packages)
@@ -216,6 +220,20 @@ mod tests {
 
         record.value = "[ git vim ]".to_string();
         assert_eq!(choose_widget(&record, None), WidgetKind::List);
+    }
+    #[test]
+    fn bounded_spin_promotes_to_slider_only_when_horizontal() {
+        let mut record = Record {
+            value: "16".to_string(),
+            ..Record::default()
+        };
+        record.spec.widget = Some(WidgetKind::Spin);
+        record.spec.min = Some(16.0);
+        record.spec.max = Some(96.0);
+        assert_eq!(choose_widget(&record, None), WidgetKind::Spin);
+
+        record.spec.horizontal = true;
+        assert_eq!(choose_widget(&record, None), WidgetKind::Slider);
     }
     #[test]
     fn maps_imports_to_module_widgets() {

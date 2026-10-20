@@ -4,6 +4,7 @@ use super::names::widget_display_name;
 use super::nix::truthy;
 use super::tile::{attach_tile_dnd, make_field_for_preset, make_widget_tile, WidgetTile};
 use super::tile_nix::{parse_string_list, valid_widget_id};
+use crate::app::menu::pick_icon_name;
 use crate::dsl::{PresetFieldSpec, WidgetPresetSpec};
 use crate::scan;
 use gtk::prelude::*;
@@ -135,9 +136,15 @@ pub(crate) fn populate_widget_picker(
         line.set_margin_start(8);
         line.set_margin_end(8);
         if let Some(icon) = &preset.icon {
-            let image = gtk::Image::from_icon_name(icon);
-            image.set_pixel_size(24);
-            line.append(&image);
+            let resolved = gtk::gdk::Display::default().and_then(|display| {
+                let theme = gtk::IconTheme::for_display(&display);
+                pick_icon_name(|name| theme.has_icon(name), Some(icon.as_str()))
+            });
+            if let Some(name) = resolved {
+                let image = gtk::Image::from_icon_name(&name);
+                image.set_pixel_size(24);
+                line.append(&image);
+            }
         }
         let text = gtk::Box::new(gtk::Orientation::Vertical, 2);
         text.set_hexpand(true);
