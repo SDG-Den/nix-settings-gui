@@ -1,7 +1,8 @@
 use super::grid::{
-    grid_index_of, grid_reattach, grid_repack, grid_restore_pinned, grid_select,
+    grid_index_of, grid_reattach, grid_repack, grid_restore_pinned, grid_select, grid_set_status,
     grid_update_size_caption, GridLayoutState, GridTile,
 };
+use super::grid_details::grid_refresh_details;
 use super::grid_layout::GRID_GAP;
 use super::names::widget_display_name;
 use gtk::prelude::*;
@@ -102,7 +103,11 @@ pub(crate) fn wire_grid_move(state: &Rc<GridLayoutState>, tile: &GridTile) {
                 tile.cell.row = row;
             }
         }
-        grid_repack(&st, Some(index), false);
+        if grid_repack(&st, Some(index), false) {
+            grid_set_status(&st, "");
+        } else {
+            grid_set_status(&st, "No room to move here — the grid is full.");
+        }
         grid_reattach(&st);
         grid_update_size_caption(&st);
     });
@@ -115,6 +120,8 @@ pub(crate) fn wire_grid_move(state: &Rc<GridLayoutState>, tile: &GridTile) {
         }
         grid_reattach(&st);
         grid_update_size_caption(&st);
+        grid_set_status(&st, "");
+        grid_refresh_details(&st);
         *st.drag_index.borrow_mut() = None;
         st.notify();
     });
@@ -136,7 +143,7 @@ pub(crate) fn wire_grid_resize(
             return;
         };
         if *st.selected.borrow() != Some(index) {
-            return;
+            grid_select(&st, index);
         }
         *st.size_index.borrow_mut() = Some(index);
         *st.drag_index.borrow_mut() = None;
@@ -197,6 +204,9 @@ pub(crate) fn wire_grid_resize(
                 }
             }
             grid_repack(&st, Some(index), false);
+            grid_set_status(&st, "No room to grow here — the grid is full at the bottom.");
+        } else {
+            grid_set_status(&st, "");
         }
         grid_reattach(&st);
         grid_update_size_caption(&st);
@@ -210,6 +220,8 @@ pub(crate) fn wire_grid_resize(
         grid_repack(&st, None, false);
         grid_reattach(&st);
         grid_update_size_caption(&st);
+        grid_set_status(&st, "");
+        grid_refresh_details(&st);
         st.notify();
     });
 }

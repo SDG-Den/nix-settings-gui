@@ -24,7 +24,7 @@ mod tile_list;
 mod tile_nix;
 
 pub(crate) use basic::{build_entry, build_spin, build_switch};
-pub(crate) use context::{BuildContext, ChangeHook, PackageSearch};
+pub(crate) use context::{BuildContext, ChangeHook, PackageSearch, PluginRegistryHook};
 pub(crate) use dispatch::{build, is_package};
 pub(crate) use editor::Editor;
 pub(crate) use nix::{attr_key, literal_for_widget};

@@ -61,6 +61,38 @@ pub(crate) fn make_attrset_field(name: &str, raw: &str, ctx: &BuildContext) -> A
     }
 }
 
+/// One freeform field of a bespoke row, edited as a fixed dropdown. `choices`
+/// are the dropdown labels (not Nix literals); the caller maps the selected
+/// label back to a value, so entries that serialize to nothing stay distinct.
+pub(crate) fn make_dropdown_field(
+    name: &str,
+    raw: &str,
+    choices: &[String],
+    selected: usize,
+) -> AttrsetField {
+    let t = raw.trim();
+    let present = !t.is_empty() && t != "null";
+    let source = if present { t } else { "" };
+    let editor = Editor::Dropdown {
+        combo: build_dropdown_combo(choices, selected),
+        choices: choices.to_vec(),
+    };
+    AttrsetField {
+        name: name.to_string(),
+        editor,
+        orig_value: source.to_string(),
+        orig_present: present,
+    }
+}
+
+fn build_dropdown_combo(choices: &[String], selected: usize) -> gtk::DropDown {
+    let labels: Vec<&str> = choices.iter().map(String::as_str).collect();
+    let combo = gtk::DropDown::from_strings(&labels);
+    combo.set_selected(selected as u32);
+    combo.set_halign(gtk::Align::Start);
+    combo
+}
+
 /// Whether an editor holds something beyond its neutral value.
 pub(crate) fn field_has_content(editor: &Editor) -> bool {
     match editor {
@@ -144,7 +176,8 @@ pub(crate) fn editor_snapshot(editor: &Editor) -> String {
 }
 
 /// Write a captured value back into a field editor. Pop-out fields are only
-/// ever text, switch or spin editors, so the remaining variants stay untouched.
+/// ever text, switch, spin or dropdown editors, so the remaining variants stay
+/// untouched.
 pub(crate) fn editor_restore(editor: &Editor, value: &str) {
     match editor {
         Editor::Text(w) | Editor::Path(w) => w.set_text(value),

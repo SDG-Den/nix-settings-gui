@@ -21,6 +21,7 @@ pub(super) enum Msg {
     SnippetInserted(Result<(), String>),
     Infos(String, Vec<(String, OptionInfo)>),
     Suggestions(Vec<String>),
+    PluginRegistry(Result<Vec<crate::metadata::RegistryPlugin>, String>),
     Invalid(Vec<String>),
     GitPulled(Result<bool, String>),
     GitSynced(Result<String, String>),
@@ -131,6 +132,14 @@ impl PackageService {
     }
 }
 
+/// The DMS plugin registry id list, fetched at most once per flake open.
+/// `pending` holds picker callbacks waiting on an in-flight fetch.
+pub(super) struct PluginRegistryState {
+    pub(super) cache: RefCell<Option<Vec<crate::metadata::RegistryPlugin>>>,
+    pub(super) pending: RefCell<Vec<Box<dyn FnOnce(Vec<crate::metadata::RegistryPlugin>)>>>,
+    pub(super) loading: Cell<bool>,
+}
+
 pub(super) struct App {
     pub(super) window: adw::ApplicationWindow,
     pub(super) title: gtk::Label,
@@ -146,6 +155,7 @@ pub(super) struct App {
     pub(super) spinner: gtk::Spinner,
     pub(super) progress: gtk::ProgressBar,
     pub(super) package_service: Rc<PackageService>,
+    pub(super) plugin_registry: Rc<PluginRegistryState>,
     pub(super) tx: Tx,
 
     pub(super) config: RefCell<AppConfig>,

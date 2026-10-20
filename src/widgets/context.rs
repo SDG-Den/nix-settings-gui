@@ -33,6 +33,11 @@ impl ModuleKind {
 /// Supplied by the app so the widgets stay free of nixd plumbing.
 pub type PackageSearch = Rc<dyn Fn(String, Box<dyn FnOnce(Vec<String>)>)>;
 
+/// Fetches the DMS plugin registry and hands the id list back on the main
+/// thread. Supplied by the app so the widget stays free of nix plumbing.
+pub type PluginRegistryHook =
+    Rc<dyn Fn(Box<dyn FnOnce(Vec<crate::metadata::RegistryPlugin>)>)>;
+
 /// File path -> presets declared by @widget-preset markers in that file.
 pub type PresetMap = std::rc::Rc<
     std::collections::HashMap<
@@ -51,6 +56,8 @@ pub struct BuildContext {
     pub nixos_modules: Vec<String>,
     pub hm_modules: Vec<String>,
     pub search: Option<PackageSearch>,
+    /// Fetches the DMS plugin registry ids for the plugins picker.
+    pub plugin_registry: Option<PluginRegistryHook>,
     /// Whether the Advanced toggle is on, so nested hidden controls show.
     pub advanced: bool,
     /// Nesting depth of the control being built, used for submodule indent.

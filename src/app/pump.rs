@@ -176,6 +176,15 @@ pub(super) fn handle_msg(app: &Rc<App>, tx: &Tx, msg: Msg) {
         }
         Msg::Infos(file, infos) => apply_infos(app, &file, &infos),
         Msg::Suggestions(suggestions) => fill_suggestions(app, suggestions),
+        Msg::PluginRegistry(result) => {
+            let plugins = result.unwrap_or_default();
+            *app.plugin_registry.cache.borrow_mut() = Some(plugins.clone());
+            app.plugin_registry.loading.set(false);
+            let pending: Vec<_> = app.plugin_registry.pending.borrow_mut().drain(..).collect();
+            for callback in pending {
+                callback(plugins.clone());
+            }
+        }
         Msg::GitPulled(Ok(true)) => commit_message_dialog(app, tx),
         Msg::GitPulled(Ok(false)) => app.status.set_text("Git: already up to date"),
         Msg::GitPulled(Err(e)) => {

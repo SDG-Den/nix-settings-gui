@@ -9,7 +9,7 @@ use crate::metadata::{self, Target};
 use crate::model::Record;
 use crate::widgets::{self, Editor};
 
-use super::state::{App, ControlRow, MenuPage};
+use super::state::{App, ControlRow, MenuPage, Msg};
 
 pub(super) fn control_cmp(
     a: &ControlRow,
@@ -60,6 +60,7 @@ pub(super) fn build_context(app: &Rc<App>) -> widgets::BuildContext {
     ctx.nixos_modules.sort();
     ctx.hm_modules.sort();
     ctx.search = Some(package_search(app));
+    ctx.plugin_registry = Some(plugin_registry_hook(app));
     ctx
 }
 
@@ -70,6 +71,30 @@ fn package_search(app: &Rc<App>) -> widgets::PackageSearch {
     let flake = app.config.borrow().flake_path.clone().unwrap_or_default();
     Rc::new(move |term: String, done: Box<dyn FnOnce(Vec<String>)>| {
         service.search(flake.clone(), term, done);
+    })
+}
+
+/// Plugin registry hook: serves a cached id list instantly, or queues the
+/// callback behind one worker-thread `nix eval` of the registry extractor.
+fn plugin_registry_hook(app: &Rc<App>) -> widgets::PluginRegistryHook {
+    let state = app.plugin_registry.clone();
+    let tx = app.tx.clone();
+    let base = app.base.borrow().clone();
+    Rc::new(move |done| {
+        if let Some(cached) = state.cache.borrow().as_ref() {
+            done(cached.clone());
+            return;
+        }
+        state.pending.borrow_mut().push(done);
+        if state.loading.replace(true) {
+            return;
+        }
+        let tx = tx.clone();
+        let base = base.clone();
+        std::thread::spawn(move || {
+            let result = crate::metadata::dms_plugins(&base);
+            let _ = tx.send_blocking(Msg::PluginRegistry(result));
+        });
     })
 }
 
@@ -87,10 +112,17 @@ pub(super) fn build_control_row(
     let mut ctx = build_context(app);
     ctx.advanced = app.advanced.get();
     let editor = widgets::build(record, None, &ctx);
-    let inline = control_is_inline(&editor);
+    let inline = control_is_inline(&editor)
+        && record
+            .spec
+            .description
+            .as_ref()
+            .map_or(true, |text| text.is_empty());
     let row = gtk::Box::new(gtk::Orientation::Vertical, 4);
     row.set_margin_top(4);
     row.set_margin_bottom(4);
+    row.set_hexpand(true);
+    row.set_halign(gtk::Align::Fill);
 
     let labels = gtk::Box::new(gtk::Orientation::Vertical, 2);
     labels.set_hexpand(true);
@@ -115,6 +147,7 @@ pub(super) fn build_control_row(
         .wrap(true)
         .wrap_mode(gtk::pango::WrapMode::WordChar)
         .css_classes(["dim-label", "caption"])
+        .width_chars(48)
         .build();
     desc.set_visible(!desc.label().is_empty());
 
@@ -146,6 +179,8 @@ pub(super) fn build_control_row(
 
     if inline {
         let line = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        line.set_hexpand(true);
+        line.set_halign(gtk::Align::Fill);
         line.append(&labels);
         line.append(&slot);
         row.append(&line);
@@ -159,6 +194,8 @@ pub(super) fn build_control_row(
         let origin = gtk::Label::builder()
             .label(format!("imported from {}", record.origin))
             .xalign(0.0)
+            .hexpand(true)
+            .halign(gtk::Align::Fill)
             .wrap(true)
             .css_classes(["dim-label", "caption"])
             .build();

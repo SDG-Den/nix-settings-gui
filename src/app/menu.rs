@@ -206,6 +206,7 @@ fn build_page(app: &Rc<App>, menu: &crate::model::MenuModel) -> MenuPage {
     content.set_margin_bottom(12);
     content.set_margin_start(16);
     content.set_margin_end(16);
+    content.set_hexpand(true);
 
     let heading = gtk::Label::builder()
         .label(menu.display_name())
@@ -218,6 +219,8 @@ fn build_page(app: &Rc<App>, menu: &crate::model::MenuModel) -> MenuPage {
         let subtitle = gtk::Label::builder()
             .label(description)
             .xalign(0.0)
+            .hexpand(true)
+            .halign(gtk::Align::Fill)
             .wrap(true)
             .css_classes(["dim-label"])
             .build();

@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use gtk::prelude::*;
@@ -258,7 +259,8 @@ struct Picker {
     dropdown: gtk::DropDown,
     add: gtk::Button,
     rows: PluginRows,
-    source: Rc<Vec<String>>,
+    source: Rc<RefCell<Vec<String>>>,
+    names: Rc<RefCell<HashMap<String, String>>>,
     available: Rc<RefCell<Vec<String>>>,
 }
 
@@ -270,8 +272,12 @@ impl Picker {
             .iter()
             .map(|row| row.key.text().to_string())
             .collect();
-        let available = available_ids(&self.source, &taken);
-        let labels: Vec<String> = available.iter().map(|id| display_name(id)).collect();
+        let available = available_ids(&self.source.borrow(), &taken);
+        let names = self.names.borrow();
+        let labels: Vec<String> = available
+            .iter()
+            .map(|id| label_for(&names, id))
+            .collect();
         let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
         self.dropdown
             .set_model(Some(&gtk::StringList::new(&refs)));
@@ -296,7 +302,8 @@ pub fn build(record: &Record, ctx: &BuildContext) -> Editor {
         dropdown: dropdown.clone(),
         add: add.clone(),
         rows: rows.clone(),
-        source: Rc::new(picker_source(record)),
+        source: Rc::new(RefCell::new(picker_source(record))),
+        names: Rc::new(RefCell::new(HashMap::new())),
         available: Rc::new(RefCell::new(Vec::new())),
     };
 
@@ -305,6 +312,21 @@ pub fn build(record: &Record, ctx: &BuildContext) -> Editor {
         attach_plugin_row(&container, &rows, row, &on_change, &picker, *shown);
     }
     picker.refresh();
+
+    let has_choices = matches!(&record.spec.choices, Some(list) if !list.is_empty());
+    if !has_choices {
+        if let Some(fetch) = ctx.plugin_registry.clone() {
+            let picker = picker.clone();
+            fetch(Box::new(move |plugins| {
+                apply_registry_source(
+                    &mut picker.source.borrow_mut(),
+                    &mut picker.names.borrow_mut(),
+                    &plugins,
+                );
+                picker.refresh();
+            }));
+        }
+    }
 
     {
         let dropdown = dropdown.clone();
@@ -318,6 +340,15 @@ pub fn build(record: &Record, ctx: &BuildContext) -> Editor {
             let Some(id) = picker.available.borrow().get(index).cloned() else {
                 return;
             };
+            if picker
+                .rows
+                .borrow()
+                .iter()
+                .any(|row| row.key.text().as_str() == id)
+            {
+                picker.refresh();
+                return;
+            }
             scaffold_plugin_row(&id, &container, &rows, &on_change, &ctx, &picker);
             picker.refresh();
         });
@@ -652,6 +683,30 @@ fn scaffold_plugin_row(
     }
 }
 
+/// The dropdown label for an id: the fetched registry name wins, then the
+/// hardcoded registry name, then a humanized id.
+fn label_for(names: &HashMap<String, String>, id: &str) -> String {
+    names.get(id).cloned().unwrap_or_else(|| display_name(id))
+}
+
+/// Replace the picker source with the fetched registry ids (sorted) and
+/// remember their display names.
+fn apply_registry_source(
+    source: &mut Vec<String>,
+    names: &mut HashMap<String, String>,
+    plugins: &[crate::metadata::RegistryPlugin],
+) {
+    names.clear();
+    source.clear();
+    for plugin in plugins {
+        if let Some(name) = &plugin.name {
+            names.insert(plugin.id.clone(), name.clone());
+        }
+        source.push(plugin.id.clone());
+    }
+    source.sort();
+}
+
 /// The ids the footer dropdown offers: the template's `choices` when present,
 /// otherwise the registry ids in table order.
 fn picker_source(record: &Record) -> Vec<String> {
@@ -708,7 +763,20 @@ mod tests {
     #[test]
     fn picker_source_prefers_template_choices() {
         let mut record = Record::default();
-        assert_eq!(picker_source(&record).len(), 9);
+        assert_eq!(
+            picker_source(&record),
+            [
+                "dankMenu",
+                "dankKDEConnect",
+                "nixMonitor",
+                "localServices",
+                "scratchpadHelper",
+                "developerUtilities",
+                "screenCaptureToolbar",
+                "commandRunner",
+                "webSearch"
+            ]
+        );
         record.spec.choices = Some(vec!["dankTodo".to_string(), "nixMonitor".to_string()]);
         assert_eq!(picker_source(&record), ["dankTodo", "nixMonitor"]);
         record.spec.choices = Some(vec![]);
@@ -722,6 +790,49 @@ mod tests {
         assert_eq!(available_ids(&source, &taken), ["a", "c"]);
         assert_eq!(available_ids(&source, &[]).len(), 3);
         assert!(available_ids(&source, &source).is_empty());
+        let registry: Vec<String> = (0..400).map(|i| format!("plugin{i}")).collect();
+        let taken = vec!["plugin7".to_string(), "plugin399".to_string()];
+        assert_eq!(available_ids(&registry, &taken).len(), 398);
+    }
+
+    #[test]
+    fn picker_label_prefers_registry_name() {
+        let mut names = HashMap::new();
+        names.insert("nixMonitor".to_string(), "Nix Monitor X".to_string());
+        assert_eq!(label_for(&names, "nixMonitor"), "Nix Monitor X");
+        assert_eq!(label_for(&names, "webSearch"), "Web Search");
+        assert_eq!(label_for(&names, "someNewPlugin"), "Some New Plugin");
+    }
+
+    #[test]
+    fn apply_registry_source_replaces_ids() {
+        let mut source: Vec<String> = vec![
+            "dankMenu".to_string(),
+            "webSearch".to_string(),
+        ];
+        let mut names = HashMap::new();
+        names.insert("dankMenu".to_string(), "Stale".to_string());
+        let plugins = vec![
+            crate::metadata::RegistryPlugin {
+                id: "bPlugin".into(),
+                name: Some("B Plugin".into()),
+                description: None,
+                category: None,
+                repo: None,
+            },
+            crate::metadata::RegistryPlugin {
+                id: "aPlugin".into(),
+                name: None,
+                description: None,
+                category: None,
+                repo: None,
+            },
+        ];
+        apply_registry_source(&mut source, &mut names, &plugins);
+        assert_eq!(source, ["aPlugin", "bPlugin"]);
+        assert_eq!(names.len(), 1);
+        assert_eq!(names.get("bPlugin").map(String::as_str), Some("B Plugin"));
+        assert!(!source.contains(&"dankMenu".to_string()));
     }
 
     #[test]
@@ -750,6 +861,22 @@ mod tests {
         let record = plugins_record(&text);
         let groups = plugin_groups(&record, &BuildContext::default());
         assert_eq!(groups.len(), 9, "plugin count");
+        for id in [
+            "dankMenu",
+            "dankKDEConnect",
+            "nixMonitor",
+            "localServices",
+            "scratchpadHelper",
+            "developerUtilities",
+            "screenCaptureToolbar",
+            "commandRunner",
+            "webSearch",
+        ] {
+            assert!(
+                groups.iter().any(|(gid, _, _)| gid == id),
+                "missing {id}"
+            );
+        }
         let (_, leaves, shown) = groups
             .iter()
             .find(|(id, _, _)| id == "nixMonitor")

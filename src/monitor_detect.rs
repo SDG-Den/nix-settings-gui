@@ -112,23 +112,22 @@ fn parse_wlr_randr(text: &str) -> Vec<DetectedMonitor> {
     monitors
 }
 
-pub fn detect() -> Vec<DetectedMonitor> {
-    let Ok(output) = Command::new("wlr-randr").arg("--json").output() else {
-        return Vec::new();
-    };
-    if output.status.success() {
-        let text = String::from_utf8_lossy(&output.stdout);
-        if let Ok(monitors) = parse_wlr_randr_json(&text) {
-            return monitors;
+pub fn detect() -> Option<Vec<DetectedMonitor>> {
+    if let Ok(output) = Command::new("wlr-randr").arg("--json").output() {
+        if output.status.success() {
+            let text = String::from_utf8_lossy(&output.stdout);
+            if let Ok(monitors) = parse_wlr_randr_json(&text) {
+                return Some(monitors);
+            }
         }
     }
     let Ok(output) = Command::new("wlr-randr").output() else {
-        return Vec::new();
+        return None;
     };
     if !output.status.success() {
-        return Vec::new();
+        return None;
     }
-    parse_wlr_randr(&String::from_utf8_lossy(&output.stdout))
+    Some(parse_wlr_randr(&String::from_utf8_lossy(&output.stdout)))
 }
 
 #[cfg(test)]
@@ -209,17 +208,17 @@ mod tests {
         std::fs::write(&stub, script).unwrap();
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let monitors = with_path(&dir, detect);
+        let monitors = with_path(&dir, detect).unwrap();
         assert_eq!(monitors.len(), 1);
         assert_eq!(monitors[0].modes.len(), 2);
     }
 
     #[test]
-    fn detect_returns_empty_when_binary_missing() {
+    fn detect_reports_unavailable_when_binary_missing() {
         let _guard = PATH_LOCK.lock().unwrap();
         let dir = std::env::temp_dir().join(format!("nsg-empty-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let monitors = with_path(&dir, detect);
-        assert!(monitors.is_empty());
+        assert!(monitors.is_none());
     }
 }

@@ -2,7 +2,6 @@ use super::context::{BuildContext, ChangeHook};
 use super::dispatch::build;
 use super::fields::{dim_line, make_attrset_field, AttrsetField};
 use super::names::{field_caption, field_help, known_widget_name, widget_display_name};
-use super::nix::truthy;
 use super::submodule::hook_notify;
 use super::tile_list::TileSection;
 use super::tile_nix::valid_widget_id;
@@ -17,10 +16,6 @@ pub(crate) struct WidgetTile {
     /// Current attrset key; editable in the cog pop-out for unknown ids.
     pub(crate) id: String,
     pub(crate) orig_id: String,
-    /// The widget's enabled switch, never rendered on the tile face; the face
-    /// shows a dimmed body and a toggle dot instead.
-    pub(crate) enabled: gtk::Switch,
-    pub(crate) orig_enabled: String,
     /// Tuning fields: every scanned field except "enabled" and "_order".
     pub(crate) fields: Rc<RefCell<Vec<AttrsetField>>>,
     /// Original "_order" raw text, empty for tiles added this session.
@@ -136,20 +131,35 @@ pub(crate) fn drop_index(list: &gtk::ListBox, y: f64) -> i32 {
     index
 }
 
-pub(crate) fn show_indicator(list: &gtk::ListBox, indicator: &gtk::Separator, index: i32) {
-    hide_indicator(list, indicator);
-    list.insert(indicator, index);
+/// Sweep every drop indicator out of `list`: separators the list holds
+/// directly and separator rows GTK wrapped around them. Tile rows are never
+/// matched (their child is the body box).
+pub(crate) fn hide_all_indicators(list: &gtk::ListBox) {
+    let mut stray: Vec<gtk::Widget> = Vec::new();
+    let children = list.observe_children();
+    for position in 0..children.n_items() {
+        let Some(child) = children.item(position) else {
+            continue;
+        };
+        let Ok(widget) = child.downcast::<gtk::Widget>() else {
+            continue;
+        };
+        let wrapped_separator = widget
+            .downcast_ref::<gtk::ListBoxRow>()
+            .and_then(|row| row.child())
+            .map_or(false, |child| child.is::<gtk::Separator>());
+        if widget.is::<gtk::Separator>() || wrapped_separator {
+            stray.push(widget);
+        }
+    }
+    for widget in stray {
+        list.remove(&widget);
+    }
 }
 
-pub(crate) fn hide_indicator(list: &gtk::ListBox, indicator: &gtk::Separator) {
-    let Some(parent) = indicator.parent() else {
-        return;
-    };
-    if parent == list.clone().upcast::<gtk::Widget>() {
-        list.remove(indicator);
-    } else if parent.parent() == Some(list.clone().upcast::<gtk::Widget>()) {
-        list.remove(&parent);
-    }
+pub(crate) fn show_indicator(list: &gtk::ListBox, indicator: &gtk::Separator, index: i32) {
+    hide_all_indicators(list);
+    list.insert(indicator, index);
 }
 
 /// Drop target on a tile list: a 2px separator tracks the pointer between
@@ -167,7 +177,7 @@ pub(crate) fn attach_tile_dnd(
     let enter_list = list.clone();
     let enter_indicator = indicator.clone();
     drop.connect_enter(move |_, _, y| {
-        hide_indicator(&enter_list, &enter_indicator);
+        hide_all_indicators(&enter_list);
         show_indicator(&enter_list, &enter_indicator, drop_index(&enter_list, y));
         gtk::gdk::DragAction::MOVE
     });
@@ -175,27 +185,29 @@ pub(crate) fn attach_tile_dnd(
     let motion_list = list.clone();
     let motion_indicator = indicator.clone();
     drop.connect_motion(move |_, _, y| {
-        hide_indicator(&motion_list, &motion_indicator);
+        hide_all_indicators(&motion_list);
         show_indicator(&motion_list, &motion_indicator, drop_index(&motion_list, y));
         gtk::gdk::DragAction::MOVE
     });
 
     let leave_list = list.clone();
-    let leave_indicator = indicator.clone();
-    drop.connect_leave(move |_| hide_indicator(&leave_list, &leave_indicator));
+    drop.connect_leave(move |_| hide_all_indicators(&leave_list));
 
     let drop_tiles = tiles.clone();
     let drop_hook = on_change.clone();
     let drop_list = list.clone();
     drop.connect_drop(move |_, value, _, y| {
-        hide_indicator(&drop_list, &indicator);
+        hide_all_indicators(&drop_list);
         let Ok(source) = value.get::<u32>() else {
             return false;
         };
         let source = source as usize;
-        let target = drop_index(&drop_list, y) as usize;
         let count = drop_tiles.borrow().len();
         if source >= count {
+            return false;
+        }
+        let target = drop_index(&drop_list, y) as usize;
+        if target > count {
             return false;
         }
         let target = if target > source { target - 1 } else { target };
@@ -203,16 +215,15 @@ pub(crate) fn attach_tile_dnd(
         true
     });
 }
-/// The cog pop-out: id entry for unknown ids, the enabled switch, one line
-/// per field, and (for custom ids) an add-setting row. Everything is built
-/// eagerly so the field editors connect once, here.
+/// The cog pop-out: id entry for unknown ids, one line per field, and
+/// (for custom ids) an add-setting row. Everything is built eagerly so the
+/// field editors connect once, here.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_tile_popout(
     id: &str,
     preset: Option<&WidgetPresetSpec>,
     fields: &Rc<RefCell<Vec<AttrsetField>>>,
     field_specs: &[PresetFieldSpec],
-    enabled: &gtk::Switch,
     label: &gtk::Label,
     row: &gtk::ListBoxRow,
     ctx: &BuildContext,
@@ -249,10 +260,6 @@ pub(crate) fn build_tile_popout(
             }
         });
     }
-
-    let enabled_line = dim_line("Enabled", enabled);
-    enabled_line.set_tooltip_text(Some("Whether this widget is shown."));
-    content.append(&enabled_line);
 
     let fields_box = gtk::Box::new(gtk::Orientation::Vertical, 8);
     content.append(&fields_box);
@@ -307,14 +314,13 @@ pub(crate) fn build_tile_popout(
     popover
 }
 
-/// Build one tile: face (grip, label, enabled dot, cog, remove), the cog
-/// pop-out, a right-click move menu, the drag source, and the remove
-/// button. `orig_id` is empty for tiles added this session.
+/// Build one tile: face (grip, label, cog, remove), the cog pop-out, a
+/// right-click move menu, the drag source, and the remove button. `orig_id`
+/// is empty for tiles added this session.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn make_widget_tile(
     id: &str,
     orig_id: &str,
-    orig_enabled: &str,
     orig_order: &str,
     preset: Option<WidgetPresetSpec>,
     fields: Rc<RefCell<Vec<AttrsetField>>>,
@@ -362,43 +368,13 @@ pub(crate) fn make_widget_tile(
     spacer.set_hexpand(true);
     body.append(&spacer);
 
-    let enabled = gtk::Switch::new();
-    enabled.set_active(truthy(orig_enabled));
-    enabled.set_halign(gtk::Align::End);
-
     if !section.is_center() {
-        let dot = gtk::Button::from_icon_name("object-select-symbolic");
-        dot.add_css_class("flat");
-        dot.set_tooltip_text(Some("Enabled"));
-        let (face_body, face_dot) = (body.clone(), dot.clone());
-        let face_enabled = enabled.clone();
-        let sync_face = Rc::new(move || {
-            let active = face_enabled.is_active();
-            face_body.set_opacity(if active { 1.0 } else { 0.5 });
-            face_dot.set_icon_name(if active {
-                "object-select-symbolic"
-            } else {
-                "edit-clear-symbolic"
-            });
-        });
-        sync_face();
-        let (sync_notify, hook) = (sync_face.clone(), on_change.clone());
-        enabled.connect_active_notify(move |_| {
-            sync_notify();
-            if let Some(cb) = hook.borrow().as_ref() {
-                cb();
-            }
-        });
-        let toggle = enabled.clone();
-        dot.connect_clicked(move |_| toggle.set_active(!toggle.is_active()));
-        body.append(&dot);
-
         let show_cog = match &preset {
             Some(preset) => preset.has_settings || !fields.borrow().is_empty(),
             None => orig_id.is_empty() || !fields.borrow().is_empty(),
         };
         if show_cog {
-            let cog = gtk::Button::from_icon_name("emblem-settings-symbolic");
+            let cog = gtk::Button::from_icon_name("preferences-system-symbolic");
             cog.add_css_class("flat");
             cog.set_tooltip_text(Some("Widget settings"));
             body.append(&cog);
@@ -407,7 +383,6 @@ pub(crate) fn make_widget_tile(
                 preset.as_ref(),
                 &fields,
                 &field_specs,
-                &enabled,
                 &label,
                 &row,
                 ctx,
@@ -480,6 +455,8 @@ pub(crate) fn make_widget_tile(
             .position(|tile| tile.row == drag_row)? as u32;
         Some(gtk::gdk::ContentProvider::for_value(&index.to_value()))
     });
+    let end_list = list.clone();
+    drag.connect_drag_end(move |_, _, _| hide_all_indicators(&end_list));
 
     let remove = gtk::Button::from_icon_name("user-trash-symbolic");
     remove.add_css_class("flat");
@@ -504,8 +481,6 @@ pub(crate) fn make_widget_tile(
     WidgetTile {
         id: id.to_string(),
         orig_id: orig_id.to_string(),
-        enabled,
-        orig_enabled: orig_enabled.to_string(),
         orig_order: orig_order.to_string(),
         fields,
         row,

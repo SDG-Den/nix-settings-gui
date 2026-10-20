@@ -224,3 +224,27 @@ fn table_grid_keeps_locked_labels_and_single_column_captions() {
         "no caption over locked labels"
     );
 }
+
+#[test]
+#[ignore = "needs a display; run with `cargo test -- --ignored`"]
+fn table_grid_locked_row_without_label_shows_key_heading() {
+    if gtk::init().is_err() {
+        eprintln!("skipping table grid runtime check: no display");
+        return;
+    }
+    let record = table_record(
+        "{ photo = { enable = true; }; }",
+        &["enable"],
+        &["bool"],
+    );
+    let (_editor, grid) = table_grid(&record);
+    let heading = grid_child(&grid, 0, 1)
+        .unwrap()
+        .downcast::<gtk::Label>()
+        .unwrap();
+    assert_eq!(heading.label(), "photo");
+    assert!(grid_child(&grid, 1, 1)
+        .unwrap()
+        .downcast::<gtk::Switch>()
+        .is_ok());
+}

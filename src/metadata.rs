@@ -6,6 +6,10 @@ use serde::Deserialize;
 /// `nix eval` and returns one level of a flake's option set as JSON.
 const OPTIONS_TO_JSON: &str = include_str!("nix/options-to-json.nix");
 
+/// An embedded copy of the DMS plugin registry extractor. It is evaluated
+/// with `nix eval` and returns the registry's plugin ids as JSON.
+const DMS_PLUGINS_TO_JSON: &str = include_str!("nix/dms-plugins-to-json.nix");
+
 /// A configuration target inside a flake.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Target {
@@ -108,6 +112,58 @@ fn script_path() -> std::path::PathBuf {
     let path = std::env::temp_dir().join("nix-settings-gui-options-to-json.nix");
     let _ = std::fs::write(&path, OPTIONS_TO_JSON);
     path
+}
+
+/// One plugin of the upstream DMS plugin registry: the id as written in
+/// configuration, plus the registry's display metadata when available.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct RegistryPlugin {
+    pub id: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub category: Option<String>,
+    #[serde(default)]
+    pub repo: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PluginsPayload {
+    plugins: Vec<RegistryPlugin>,
+}
+
+/// The ids (and metadata) of the config flake's DMS plugin registry, via
+/// `nix eval` of the embedded extractor. Empty/error when the flake has no
+/// `ojuny-desktop` input.
+pub fn dms_plugins(flake_path: &str) -> Result<Vec<RegistryPlugin>, String> {
+    let path = std::env::temp_dir().join("nix-settings-gui-dms-plugins-to-json.nix");
+    let _ = std::fs::write(&path, DMS_PLUGINS_TO_JSON);
+    let output = Command::new("nix")
+        .args([
+            "eval",
+            "--json",
+            "--extra-experimental-features",
+            "nix-command flakes",
+            "--file",
+        ])
+        .arg(&path)
+        .arg("--argstr")
+        .arg("flakePath")
+        .arg(flake_path)
+        .output()
+        .map_err(|e| format!("failed to run nix: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("nix eval failed: {}", stderr.trim()));
+    }
+    let json =
+        String::from_utf8(output.stdout).map_err(|e| format!("nix output was not utf8: {e}"))?;
+    let payload: PluginsPayload =
+        serde_json::from_str(&json).map_err(|e| format!("cannot parse nix output: {e}"))?;
+    Ok(payload.plugins)
 }
 
 fn run(

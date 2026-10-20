@@ -138,10 +138,12 @@ pub(crate) fn field_caption(name: &str) -> String {
 pub(crate) const MENU_FIELD_HELP: &[(&str, &str)] = &[
     (
         "provider",
-        "Where the entry gets its items, e.g. the apps menu.",
+        "Contents source: a provider like apps, custom (run a command), or Open Application (open a path).",
     ),
     ("target", "URL or path opened when the entry is activated."),
     ("action", "Shell command run when the entry is activated."),
+    ("title", "Header text while this submenu is open; defaults to the label."),
+    ("iconFont", "Font family for the icon glyph when it is not the menu font."),
     (
         "checked",
         "Command whose exit status decides the toggle state.",
@@ -150,7 +152,93 @@ pub(crate) const MENU_FIELD_HELP: &[(&str, &str)] = &[
         "when",
         "Command; the entry is shown only while it succeeds.",
     ),
+    (
+        "disabled",
+        "Shell command; the row is dimmed and unselectable while it succeeds.",
+    ),
 ];
+
+/// A choice in the menu pop-out provider dropdown. `label` is both the dropdown
+/// text and the stable round-trip key; `provider` is the string written to the
+/// config (empty means leave the `provider` key out). `fields` are the main-box
+/// fields shown in addition to `provider`, `title` and `iconFont`.
+pub(crate) struct MenuProviderChoice {
+    pub(crate) label: &'static str,
+    pub(crate) provider: &'static str,
+    pub(crate) fields: &'static [&'static str],
+}
+
+pub(crate) const MENU_PROVIDERS: &[MenuProviderChoice] = &[
+    MenuProviderChoice {
+        label: "Open Application",
+        provider: "",
+        fields: &["target"],
+    },
+    MenuProviderChoice {
+        label: "Run Command",
+        provider: "",
+        fields: &["action"],
+    },
+    MenuProviderChoice {
+        label: "Open Webpage",
+        provider: "",
+        fields: &["target"],
+    },
+    MenuProviderChoice {
+        label: "Apps List",
+        provider: "apps",
+        fields: &[],
+    },
+];
+
+pub(crate) fn menu_provider_labels(extra: Option<String>) -> Vec<String> {
+    let mut labels: Vec<String> = MENU_PROVIDERS.iter().map(|c| c.label.to_string()).collect();
+    if let Some(extra) = extra {
+        labels.push(extra);
+    }
+    labels
+}
+
+pub(crate) fn menu_provider_value(label: &str) -> &str {
+    MENU_PROVIDERS
+        .iter()
+        .find(|c| c.label == label)
+        .map(|c| c.provider)
+        .unwrap_or(label)
+}
+
+pub(crate) fn menu_provider_fields(label: &str) -> &'static [&'static str] {
+    MENU_PROVIDERS
+        .iter()
+        .find(|c| c.label == label)
+        .map(|c| c.fields)
+        .unwrap_or(&[])
+}
+
+pub(crate) fn menu_provider_initial(provider: &str, target: &str, action: &str) -> String {
+    if !provider.is_empty() {
+        return MENU_PROVIDERS
+            .iter()
+            .find(|c| c.provider == provider)
+            .map(|c| c.label.to_string())
+            .unwrap_or_else(|| provider.to_string());
+    }
+    if !target.is_empty() {
+        return MENU_PROVIDERS
+            .iter()
+            .find(|c| c.fields.contains(&"target"))
+            .map(|c| c.label.to_string())
+            .unwrap_or_else(|| MENU_PROVIDERS[0].label.to_string());
+    }
+    if !action.is_empty() {
+        return MENU_PROVIDERS
+            .iter()
+            .find(|c| c.fields.contains(&"action"))
+            .map(|c| c.label.to_string())
+            .unwrap_or_else(|| MENU_PROVIDERS[0].label.to_string());
+    }
+    "Run Command".to_string()
+}
 
 /// The one-line captions under the field editors of a keybind pop-out.
 pub(crate) const KEYBIND_FIELD_HELP: &[(&str, &str)] = &[
@@ -190,7 +278,9 @@ mod tests {
 
     #[test]
     fn popout_help_covers_every_field() {
-        for name in ["provider", "target", "action", "checked", "when"] {
+        for name in [
+            "provider", "target", "action", "title", "iconFont", "checked", "when", "disabled",
+        ] {
             assert!(
                 menu_field_help(name).is_some(),
                 "missing menu help for {name}"
@@ -202,5 +292,32 @@ mod tests {
                 "missing keybind help for {name}"
             );
         }
+    }
+
+    #[test]
+    fn menu_provider_table_has_unique_labels() {
+        let mut seen = std::collections::HashSet::new();
+        for choice in MENU_PROVIDERS {
+            assert!(seen.insert(choice.label), "duplicate provider label");
+            for field in choice.fields {
+                assert!(
+                    menu_field_help(field).is_some(),
+                    "provider field {field} has no help"
+                );
+            }
+        }
+        assert!(
+            MENU_PROVIDERS.iter().any(|c| c.provider == "apps"),
+            "upstream apps provider missing"
+        );
+    }
+
+    #[test]
+    fn menu_provider_initial_picks_expected_choice() {
+        assert_eq!(menu_provider_initial("", "https://x", ""), "Open Application");
+        assert_eq!(menu_provider_initial("", "", "echo hi"), "Run Command");
+        assert_eq!(menu_provider_initial("apps", "", ""), "Apps List");
+        assert_eq!(menu_provider_initial("future", "", ""), "future");
+        assert_eq!(menu_provider_initial("", "", ""), "Run Command");
     }
 }

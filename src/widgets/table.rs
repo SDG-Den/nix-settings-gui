@@ -2,7 +2,7 @@ use super::basic::build_raw;
 use super::context::{BuildContext, ChangeHook};
 use super::dispatch::build;
 use super::editor::Editor;
-use super::nix::{attr_key, entry_text};
+use super::nix::{attr_key, entry_text, string_literal};
 use crate::dsl::{OptionSpec, WidgetKind};
 use crate::model::Record;
 use crate::scan;
@@ -28,9 +28,11 @@ pub(crate) struct TableRow {
     pub(crate) key_entry: gtk::Entry,
     pub(crate) orig_key: String,
     pub(crate) cells: Vec<TableCell>,
+    pub(crate) spec: OptionSpec,
 }
-pub(crate) fn table_row_identity_locked(list: bool, key_editable: bool, has_label: bool) -> bool {
-    !list && !key_editable && has_label
+
+pub(crate) fn table_row_identity_locked(list: bool, key_editable: bool) -> bool {
+    !list && !key_editable
 }
 
 pub(crate) fn table_first_cell_static(
@@ -128,8 +130,24 @@ pub(crate) fn build_table(record: &Record, ctx: &BuildContext, list: bool) -> Ed
         let type_hints = type_hints.clone();
         let widens = widens.clone();
         add.connect_clicked(move |_| {
+            let key = if !key_editable && !list {
+                let existing: Vec<String> = rows
+                    .borrow()
+                    .iter()
+                    .map(|row| row.key_entry.text().to_string())
+                    .collect();
+                let mut n = 1;
+                let mut candidate = "row".to_string();
+                while existing.contains(&candidate) {
+                    n += 1;
+                    candidate = format!("row{n}");
+                }
+                candidate
+            } else {
+                String::new()
+            };
             let scan_row = scan::TableRowScan {
-                key: String::new(),
+                key,
                 fields: columns
                     .iter()
                     .enumerate()
@@ -274,9 +292,15 @@ pub(crate) fn make_table_row(
     let mut slot_widens: Vec<bool> = Vec::new();
 
     if !list {
-        if table_row_identity_locked(list, key_editable, scan_row.spec.label.is_some()) {
+        if table_row_identity_locked(list, key_editable) {
+            let heading_text = scan_row
+                .spec
+                .label
+                .clone()
+                .filter(|label| !label.is_empty())
+                .unwrap_or_else(|| scan_row.key.clone());
             let heading = gtk::Label::builder()
-                .label(scan_row.spec.label.clone().unwrap_or_default())
+                .label(heading_text)
                 .xalign(0.0)
                 .tooltip_text("Row key")
                 .build();
@@ -390,6 +414,7 @@ pub(crate) fn make_table_row(
         key_entry,
         orig_key: scan_row.key.clone(),
         cells,
+        spec: scan_row.spec.clone(),
     }
 }
 
@@ -516,6 +541,31 @@ pub(crate) fn build_cell(
     build(&record, None, ctx)
 }
 
+/// Rebuild the `@table-item` comment for a row from its scanned spec, so a
+/// save does not wipe the label/hidden/visibleWhen directives.
+fn option_spec_to_comment(spec: &OptionSpec) -> String {
+    let mut parts = Vec::new();
+    if let Some(label) = &spec.label {
+        parts.push(format!("label = {};", string_literal(label)));
+    }
+    if spec.hidden {
+        parts.push("hidden = true;".to_string());
+    }
+    if let Some(visibility) = &spec.visible_when {
+        parts.push(format!("visibleWhen.path = {};", string_literal(&visibility.path)));
+        if let Some(equals) = &visibility.equals {
+            parts.push(format!("visibleWhen.equals = {equals};"));
+        }
+        if let Some(not_equals) = &visibility.not_equals {
+            parts.push(format!("visibleWhen.notEquals = {not_equals};"));
+        }
+    }
+    if parts.is_empty() {
+        return String::new();
+    }
+    format!("/* @table-item {} */", parts.join(" "))
+}
+
 /// Serialize a table editor's rows back to an attribute set or a list.
 pub(crate) fn table_nix(editor: &Editor) -> String {
     let Editor::Table {
@@ -545,11 +595,24 @@ pub(crate) fn table_nix(editor: &Editor) -> String {
         if *list {
             parts.push(format!("{{ {} }}", fields.join(" ")));
         } else {
-            parts.push(format!(
-                "{} = {{ {} }};",
-                attr_key(&row.key_entry.text()),
-                fields.join(" ")
-            ));
+            let raw_key = row.key_entry.text();
+            let key_text = raw_key.trim();
+            let key = if key_text.is_empty() {
+                if row.orig_key.trim().is_empty() {
+                    "row".to_string()
+                } else {
+                    row.orig_key.clone()
+                }
+            } else {
+                key_text.to_string()
+            };
+            let comment = option_spec_to_comment(&row.spec);
+            let entry = format!("{} = {{ {} }};", attr_key(&key), fields.join(" "));
+            if comment.is_empty() {
+                parts.push(entry);
+            } else {
+                parts.push(format!("{comment} {entry}"));
+            }
         }
     }
     if *list {
@@ -590,10 +653,9 @@ mod tests {
 
     #[test]
     fn craftapps_rows_lock_names_and_edit_first_cell() {
-        assert!(table_row_identity_locked(false, false, true));
-        assert!(!table_row_identity_locked(false, false, false));
-        assert!(!table_row_identity_locked(false, true, true));
-        assert!(!table_row_identity_locked(true, false, true));
+        assert!(table_row_identity_locked(false, false));
+        assert!(!table_row_identity_locked(false, true));
+        assert!(!table_row_identity_locked(true, false));
         assert!(table_first_cell_static(true, true, false));
         assert!(!table_first_cell_static(false, true, false));
         assert!(!table_first_cell_static(true, false, false));

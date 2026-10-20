@@ -61,6 +61,7 @@ pub(crate) const CC_GRID_REGISTRY: &[&str] = &[
     "doNotDisturb",
     "idleInhibitor",
     "runningApps",
+    "plugin_dankKDEConnect",
 ];
 pub(crate) const DASH_GRID_REGISTRY: &[&str] = &[
     "clock",
@@ -138,6 +139,7 @@ pub(crate) struct GridLayoutState {
     pub(crate) adder_slot: gtk::Box,
     pub(crate) footer_flow: Option<gtk::FlowBox>,
     pub(crate) size_caption: gtk::Label,
+    pub(crate) status: gtk::Label,
     pub(crate) advanced: bool,
     pub(crate) drag_index: Rc<RefCell<Option<usize>>>,
     pub(crate) size_index: Rc<RefCell<Option<usize>>>,
@@ -174,6 +176,10 @@ pub(crate) fn build_grid_configuration(record: &Record, ctx: &BuildContext) -> E
         .xalign(0.0)
         .css_classes(["dim-label"])
         .build();
+    let status = gtk::Label::builder()
+        .xalign(0.0)
+        .css_classes(["dim-label", "error"])
+        .build();
     let footer_flow = profile.has_footer.then(|| {
         let flow = gtk::FlowBox::new();
         flow.set_selection_mode(gtk::SelectionMode::None);
@@ -182,6 +188,11 @@ pub(crate) fn build_grid_configuration(record: &Record, ctx: &BuildContext) -> E
         flow.set_row_spacing(8);
         flow
     });
+
+    let extras_expander = gtk::Expander::new(Some("More settings"));
+    extras_expander.set_expanded(false);
+    let extras_box = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    extras_expander.set_child(Some(&extras_box));
 
     root.append(&canvas);
     if let Some(flow) = &footer_flow {
@@ -193,8 +204,6 @@ pub(crate) fn build_grid_configuration(record: &Record, ctx: &BuildContext) -> E
         root.append(&heading);
         root.append(flow);
     }
-    root.append(&adder_slot);
-    root.append(&details);
 
     let mut orig_ids = Vec::new();
     let mut extras = Vec::new();
@@ -215,11 +224,16 @@ pub(crate) fn build_grid_configuration(record: &Record, ctx: &BuildContext) -> E
             let visible = !(child.spec.hidden && !ctx.advanced);
             let editor = build_bespoke_child(&child, ctx);
             if visible {
-                root.append(&build_child_row(&child, &editor, 1));
+                extras_box.append(&build_child_row(&child, &editor, 1));
             }
             (child, editor)
         })
         .collect();
+    if extras_box.first_child().is_some() {
+        root.append(&extras_expander);
+    }
+    root.append(&adder_slot);
+    root.append(&details);
 
     let state = Rc::new(GridLayoutState {
         profile,
@@ -233,6 +247,7 @@ pub(crate) fn build_grid_configuration(record: &Record, ctx: &BuildContext) -> E
         adder_slot: adder_slot.clone(),
         footer_flow,
         size_caption: size_caption.clone(),
+        status: status.clone(),
         advanced: ctx.advanced,
         drag_index: Rc::new(RefCell::new(None)),
         size_index: Rc::new(RefCell::new(None)),
@@ -472,6 +487,7 @@ pub(crate) fn grid_cancel(state: &Rc<GridLayoutState>) {
     grid_restore_pinned(state);
     grid_repack(state, None, false);
     grid_reattach(state);
+    grid_set_status(state, "");
 }
 
 /// Recompute the committed cells of every non-footer tile. `interacting` is
@@ -571,6 +587,10 @@ pub(crate) fn grid_update_size_caption(state: &Rc<GridLayoutState>) {
         })
         .unwrap_or_default();
     state.size_caption.set_text(&text);
+}
+
+pub(crate) fn grid_set_status(state: &Rc<GridLayoutState>, message: &str) {
+    state.status.set_text(message);
 }
 
 pub(crate) fn grid_update_strips(state: &Rc<GridLayoutState>) {

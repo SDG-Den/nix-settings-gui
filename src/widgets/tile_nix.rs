@@ -1,15 +1,16 @@
 use super::fields::attrset_field_nix;
-use super::nix::{attr_key, quote, truthy};
+use super::nix::{attr_key, quote};
 use super::tile::WidgetTile;
 use super::tile_list::WidgetTileList;
 
+#[cfg(test)]
+use super::nix::truthy;
 #[cfg(test)]
 use crate::scan;
 /// A tile's serialization inputs, split from the GTK state so order
 /// assignment and emission are unit-testable without a display.
 pub(crate) struct TileEmit {
     pub(crate) id: String,
-    pub(crate) enabled: bool,
     pub(crate) field_lines: Vec<String>,
     pub(crate) orig_order: Option<i64>,
 }
@@ -36,7 +37,7 @@ pub(crate) fn assign_tile_orders(orig: &[Option<i64>]) -> Vec<String> {
 }
 
 #[cfg(test)]
-pub(crate) fn tile_emit_from_scan(row: &scan::TableRowScan) -> TileEmit {
+pub(crate) fn tile_emit_from_scan(row: &scan::TableRowScan) -> Option<TileEmit> {
     let mut enabled = true;
     let mut orig_order = None;
     let mut field_lines = Vec::new();
@@ -48,12 +49,14 @@ pub(crate) fn tile_emit_from_scan(row: &scan::TableRowScan) -> TileEmit {
             _ => field_lines.push(format!("{} = {};", attr_key(name), raw)),
         }
     }
-    TileEmit {
+    if !enabled {
+        return None;
+    }
+    Some(TileEmit {
         id: row.key.clone(),
-        enabled,
         field_lines,
         orig_order,
-    }
+    })
 }
 
 pub(crate) fn tile_emit_from_tile(tile: &WidgetTile) -> TileEmit {
@@ -65,14 +68,14 @@ pub(crate) fn tile_emit_from_tile(tile: &WidgetTile) -> TileEmit {
         .collect();
     TileEmit {
         id: tile.id.clone(),
-        enabled: tile.enabled.is_active(),
         field_lines,
         orig_order: tile.orig_order.trim().parse::<i64>().ok(),
     }
 }
 
-/// Emit the attrset form of a widget list: `{ id = { enabled = ...;
-/// _order = ...; ... }; ... }`.
+/// Emit the attrset form of a widget list: `{ id = { enabled = true; _order = ...; ... }; ... }`.
+/// `enabled` is always `true`; the backend requires the key and the presence model never emits
+/// `false`.
 pub(crate) fn tiles_nix(entries: &[TileEmit]) -> String {
     let orders = assign_tile_orders(
         &entries
@@ -84,7 +87,7 @@ pub(crate) fn tiles_nix(entries: &[TileEmit]) -> String {
         .iter()
         .zip(orders.iter())
         .map(|(entry, order)| {
-            let mut body = format!("enabled = {}; _order = {};", entry.enabled, order);
+            let mut body = format!("enabled = true; _order = {};", order);
             for line in &entry.field_lines {
                 body.push(' ');
                 body.push_str(line);
@@ -124,9 +127,10 @@ pub(crate) fn parse_string_list(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// The tile list matches its scanned original: same id sequence, same
-/// enabled state, and every field editor on its original raw text. `_order`
-/// never participates; it is derived on save.
+/// The tile list matches its scanned original: same id sequence and every
+/// field editor on its original raw text. `enabled` never participates;
+/// entries with a falsy `enabled` are dropped at load and `_order` is derived
+/// on save.
 pub(crate) fn tiles_unchanged(list: &WidgetTileList) -> bool {
     let tiles = list.tiles.borrow();
     tiles.len() == list.orig_ids.len()
@@ -136,7 +140,6 @@ pub(crate) fn tiles_unchanged(list: &WidgetTileList) -> bool {
             .all(|(tile, orig_id)| {
                 tile.orig_id == *orig_id
                     && tile.id == tile.orig_id
-                    && tile.enabled.is_active() == truthy(&tile.orig_enabled)
                     && tile
                         .fields
                         .borrow()
@@ -169,18 +172,19 @@ mod tests {
     fn scans(value: &str) -> Vec<TileEmit> {
         scan::scan_table(value, false)
             .iter()
-            .map(tile_emit_from_scan)
+            .filter_map(tile_emit_from_scan)
             .collect()
     }
 
     #[test]
     fn tiles_nix_round_trips_bar_left_list() {
-        let source = "{ workspaceSwitcher = { enabled = true; _order = 10; showOccupiedWorkspacesOnly = true; showWorkspaceIndex = true; showWorkspacePadding = true; workspacePaddingCount = 5; dwlShowAllTags = false; }; layout = { enabled = true; _order = 20; }; launcherButton = { enabled = true; _order = 30; }; focusedWindow = { enabled = true; _order = 40; }; }";
+        let expected = "{ workspaceSwitcher = { enabled = true; _order = 10; showOccupiedWorkspacesOnly = true; showWorkspaceIndex = true; showWorkspacePadding = true; workspacePaddingCount = 5; dwlShowAllTags = false; }; layout = { enabled = true; _order = 20; }; launcherButton = { enabled = true; _order = 30; }; focusedWindow = { enabled = true; _order = 40; }; }";
+        let source = "{ workspaceSwitcher = { enabled = true; _order = 10; showOccupiedWorkspacesOnly = true; showWorkspaceIndex = true; showWorkspacePadding = true; workspacePaddingCount = 5; dwlShowAllTags = false; }; layout = { enabled = true; _order = 20; }; launcherButton = { enabled = true; _order = 30; }; focusedWindow = { enabled = true; _order = 40; }; offWidget = { enabled = false; _order = 50; }; }";
         let entries = scans(source);
-        assert_eq!(entries.len(), 4);
+        assert_eq!(entries.len(), 4, "enabled = false entries never load");
         assert_eq!(entries[0].orig_order, Some(10));
-        assert_eq!(tiles_nix(&entries), source);
-        assert_eq!(tiles_nix(&scans(&tiles_nix(&entries))), source);
+        assert_eq!(tiles_nix(&entries), expected);
+        assert_eq!(tiles_nix(&scans(source)), expected);
     }
 
     #[test]
@@ -214,16 +218,18 @@ mod tests {
 
     #[test]
     fn tiles_nix_emits_dock_keys_in_order() {
-        let source = "{ dockLauncher = { enabled = true; _order = 10; }; appsDock = { enabled = true; _order = 20; }; dockTrash = { enabled = true; _order = 30; }; }";
-        assert_eq!(tiles_nix(&scans(source)), source);
+        let expected = "{ dockLauncher = { enabled = true; _order = 10; }; appsDock = { enabled = true; _order = 20; }; dockTrash = { enabled = true; _order = 30; }; }";
+        let source = "{ dockLauncher = { enabled = true; _order = 10; }; appsDock = { enabled = true; _order = 20; }; dockTrash = { enabled = true; _order = 30; }; offDock = { enabled = false; _order = 40; }; }";
+        assert_eq!(tiles_nix(&scans(source)), expected);
     }
 
     #[test]
     fn custom_widget_round_trips() {
-        let mut entries = scans("{ layout = { enabled = true; _order = 10; }; }");
+        let mut entries =
+            scans("{ layout = { enabled = true; _order = 10; }; off = { enabled = false; _order = 5; }; }");
+        assert_eq!(entries.len(), 1, "enabled = false entries never load");
         entries.push(TileEmit {
             id: "myThing".to_string(),
-            enabled: true,
             field_lines: vec!["foo = \"bar\";".to_string()],
             orig_order: None,
         });

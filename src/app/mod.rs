@@ -24,7 +24,7 @@ use git::start_git_sync;
 use menu::{open_flake, rebuild_menu_list, rebuild_view};
 use pump::{handle_msg, populate_flakes};
 use save::{collect_edits, discard_changes, preview_changes, reload, run_changes_prompt, save_all};
-use state::{App, Msg, PackageService, Tx};
+use state::{App, Msg, PackageService, PluginRegistryState, Tx};
 
 pub const APP_ID: &str = "org.nix_settings_gui.NixSettingsGui";
 
@@ -215,6 +215,11 @@ fn build_ui(app: &adw::Application, tx: &Tx) -> Rc<App> {
         spinner,
         progress,
         package_service: PackageService::new(),
+        plugin_registry: Rc::new(PluginRegistryState {
+            cache: RefCell::new(None),
+            pending: RefCell::new(Vec::new()),
+            loading: Cell::new(false),
+        }),
         tx: tx.clone(),
         config: RefCell::new(AppConfig::load()),
         base: RefCell::new(String::new()),

@@ -1,6 +1,7 @@
 use super::basic::clear_rows;
 use super::context::{BuildContext, ChangeHook};
 use super::names::widget_display_name;
+use super::nix::truthy;
 use super::tile::{attach_tile_dnd, make_field_for_preset, make_widget_tile, WidgetTile};
 use super::tile_nix::{parse_string_list, valid_widget_id};
 use crate::dsl::{PresetFieldSpec, WidgetPresetSpec};
@@ -69,6 +70,7 @@ pub(crate) fn add_tile_from_preset(
             preset
                 .defaults
                 .iter()
+                .filter(|(name, _)| name.as_str() != "enabled")
                 .map(|(name, lit)| {
                     let spec = specs.iter().find(|spec| spec.name == *name);
                     let mut field = make_field_for_preset(name, &lit.to_nix(), spec, ctx);
@@ -81,7 +83,6 @@ pub(crate) fn add_tile_from_preset(
     let tile = make_widget_tile(
         &preset.id,
         "",
-        "true",
         "",
         Some(preset.clone()),
         fields,
@@ -198,7 +199,6 @@ impl WidgetTileList {
                 let tile = make_widget_tile(
                     &id,
                     &id,
-                    "true",
                     "",
                     None,
                     Rc::new(RefCell::new(Vec::new())),
@@ -225,6 +225,9 @@ impl WidgetTileList {
                         _ => scanned.push((name.clone(), raw.trim().to_string())),
                     }
                 }
+                if !truthy(&enabled_raw) {
+                    continue;
+                }
                 let preset_entry = presets.iter().find(|(preset, _)| preset.id == scan_row.key);
                 let preset = preset_entry.map(|(preset, _)| preset.clone());
                 let specs: Vec<PresetFieldSpec> = preset_entry
@@ -242,7 +245,6 @@ impl WidgetTileList {
                 let tile = make_widget_tile(
                     &scan_row.key,
                     &scan_row.key,
-                    &enabled_raw,
                     &order_raw,
                     preset,
                     fields,
@@ -362,7 +364,6 @@ impl WidgetTileList {
                 let tile = make_widget_tile(
                     &id,
                     "",
-                    "true",
                     "",
                     None,
                     Rc::new(RefCell::new(Vec::new())),

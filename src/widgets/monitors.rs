@@ -1,14 +1,17 @@
 use super::context::{BuildContext, ChangeHook};
 use super::editor::Editor;
 use super::fields::{attrset_field_nix, build_field_cell, field, AttrsetField};
-use super::monitor_geometry::{effective_size, monitor_geometry, monitor_orig, resolve_release};
+use super::monitor_geometry::{
+    monitor_orig, resolve_release, row_footprint, scene_bounds, Viewport, SNAP_TOLERANCE, VIEW_PAD,
+};
 use super::monitor_picker::open_monitor_picker;
-use super::nix::{entry_text, number_literal, quote};
+use super::nix::{attr_key, entry_text, number_literal, quote};
 use crate::dsl::OptionSpec;
 use crate::model::Record;
 use crate::monitor_detect::DetectedMode;
 use crate::scan;
 use crate::value;
+use gtk::glib;
 use gtk::prelude::*;
 use std::cell::Cell;
 use std::cell::RefCell;
@@ -112,6 +115,12 @@ pub(crate) fn monitor_row_nix(row: &MonitorRow) -> String {
             parts.push(line);
         }
     }
+    for key in MONITOR_PASSTHROUGH_FIELDS.iter().copied() {
+        let raw = monitor_orig(row, key);
+        if !raw.is_empty() && raw != "null" {
+            parts.push(format!("{} = {};", attr_key(key), raw));
+        }
+    }
     format!("{{ {} }}", parts.join(" "))
 }
 
@@ -146,15 +155,17 @@ pub(crate) const MONITOR_EXTRAS: &[(&str, bool)] = &[
     ("hdr_force", true),
     ("disable", true),
     ("primary", true),
-    ("make", false),
-    ("model", false),
-    ("serial", false),
     ("icc", false),
-    ("custom", false),
     ("hdr_min_lum", false),
     ("hdr_max_lum", false),
     ("hdr_max_avg_lum", false),
 ];
+
+pub(crate) const MONITOR_MATCH_FIELDS: &[(&str, &str)] =
+    &[("make", "Make"), ("model", "Model"), ("serial", "Serial")];
+
+pub(crate) const MONITOR_PASSTHROUGH_FIELDS: &[&str] =
+    &["make", "model", "serial", "custom"];
 
 /// Attach a caption and a control to a monitor form grid.
 pub(crate) fn attach_cell(
@@ -173,8 +184,9 @@ pub(crate) fn attach_cell(
     grid.attach(widget, col + 1, row, 1, 1);
 }
 
-/// One monitor rule: core geometry on a grid, the remaining fields behind an
-/// "Extra rules" expander, and a remove button.
+/// One monitor rule: core geometry on a grid, a read-only "Applies to
+/// (match)" block when make/model/serial are set, the remaining effect
+/// fields behind an "Extra rules" expander, and a remove button.
 pub(crate) fn make_monitor_row(scan_row: &scan::TableRowScan, ctx: &BuildContext) -> MonitorRow {
     let get = |name: &str| field(&scan_row.fields, name).unwrap_or("");
     let number_spin = |value: &str, default: f64, min: f64, max: f64, step: f64| {
@@ -186,13 +198,15 @@ pub(crate) fn make_monitor_row(scan_row: &scan::TableRowScan, ctx: &BuildContext
 
     let name = gtk::Entry::new();
     name.set_text(entry_text(get("name")).as_str());
-    name.set_tooltip_text(Some("Output name"));
+    name.set_tooltip_text(Some(
+        "Matcher: this rule applies to the output with this name. Regex supported.",
+    ));
 
     let width = number_spin(get("width"), 0.0, 0.0, 16384.0, 1.0);
     let height = number_spin(get("height"), 0.0, 0.0, 16384.0, 1.0);
     let refresh = number_spin(get("refresh"), 0.0, 0.0, 1000.0, 1.0);
-    let x = number_spin(get("x"), 0.0, 0.0, 16384.0, 1.0);
-    let y = number_spin(get("y"), 0.0, 0.0, 16384.0, 1.0);
+    let x = number_spin(get("x"), 0.0, -16384.0, 16384.0, 1.0);
+    let y = number_spin(get("y"), 0.0, -16384.0, 16384.0, 1.0);
     let scale = gtk::SpinButton::with_range(0.0, 16.0, 0.05);
     scale.set_digits(2);
     scale.set_value(get("scale").parse::<f64>().unwrap_or(1.0));
@@ -214,6 +228,35 @@ pub(crate) fn make_monitor_row(scan_row: &scan::TableRowScan, ctx: &BuildContext
     attach_cell(&grid, 3, 0, "Scale", &scale);
     attach_cell(&grid, 3, 2, "Transform", &rr.root());
     form_box.append(&grid);
+
+    let mut match_rows = Vec::new();
+    for (key, caption_text) in MONITOR_MATCH_FIELDS.iter().copied() {
+        let raw = get(key);
+        if raw.is_empty() || raw == "null" {
+            continue;
+        }
+        let value = entry_text(raw);
+        if value.is_empty() {
+            continue;
+        }
+        match_rows.push((caption_text, value));
+    }
+    if !match_rows.is_empty() {
+        let heading = gtk::Label::builder()
+            .xalign(0.0)
+            .label("Applies to (match)")
+            .css_classes(["heading"])
+            .build();
+        form_box.append(&heading);
+        let match_grid = gtk::Grid::new();
+        match_grid.set_column_spacing(12);
+        match_grid.set_row_spacing(6);
+        for (row_index, (caption_text, value)) in match_rows.iter().enumerate() {
+            let value_label = gtk::Label::builder().xalign(0.0).label(value).build();
+            attach_cell(&match_grid, row_index as i32, 0, caption_text, &value_label);
+        }
+        form_box.append(&match_grid);
+    }
 
     let mut extras = Vec::new();
     let expander = gtk::Expander::new(Some("Extra rules"));
@@ -286,15 +329,54 @@ pub(crate) fn make_monitor_row(scan_row: &scan::TableRowScan, ctx: &BuildContext
     }
 }
 #[derive(Clone, Copy)]
-pub(crate) struct MonitorView {
-    pub(crate) scale: f64,
-    pub(crate) min_x: f64,
-    pub(crate) min_y: f64,
+pub(crate) enum DragMode {
+    None,
+    Pan {
+        origin_x: f64,
+        origin_y: f64,
+    },
+    Monitor {
+        start_px: f64,
+        start_py: f64,
+        grab_dx: f64,
+        grab_dy: f64,
+    },
 }
+
+pub(crate) struct MonitorCanvas {
+    pub(crate) canvas: gtk::DrawingArea,
+    pub(crate) view: Rc<Cell<Viewport>>,
+    pub(crate) last_size: Rc<Cell<(f64, f64)>>,
+}
+
+impl Clone for MonitorCanvas {
+    fn clone(&self) -> Self {
+        MonitorCanvas {
+            canvas: self.canvas.clone(),
+            view: self.view.clone(),
+            last_size: self.last_size.clone(),
+        }
+    }
+}
+
+impl MonitorCanvas {
+    pub(crate) fn refit(&self, rows: &[MonitorRow]) {
+        if let Some((min_x, min_y, max_x, max_y)) = scene_bounds(rows) {
+            let (w, h) = self.last_size.get();
+            self.view.set(Viewport::fit(min_x, min_y, max_x, max_y, w, h));
+        }
+        self.canvas.queue_draw();
+    }
+    pub(crate) fn redraw(&self) {
+        self.canvas.queue_draw();
+    }
+}
+
 pub(crate) fn attach_monitor_row(
     form: &gtk::Box,
     rows: &Rc<RefCell<Vec<MonitorRow>>>,
     on_change: &ChangeHook,
+    mc: &MonitorCanvas,
     row: MonitorRow,
 ) -> usize {
     let row_box = row.form_box.clone();
@@ -302,12 +384,14 @@ pub(crate) fn attach_monitor_row(
         let form = form.clone();
         let rows = rows.clone();
         let on_change = on_change.clone();
+        let mc = mc.clone();
         row.remove.connect_clicked(move |_| {
             form.remove(&row_box);
             rows.borrow_mut().retain(|r| r.form_box != row_box);
             if let Some(cb) = on_change.borrow().as_ref() {
                 cb();
             }
+            mc.refit(&rows.borrow());
         });
     }
     form.append(&row.form_box);
@@ -323,63 +407,48 @@ pub(crate) fn build_monitors(record: &Record) -> Editor {
     let on_change: ChangeHook = Rc::new(RefCell::new(None));
     let rows = Rc::new(RefCell::new(Vec::new()));
     let selected = Rc::new(Cell::new(0usize));
-    let view = Rc::new(Cell::new(MonitorView {
+    let view = Rc::new(Cell::new(Viewport {
         scale: 1.0,
-        min_x: 0.0,
-        min_y: 0.0,
+        origin_x: 0.0,
+        origin_y: 0.0,
     }));
+    let last_size = Rc::new(Cell::new((640.0f64, 400.0f64)));
 
     let canvas = gtk::DrawingArea::builder()
         .content_width(640)
-        .content_height(320)
+        .content_height(400)
         .build();
     canvas.set_hexpand(true);
-    canvas.set_size_request(-1, 320);
+    canvas.set_size_request(-1, 400);
     canvas.set_draw_func({
         let rows = rows.clone();
         let selected = selected.clone();
         let view = view.clone();
+        let last_size = last_size.clone();
         move |_, cr, width, height| {
+            let (last_w, last_h) = last_size.get();
+            if last_w != width as f64 || last_h != height as f64 {
+                last_size.set((width as f64, height as f64));
+                let rows_snapshot = rows.borrow();
+                if let Some((min_x, min_y, max_x, max_y)) = scene_bounds(&rows_snapshot) {
+                    view.set(Viewport::fit(
+                        min_x,
+                        min_y,
+                        max_x,
+                        max_y,
+                        width as f64,
+                        height as f64,
+                    ));
+                }
+            }
             cr.set_source_rgb(0.08, 0.08, 0.10);
             cr.rectangle(0.0, 0.0, width as f64, height as f64);
             cr.fill().ok();
+            let v = view.get();
             let rows = rows.borrow();
-            let mut min_x = f64::MAX;
-            let mut min_y = f64::MAX;
-            let mut max_x = f64::MIN;
-            let mut max_y = f64::MIN;
-            for row in rows.iter() {
-                let (x, y, w, h, _, _) = monitor_geometry(row);
-                let (w, h) = effective_size(w, h, row.rr.current_choice());
-                min_x = min_x.min(x);
-                min_y = min_y.min(y);
-                max_x = max_x.max(x + w);
-                max_y = max_y.max(y + h);
-            }
-            if min_x == f64::MAX {
-                return;
-            }
-            let pad = 16.0;
-            let span_x = (max_x - min_x).max(1.0);
-            let span_y = (max_y - min_y).max(1.0);
-            let scale = f64::min(
-                (width as f64 - 2.0 * pad) / span_x,
-                (height as f64 - 2.0 * pad) / span_y,
-            )
-            .max(0.001);
-            view.set(MonitorView {
-                scale,
-                min_x,
-                min_y,
-            });
-
             for (index, row) in rows.iter().enumerate() {
-                let (x, y, w, h, label, sized) = monitor_geometry(row);
-                let (w, h) = effective_size(w, h, row.rr.current_choice());
-                let px = pad + (x - min_x) * scale;
-                let py = pad + (y - min_y) * scale;
-                let pw = (w * scale).max(24.0);
-                let ph = (h * scale).max(16.0);
+                let (x, y, w, h, label, sized) = row_footprint(row);
+                let (px, py, pw, ph) = v.rect_on_screen(x, y, w, h);
                 if index == selected.get() {
                     cr.set_source_rgb(0.27, 0.45, 0.75);
                 } else {
@@ -415,6 +484,57 @@ pub(crate) fn build_monitors(record: &Record) -> Editor {
     });
     root.append(&canvas);
 
+    let mc = MonitorCanvas {
+        canvas: canvas.clone(),
+        view: view.clone(),
+        last_size: last_size.clone(),
+    };
+
+    let last_pointer = Rc::new(Cell::new((320.0f64, 200.0f64)));
+    {
+        let last_pointer = last_pointer.clone();
+        let motion = gtk::EventControllerMotion::new();
+        motion.connect_motion(move |_, x, y| last_pointer.set((x, y)));
+        canvas.add_controller(motion);
+    }
+    {
+        let canvas = canvas.clone();
+        let view = view.clone();
+        let last_pointer = last_pointer.clone();
+        let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
+        let redraw = canvas.clone();
+        scroll.connect_scroll(move |_, _dx, dy| {
+            if dy == 0.0 {
+                return glib::Propagation::Proceed;
+            }
+            let factor = if dy < 0.0 { 1.1 } else { 1.0 / 1.1 };
+            let v = view.get();
+            let new_scale = (v.scale * factor).clamp(0.02, 8.0);
+            let (px, py) = last_pointer.get();
+            let cfg_x = v.to_config_x(px);
+            let cfg_y = v.to_config_y(py);
+            view.set(Viewport {
+                scale: new_scale,
+                origin_x: cfg_x - (px - VIEW_PAD) / new_scale,
+                origin_y: cfg_y - (py - VIEW_PAD) / new_scale,
+            });
+            redraw.queue_draw();
+            glib::Propagation::Stop
+        });
+        canvas.add_controller(scroll);
+    }
+
+    let recenter = gtk::Button::with_label("Re-center view");
+    recenter.set_halign(gtk::Align::Start);
+    root.append(&recenter);
+    {
+        let mc_recenter = mc.clone();
+        let rows = rows.clone();
+        recenter.connect_clicked(move |_| {
+            mc_recenter.refit(&rows.borrow());
+        });
+    }
+
     let form = gtk::Box::new(gtk::Orientation::Vertical, 6);
     form.set_hexpand(true);
     root.append(&form);
@@ -425,21 +545,7 @@ pub(crate) fn build_monitors(record: &Record) -> Editor {
     {
         let row = make_monitor_row(&scan_row, &ctx);
         row.form_box.set_visible(index == 0);
-        {
-            let form = form.clone();
-            let rows = rows.clone();
-            let on_change = on_change.clone();
-            let row_box = row.form_box.clone();
-            row.remove.connect_clicked(move |_| {
-                form.remove(&row_box);
-                rows.borrow_mut().retain(|r| r.form_box != row_box);
-                if let Some(cb) = on_change.borrow().as_ref() {
-                    cb();
-                }
-            });
-        }
-        form.append(&row.form_box);
-        rows.borrow_mut().push(row);
+        attach_monitor_row(&form, &rows, &on_change, &mc, row);
     }
 
     {
@@ -447,16 +553,12 @@ pub(crate) fn build_monitors(record: &Record) -> Editor {
         let rows = rows.clone();
         let selected = selected.clone();
         let view = view.clone();
-        let redraw = canvas.clone();
+        let mc = mc.clone();
         click.connect_pressed(move |_, _, px, py| {
-            let point = view.get();
+            let v = view.get();
             let hit = rows.borrow().iter().position(|row| {
-                let (x, y, w, h, _, _) = monitor_geometry(row);
-                let (w, h) = effective_size(w, h, row.rr.current_choice());
-                let left = 16.0 + (x - point.min_x) * point.scale;
-                let top = 16.0 + (y - point.min_y) * point.scale;
-                let width = (w * point.scale).max(24.0);
-                let height = (h * point.scale).max(16.0);
+                let (x, y, w, h, _, _) = row_footprint(row);
+                let (left, top, width, height) = v.rect_on_screen(x, y, w, h);
                 px >= left && px <= left + width && py >= top && py <= top + height
             });
             if let Some(index) = hit {
@@ -464,7 +566,7 @@ pub(crate) fn build_monitors(record: &Record) -> Editor {
                 for (row_index, row) in rows.borrow().iter().enumerate() {
                     row.form_box.set_visible(row_index == index);
                 }
-                redraw.queue_draw();
+                mc.redraw();
             }
         });
         canvas.add_controller(click);
@@ -472,73 +574,129 @@ pub(crate) fn build_monitors(record: &Record) -> Editor {
 
     {
         let drag = gtk::GestureDrag::new();
+        let drag_mode = Rc::new(Cell::new(DragMode::None));
         let rows = rows.clone();
         let selected = selected.clone();
         let view = view.clone();
         let on_change = on_change.clone();
-        let last = Rc::new(Cell::new((0.0f64, 0.0f64)));
+        let mc = mc.clone();
         drag.connect_drag_begin({
-            let last = last.clone();
-            move |_, _, _| last.set((0.0, 0.0))
+            let rows = rows.clone();
+            let selected = selected.clone();
+            let view = view.clone();
+            let drag_mode = drag_mode.clone();
+            let mc = mc.clone();
+            move |_, x, y| {
+                let v = view.get();
+                let rows = rows.borrow();
+                let hit = rows.iter().position(|row| {
+                    let (rx, ry, rw, rh, _, _) = row_footprint(row);
+                    let (left, top, width, height) = v.rect_on_screen(rx, ry, rw, rh);
+                    x >= left && x <= left + width && y >= top && y <= top + height
+                });
+                drag_mode.set(match hit {
+                    Some(index) => {
+                        selected.set(index);
+                        for (i, r) in rows.iter().enumerate() {
+                            r.form_box.set_visible(i == index);
+                        }
+                        let row = &rows[index];
+                        let cfg_x = v.to_config_x(x);
+                        let cfg_y = v.to_config_y(y);
+                        DragMode::Monitor {
+                            start_px: x,
+                            start_py: y,
+                            grab_dx: cfg_x - row.x.value(),
+                            grab_dy: cfg_y - row.y.value(),
+                        }
+                    }
+                    None => DragMode::Pan {
+                        origin_x: v.origin_x,
+                        origin_y: v.origin_y,
+                    },
+                });
+                mc.redraw();
+            }
         });
         drag.connect_drag_update({
             let rows = rows.clone();
             let selected = selected.clone();
             let view = view.clone();
-            let redraw = canvas.clone();
             let on_change = on_change.clone();
+            let mc = mc.clone();
+            let drag_mode = drag_mode.clone();
             move |gesture, _, _| {
                 let (offset_x, offset_y) = gesture.offset().unwrap_or((0.0, 0.0));
-                let (prev_x, prev_y) = last.get();
-                last.set((offset_x, offset_y));
-                let scale = view.get().scale;
-                let rows = rows.borrow();
-                let Some(row) = rows.get(selected.get()) else {
-                    return;
-                };
-                let (x, y, _, _, _, _) = monitor_geometry(row);
-                let candidate_x = x + (offset_x - prev_x) / scale;
-                let candidate_y = y + (offset_y - prev_y) / scale;
-                row.x.set_value(candidate_x);
-                row.y.set_value(candidate_y);
-                drop(rows);
-                redraw.queue_draw();
-                if let Some(cb) = on_change.borrow().as_ref() {
-                    cb();
+                match drag_mode.get() {
+                    DragMode::Monitor {
+                        start_px,
+                        start_py,
+                        grab_dx,
+                        grab_dy,
+                    } => {
+                        let v = view.get();
+                        let px = start_px + offset_x;
+                        let py = start_py + offset_y;
+                        let new_x = (v.to_config_x(px) - grab_dx).round();
+                        let new_y = (v.to_config_y(py) - grab_dy).round();
+                        let rows = rows.borrow();
+                        let Some(row) = rows.get(selected.get()) else {
+                            return;
+                        };
+                        row.x.set_value(new_x);
+                        row.y.set_value(new_y);
+                        drop(rows);
+                        mc.redraw();
+                        if let Some(cb) = on_change.borrow().as_ref() {
+                            cb();
+                        }
+                    }
+                    DragMode::Pan {
+                        origin_x,
+                        origin_y,
+                    } => {
+                        let v = view.get();
+                        view.set(Viewport {
+                            scale: v.scale,
+                            origin_x: origin_x - offset_x / v.scale,
+                            origin_y: origin_y - offset_y / v.scale,
+                        });
+                        mc.redraw();
+                    }
+                    DragMode::None => {}
                 }
             }
         });
         drag.connect_drag_end({
             let rows = rows.clone();
             let selected = selected.clone();
-            let view = view.clone();
-            let redraw = canvas.clone();
             let on_change = on_change.clone();
+            let mc = mc.clone();
             move |_, _, _| {
-                let scale = view.get().scale;
-                let rows = rows.borrow();
-                let Some(row) = rows.get(selected.get()) else {
-                    return;
-                };
-                let (x, y, w, h, _, _) = monitor_geometry(row);
-                let (w, h) = effective_size(w, h, row.rr.current_choice());
-                let others: Vec<(f64, f64, f64, f64)> = rows
-                    .iter()
-                    .filter(|other| !std::ptr::eq(*other, row))
-                    .map(|other| {
-                        let (ox, oy, ow, oh, _, _) = monitor_geometry(other);
-                        let (ow, oh) = effective_size(ow, oh, other.rr.current_choice());
-                        (ox, oy, ow, oh)
-                    })
-                    .collect();
-                let (nx, ny) = resolve_release(x, y, w, h, &others, 12.0 / scale);
-                row.x.set_value(nx);
-                row.y.set_value(ny);
-                drop(rows);
-                redraw.queue_draw();
-                if let Some(cb) = on_change.borrow().as_ref() {
-                    cb();
+                if let DragMode::Monitor { .. } = drag_mode.get() {
+                    let rows = rows.borrow();
+                    let Some(row) = rows.get(selected.get()) else {
+                        return;
+                    };
+                    let (x, y, w, h, _, _) = row_footprint(row);
+                    let others: Vec<(f64, f64, f64, f64)> = rows
+                        .iter()
+                        .filter(|other| !std::ptr::eq(*other, row))
+                        .map(|other| {
+                            let (ox, oy, ow, oh, _, _) = row_footprint(other);
+                            (ox, oy, ow, oh)
+                        })
+                        .collect();
+                    let (nx, ny) = resolve_release(x, y, w, h, &others, SNAP_TOLERANCE);
+                    row.x.set_value(nx.round());
+                    row.y.set_value(ny.round());
+                    drop(rows);
+                    mc.redraw();
+                    if let Some(cb) = on_change.borrow().as_ref() {
+                        cb();
+                    }
                 }
+                drag_mode.set(DragMode::None);
             }
         });
         canvas.add_controller(drag);
@@ -550,26 +708,35 @@ pub(crate) fn build_monitors(record: &Record) -> Editor {
         let form = form.clone();
         let rows = rows.clone();
         let on_change = on_change.clone();
-        let canvas = canvas.clone();
+        let mc = mc.clone();
         let selected = selected.clone();
         add.connect_clicked(move |button| {
             let anchor = button.clone().upcast::<gtk::Widget>();
-            let detected = crate::monitor_detect::detect();
+            let existing_names: Vec<String> = rows
+                .borrow()
+                .iter()
+                .map(|row| row.name.text().to_string())
+                .collect();
+            let (tx, rx) =
+                async_channel::bounded::<Option<Vec<crate::monitor_detect::DetectedMonitor>>>(1);
+            std::thread::spawn(move || {
+                let _ = tx.send_blocking(crate::monitor_detect::detect());
+            });
             let form = form.clone();
             let rows = rows.clone();
             let on_change = on_change.clone();
-            let canvas = canvas.clone();
+            let mc = mc.clone();
             let selected = selected.clone();
             let ctx = ctx.clone();
-            open_monitor_picker(&anchor, detected, move |picked| {
+            open_monitor_picker(&anchor, existing_names, rx, move |picked| {
                 let scan_row = monitor_scaffold(&rows.borrow(), picked.as_ref());
                 let row = make_monitor_row(&scan_row, &ctx);
-                let index = attach_monitor_row(&form, &rows, &on_change, row);
+                let index = attach_monitor_row(&form, &rows, &on_change, &mc, row);
                 selected.set(index);
                 for (position, item) in rows.borrow().iter().enumerate() {
                     item.form_box.set_visible(position == index);
                 }
-                canvas.queue_draw();
+                mc.refit(&rows.borrow());
                 if let Some(cb) = on_change.borrow().as_ref() {
                     cb();
                 }
@@ -596,8 +763,7 @@ pub(crate) fn monitor_scaffold(
     let x = rows
         .iter()
         .map(|row| {
-            let (rx, _, rw, rh, _, _) = monitor_geometry(row);
-            let (rw, _) = effective_size(rw, rh, row.rr.current_choice());
+            let (rx, _, rw, _, _, _) = row_footprint(row);
             rx + rw
         })
         .fold(0.0f64, f64::max);

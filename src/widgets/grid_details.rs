@@ -1,12 +1,12 @@
 use super::context::BuildContext;
-use super::fields::dim_line;
+use super::fields::{dim_line, dim_line_with_help};
 use super::grid::{
-    grid_reattach, grid_repack, grid_select, grid_tile_is_footer, grid_update_size_caption,
-    grid_update_strips, make_grid_tile, GridLayoutState, GridProfile,
+    grid_reattach, grid_repack, grid_select, grid_set_status, grid_tile_is_footer,
+    grid_update_size_caption, grid_update_strips, make_grid_tile, GridLayoutState, GridProfile,
 };
 use super::grid_gestures::wire_grid_tile;
-use super::grid_layout::{grid_first_fit, CellRect};
-use super::names::{field_caption, widget_display_name};
+use super::grid_layout::{grid_clamp_cell, grid_first_fit, CellRect};
+use super::names::{field_caption, field_help, widget_display_name};
 use gtk::prelude::*;
 use std::rc::Rc;
 /// The add bar: a dropdown of registry ids not yet on the canvas, an optional
@@ -68,6 +68,9 @@ pub(crate) fn grid_resize_step(state: &Rc<GridLayoutState>, dw: i64, dh: i64) {
             }
         }
         grid_repack(state, Some(index), false);
+        grid_set_status(state, "No room to grow here — the grid is full at the bottom.");
+    } else {
+        grid_set_status(state, "");
     }
     grid_reattach(state);
     grid_update_size_caption(state);
@@ -161,7 +164,11 @@ pub(crate) fn grid_add_tile(state: &Rc<GridLayoutState>, id: &str) {
         tiles.push(tile);
         tiles.len() - 1
     };
-    grid_repack(state, None, false);
+    if grid_repack(state, None, false) {
+        grid_set_status(state, "");
+    } else {
+        grid_set_status(state, "No room to add this widget — the grid is full.");
+    }
     grid_reattach(state);
     grid_refresh_adder(state);
     grid_select(state, index);
@@ -198,36 +205,168 @@ pub(crate) fn grid_refresh_details(state: &Rc<GridLayoutState>) {
         .build();
     state.details.append(&caption);
     if let Some(switch) = &tile.enabled {
-        state.details.append(&dim_line("Enabled", switch));
-    }
-    for (record, editor) in &tile.fields {
-        let name = record.segments.last().cloned().unwrap_or_default();
-        let root = editor.root();
         state
             .details
-            .append(&dim_line(&field_caption(&name), &root));
+            .append(&dim_line_with_help("Enabled", field_help("enabled"), switch));
     }
-    let size_line = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    size_line.append(&state.size_caption);
-    let shrink = gtk::Button::from_icon_name("list-remove-symbolic");
-    shrink.add_css_class("flat");
-    shrink.set_tooltip_text(Some("Shrink by one cell"));
-    let grow = gtk::Button::from_icon_name("list-add-symbolic");
-    grow.add_css_class("flat");
-    grow.set_tooltip_text(Some("Grow by one cell"));
-    size_line.append(&shrink);
-    size_line.append(&grow);
-    state.details.append(&size_line);
+
+    let columns = state.profile.columns;
+    let max_rows = state.profile.max_rows;
+    let cell = tile.cell;
+    let position = gtk::Expander::new(Some("Exact position"));
+    position.set_expanded(false);
+    let position_grid = gtk::Grid::new();
+    position_grid.set_column_spacing(12);
+    position_grid.set_row_spacing(6);
+    let column_spin = gtk::SpinButton::with_range(0.0, (columns - 1).max(0) as f64, 1.0);
+    let row_spin = gtk::SpinButton::with_range(0.0, max_rows as f64, 1.0);
+    let width_spin = gtk::SpinButton::with_range(1.0, columns.max(1) as f64, 1.0);
+    let height_spin = gtk::SpinButton::with_range(1.0, max_rows.max(1) as f64, 1.0);
+    for (spin, value) in [
+        (&column_spin, cell.col),
+        (&row_spin, cell.row),
+        (&width_spin, cell.w),
+        (&height_spin, cell.h),
+    ] {
+        spin.set_digits(0);
+        spin.set_value(value as f64);
+    }
+    position_grid.attach(&dim_line("Column", &column_spin), 0, 0, 1, 1);
+    position_grid.attach(&dim_line("Row", &row_spin), 0, 1, 1, 1);
+    position_grid.attach(&dim_line("Width", &width_spin), 0, 2, 1, 1);
+    position_grid.attach(&dim_line("Height", &height_spin), 0, 3, 1, 1);
+    position.set_child(Some(&position_grid));
+    state.details.append(&position);
+    {
+        let st = state.clone();
+        let spins = (
+            column_spin.clone(),
+            row_spin.clone(),
+            width_spin.clone(),
+            height_spin.clone(),
+        );
+        let apply = move || {
+            if st.programmatic.get() {
+                return;
+            }
+            let Some(index) = *st.selected.borrow() else {
+                return;
+            };
+            let previous = match st.tiles.borrow().get(index) {
+                Some(tile) => tile.cell,
+                None => return,
+            };
+            let desired = CellRect {
+                col: spins.0.value() as i64,
+                row: spins.1.value() as i64,
+                w: spins.2.value() as i64,
+                h: spins.3.value() as i64,
+            };
+            let clamped = grid_clamp_cell(desired, st.profile.columns);
+            {
+                let mut tiles = st.tiles.borrow_mut();
+                if let Some(tile) = tiles.get_mut(index) {
+                    tile.cell = clamped;
+                }
+            }
+            if !grid_repack(&st, Some(index), false) {
+                {
+                    let mut tiles = st.tiles.borrow_mut();
+                    if let Some(tile) = tiles.get_mut(index) {
+                        tile.cell = previous;
+                    }
+                }
+                grid_repack(&st, Some(index), false);
+                grid_set_status(&st, "No room to place there — the grid is full.");
+            } else {
+                grid_set_status(&st, "");
+            }
+            grid_reattach(&st);
+            grid_update_size_caption(&st);
+            st.notify();
+        };
+        for spin in [&column_spin, &row_spin, &width_spin, &height_spin] {
+            let apply = apply.clone();
+            spin.connect_value_changed(move |_| apply());
+        }
+    }
+
+    if tile.fields.is_empty() {
+        let empty = gtk::Label::builder()
+            .xalign(0.0)
+            .label("No extra settings.")
+            .css_classes(["dim-label"])
+            .build();
+        state.details.append(&empty);
+    } else {
+        let settings_heading = gtk::Label::builder()
+            .xalign(0.0)
+            .label("Widget settings")
+            .css_classes(["heading"])
+            .build();
+        state.details.append(&settings_heading);
+        for (record, editor) in &tile.fields {
+            let name = record.segments.last().cloned().unwrap_or_default();
+            let root = editor.root();
+            state
+                .details
+                .append(&dim_line_with_help(
+                    &field_caption(&name),
+                    field_help(&name),
+                    &root,
+                ));
+        }
+    }
+
+    let width_line = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    width_line.append(&state.size_caption);
+    let shrink_w = gtk::Button::from_icon_name("list-remove-symbolic");
+    shrink_w.add_css_class("flat");
+    shrink_w.set_tooltip_text(Some("Shrink width by one cell"));
+    let grow_w = gtk::Button::from_icon_name("list-add-symbolic");
+    grow_w.add_css_class("flat");
+    grow_w.set_tooltip_text(Some("Grow width by one cell"));
+    width_line.append(&shrink_w);
+    width_line.append(&grow_w);
+    state.details.append(&width_line);
+
+    let height_line = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let height_caption = gtk::Label::builder()
+        .xalign(0.0)
+        .css_classes(["dim-label"])
+        .label(format!("Height: {} rows", cell.h))
+        .build();
+    height_line.append(&height_caption);
+    let shrink_h = gtk::Button::from_icon_name("list-remove-symbolic");
+    shrink_h.add_css_class("flat");
+    shrink_h.set_tooltip_text(Some("Shrink height by one cell"));
+    let grow_h = gtk::Button::from_icon_name("list-add-symbolic");
+    grow_h.add_css_class("flat");
+    grow_h.set_tooltip_text(Some("Grow height by one cell"));
+    height_line.append(&shrink_h);
+    height_line.append(&grow_h);
+    state.details.append(&height_line);
+
+    state.details.append(&state.status);
+
     let delete = gtk::Button::with_label("Delete widget");
     delete.add_css_class("destructive-action");
     state.details.append(&delete);
     {
         let st = state.clone();
-        shrink.connect_clicked(move |_| grid_resize_step(&st, -1, 0));
+        shrink_w.connect_clicked(move |_| grid_resize_step(&st, -1, 0));
     }
     {
         let st = state.clone();
-        grow.connect_clicked(move |_| grid_resize_step(&st, 1, 0));
+        grow_w.connect_clicked(move |_| grid_resize_step(&st, 1, 0));
+    }
+    {
+        let st = state.clone();
+        shrink_h.connect_clicked(move |_| grid_resize_step(&st, 0, -1));
+    }
+    {
+        let st = state.clone();
+        grow_h.connect_clicked(move |_| grid_resize_step(&st, 0, 1));
     }
     {
         let st = state.clone();

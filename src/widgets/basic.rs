@@ -61,7 +61,58 @@ pub(crate) fn build_slider(spec: &OptionSpec, value_text: &str) -> gtk::Scale {
     scale.set_value(value_text.trim().parse::<f64>().unwrap_or(min));
     scale.set_draw_value(true);
     scale.set_hexpand(true);
+    attach_focus_gated_scroll(&scale);
     scale
+}
+
+fn forwarded_scroll_delta(delta: f64, unit: gtk::gdk::ScrollUnit, page_size: f64) -> f64 {
+    match unit {
+        gtk::gdk::ScrollUnit::Wheel => delta * page_size.powf(2.0 / 3.0),
+        _ => delta * 2.5,
+    }
+}
+
+/// A wheel tick over a slider moves the value only while the slider has GTK
+/// focus; otherwise the tick is forwarded to the nearest ancestor
+/// ScrolledWindow so the page scrolls under the pointer.
+fn attach_focus_gated_scroll(scale: &gtk::Scale) {
+    let controller = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::BOTH_AXES);
+    controller.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let for_handler = scale.clone();
+    controller.connect_scroll(move |controller, dx, dy| {
+        if for_handler.has_focus() {
+            return glib::Propagation::Proceed;
+        }
+        forward_scroll(&for_handler, controller, dx, dy);
+        glib::Propagation::Stop
+    });
+    scale.add_controller(controller);
+}
+
+/// Deliver a stopped tick to the first ScrolledWindow ancestor. With no
+/// ScrolledWindow ancestor (e.g. a slider in a non-scrollable popover) the
+/// tick is dropped and the value stays untouched.
+fn forward_scroll(
+    scale: &gtk::Scale,
+    controller: &gtk::EventControllerScroll,
+    dx: f64,
+    dy: f64,
+) {
+    let mut current = scale.parent();
+    while let Some(ancestor) = current {
+        if let Ok(scrolled) = ancestor.clone().downcast::<gtk::ScrolledWindow>() {
+            let vadj = scrolled.vadjustment();
+            let vvalue =
+                vadj.value() + forwarded_scroll_delta(dy, controller.unit(), vadj.page_size());
+            vadj.set_value(vvalue.clamp(vadj.lower(), vadj.upper() - vadj.page_size()));
+            let hadj = scrolled.hadjustment();
+            let hvalue =
+                hadj.value() + forwarded_scroll_delta(dx, controller.unit(), hadj.page_size());
+            hadj.set_value(hvalue.clamp(hadj.lower(), hadj.upper() - hadj.page_size()));
+            return;
+        }
+        current = ancestor.parent();
+    }
 }
 
 pub(crate) fn build_entry(value_text: &str, spec: &OptionSpec, monospace: bool) -> gtk::Entry {
@@ -299,5 +350,26 @@ pub(crate) fn attach_package_search(entry: &gtk::Entry, search: &PackageSearch) 
 pub(crate) fn clear_rows(list: &gtk::ListBox) {
     while let Some(child) = list.first_child() {
         list.remove(&child);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gtk::gdk::ScrollUnit;
+
+    #[test]
+    fn wheel_delta_uses_detent_step_from_page_size() {
+        let up = forwarded_scroll_delta(1.0, ScrollUnit::Wheel, 27.0);
+        assert!((up - 9.0).abs() < 1e-9);
+        let down = forwarded_scroll_delta(-1.0, ScrollUnit::Wheel, 27.0);
+        assert!((down + 9.0).abs() < 1e-9);
+        assert_eq!(forwarded_scroll_delta(1.0, ScrollUnit::Wheel, 0.0), 0.0);
+    }
+
+    #[test]
+    fn surface_delta_is_scaled_by_magic_factor() {
+        assert_eq!(forwarded_scroll_delta(2.0, ScrollUnit::Surface, 27.0), 5.0);
+        assert_eq!(forwarded_scroll_delta(0.5, ScrollUnit::Surface, 0.0), 1.25);
     }
 }

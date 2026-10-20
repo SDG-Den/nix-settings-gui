@@ -58,6 +58,18 @@ pub(crate) fn grid_first_fit(taken: &[CellRect], columns: i64, w: i64, h: i64) -
     }
 }
 
+/// Clamp a desired cell into the grid: width into `1..=columns`, height at
+/// least 1, column into `0..=(columns - w)`, row at least 0.
+pub(crate) fn grid_clamp_cell(cell: CellRect, columns: i64) -> CellRect {
+    let w = cell.w.clamp(1, columns.max(1));
+    CellRect {
+        col: cell.col.clamp(0, (columns - w).max(0)),
+        row: cell.row.max(0),
+        w,
+        h: cell.h.max(1),
+    }
+}
+
 /// Pull every cell upward while the row above it is free, matching DMS
 /// `compact` (GridLayout.js:46-53).
 pub(crate) fn grid_compact(cells: &mut [CellRect]) {
@@ -279,5 +291,11 @@ mod tests {
             out,
             "\"daily \" = { \"daily \" = true; _order = 1000; col = 0; row = 0; w = 1; h = 1; };"
         );
+    }
+
+    #[test]
+    fn grid_clamp_cell_shrinks_into_the_grid() {
+        assert_eq!(grid_clamp_cell(rect(7, -2, 9, 0), 4), rect(0, 0, 4, 1));
+        assert_eq!(grid_clamp_cell(rect(5, 3, 2, 4), 6), rect(4, 3, 2, 4));
     }
 }
