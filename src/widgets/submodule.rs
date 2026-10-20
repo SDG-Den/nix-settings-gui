@@ -252,23 +252,24 @@ pub(crate) fn append_settings_rows(
         .iter()
         .filter(|(record, _)| !(record.spec.hidden && !ctx.advanced))
         .collect();
-    let mut skip = false;
-    for (index, (record, editor)) in visible.iter().enumerate() {
-        if skip {
-            skip = false;
-            continue;
-        }
+    let mut index = 0;
+    while index < visible.len() {
+        let (record, editor) = visible[index];
         let run = horizontal_run(&visible, index);
         if run >= 2 {
             append_flow_group(root, &visible[index..index + run]);
+            index += run;
             continue;
         }
         match autohide_delay_pair(&visible, index) {
             Some((delay_record, delay_editor)) => {
                 root.append(&build_pair_row(record, editor, delay_record, delay_editor));
-                skip = true;
+                index += 2;
             }
-            None => root.append(&build_child_row(record, editor, 1)),
+            None => {
+                root.append(&build_child_row(record, editor, 1));
+                index += 1;
+            }
         }
     }
 }

@@ -173,10 +173,11 @@ fn select_file(app: &Rc<App>, file: &str) {
 }
 
 fn rebuild_pages(app: &Rc<App>) {
-    for page in app.pages.borrow().iter() {
+    let old_pages = app.pages.take();
+    for page in &old_pages {
         app.stack.remove(&page.root);
     }
-    app.pages.borrow_mut().clear();
+    drop(old_pages);
 
     let menus = visible_menus(app);
     let mut pages = Vec::new();
@@ -185,7 +186,7 @@ fn rebuild_pages(app: &Rc<App>) {
         app.stack.add_named(&page.root, Some(&menu.file));
         pages.push(page);
     }
-    *app.pages.borrow_mut() = pages;
+    app.pages.replace(pages);
 
     let current = app.current_file.borrow().clone();
     if app.pages.borrow().iter().any(|p| p.file == current) {

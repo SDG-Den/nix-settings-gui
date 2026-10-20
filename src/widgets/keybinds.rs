@@ -91,7 +91,7 @@ pub(crate) fn sync_keybind_separators(container: &gtk::Box) {
         let separator = gtk::Separator::new(gtk::Orientation::Horizontal);
         separator.set_margin_top(6);
         separator.set_margin_bottom(6);
-        container.insert_after(&separator, Some(&pair[0]));
+        container.insert_child_after(&separator, Some(&pair[0]));
     }
 }
 
