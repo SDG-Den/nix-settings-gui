@@ -88,6 +88,8 @@ pub(super) fn build_context(app: &Rc<App>) -> widgets::BuildContext {
     ctx.search = Some(package_search(app));
     ctx.plugin_registry = Some(plugin_registry_hook(app));
     ctx.apply = Some(apply_hook(app));
+    ctx.base = app.base.borrow().clone();
+    ctx.wallpaper = Some(super::wallpaper::actions(app));
     ctx
 }
 
@@ -323,7 +325,7 @@ fn apply_now(app: &Rc<App>, path: &str, command: &str, editor: &Editor) {
         crate::apply::ApplyRequest {
             path: path.to_string(),
             command: command.to_string(),
-            value: editor.to_nix(),
+            value: editor.apply_value(),
         },
     );
 }

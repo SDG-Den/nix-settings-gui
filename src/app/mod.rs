@@ -17,6 +17,7 @@ pub(crate) mod menu;
 mod pump;
 mod save;
 mod state;
+mod wallpaper;
 
 use apply::ApplyState;
 use controls::apply_control_filter;

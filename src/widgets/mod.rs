@@ -22,9 +22,12 @@ mod theme;
 mod tile;
 mod tile_list;
 mod tile_nix;
+mod wallpaper;
 
 pub(crate) use basic::{build_entry, build_spin, build_switch};
-pub(crate) use context::{ApplyHook, BuildContext, ChangeHook, PackageSearch, PluginRegistryHook};
+pub(crate) use context::{
+    ApplyHook, BuildContext, ChangeHook, PackageSearch, PluginRegistryHook, WallpaperActions,
+};
 pub(crate) use dispatch::{build, is_package};
 pub(crate) use editor::Editor;
 pub(crate) use nix::{attr_key, literal_for_widget};

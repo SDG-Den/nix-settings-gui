@@ -267,6 +267,13 @@ pub fn literal_for_widget(widget: WidgetKind, value: &str) -> String {
         }
         WidgetKind::Text | WidgetKind::Multiline | WidgetKind::Color => string_literal(value),
         WidgetKind::Path => path_literal(value),
+        WidgetKind::Wallpaper => {
+            if t == "null" {
+                "null".to_string()
+            } else {
+                path_literal(value)
+            }
+        }
         WidgetKind::Dropdown | WidgetKind::Radio => choice_literal(value),
         WidgetKind::Packages => {
             let items = value::list_items(value).unwrap_or_else(|| vec![value.trim().to_string()]);

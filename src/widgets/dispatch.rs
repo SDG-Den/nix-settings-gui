@@ -14,6 +14,7 @@ use super::nix::unwrap_modifiers;
 use super::submodule::{build_horizontal_submodule, build_submodule};
 use super::table::build_table;
 use super::theme::build_theme;
+use super::wallpaper::build_wallpaper;
 use crate::apply::ApplyRequest;
 use crate::dsl::{OptionSpec, WidgetKind};
 use crate::model::Record;
@@ -60,7 +61,7 @@ fn connect_apply(record: &Record, editor: &Editor, ctx: &BuildContext) {
         hook(ApplyRequest {
             path: path.clone(),
             command: command.clone(),
-            value: snapshot.to_nix(),
+            value: snapshot.apply_value(),
         });
     });
     editor.connect_changed(&update);
@@ -101,6 +102,7 @@ fn build_editor(record: &Record, type_str: Option<&str>, ctx: &BuildContext) -> 
         WidgetKind::TableAttrset => build_table(record, ctx, false),
         WidgetKind::TableList => build_table(record, ctx, true),
         WidgetKind::Theme => build_theme(value_text),
+        WidgetKind::Wallpaper => build_wallpaper(record, value_text, ctx),
         WidgetKind::Keybinds => build_keybinds(record),
         WidgetKind::Monitors => build_monitors(record),
         WidgetKind::Menu => build_menu(record, ctx),
@@ -303,6 +305,10 @@ mod tests {
         assert_eq!(WidgetKind::parse("keybinds"), Some(WidgetKind::Keybinds));
         assert_eq!(WidgetKind::parse("monitors"), Some(WidgetKind::Monitors));
         assert_eq!(WidgetKind::parse("theme"), Some(WidgetKind::Theme));
+        assert_eq!(
+            WidgetKind::parse("wallpaper"),
+            Some(WidgetKind::Wallpaper)
+        );
         assert_eq!(WidgetKind::parse("menu"), Some(WidgetKind::Menu));
         assert_eq!(WidgetKind::parse("plugins"), Some(WidgetKind::Plugins));
         assert_eq!(WidgetKind::parse("bar"), Some(WidgetKind::Bar));

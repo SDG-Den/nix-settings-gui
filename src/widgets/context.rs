@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use crate::apply::ApplyRequest;
@@ -43,6 +44,19 @@ pub type PluginRegistryHook = Rc<dyn Fn(Box<dyn FnOnce(Vec<crate::metadata::Regi
 /// so the widgets stay free of process handling.
 pub type ApplyHook = Rc<dyn Fn(ApplyRequest)>;
 
+/// Copies a wallpaper into the repository and stages it with git.
+pub type WallpaperAdd = Rc<dyn Fn(&Path, &Path) -> Result<PathBuf, String>>;
+
+/// Removes a wallpaper from the repository and stages the deletion.
+pub type WallpaperRemove = Rc<dyn Fn(&Path) -> Result<(), String>>;
+
+/// File operations for the wallpaper picker, supplied by the app.
+#[derive(Clone)]
+pub struct WallpaperActions {
+    pub add: WallpaperAdd,
+    pub remove: WallpaperRemove,
+}
+
 /// File path -> presets declared by @widget-preset markers in that file.
 pub type PresetMap = std::rc::Rc<
     std::collections::HashMap<
@@ -65,6 +79,10 @@ pub struct BuildContext {
     pub plugin_registry: Option<PluginRegistryHook>,
     /// Runs the apply command of an option that carries one.
     pub apply: Option<ApplyHook>,
+    /// The flake root, used by widgets that resolve repository paths.
+    pub base: String,
+    /// Wallpaper copy and remove operations.
+    pub wallpaper: Option<WallpaperActions>,
     /// Whether the Advanced toggle is on, so nested hidden controls show.
     pub advanced: bool,
     /// Nesting depth of the control being built, used for submodule indent.

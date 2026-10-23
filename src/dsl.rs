@@ -278,6 +278,7 @@ pub enum WidgetKind {
     Keybinds,
     Monitors,
     Theme,
+    Wallpaper,
     Menu,
     Plugins,
     Bar,
@@ -310,6 +311,7 @@ impl WidgetKind {
             "keybinds" => Self::Keybinds,
             "monitors" => Self::Monitors,
             "theme" => Self::Theme,
+            "wallpaper" => Self::Wallpaper,
             "menu" => Self::Menu,
             "plugins" => Self::Plugins,
             "bar" => Self::Bar,
@@ -412,6 +414,9 @@ pub struct OptionSpec {
     pub item_label: Option<String>,
     pub add_label: Option<String>,
     pub visible_when: Option<Visibility>,
+    /// Directory holding wallpaper images, relative to the file containing the
+    /// option. Defaults to `./wallpapers`.
+    pub wallpaper_dir: Option<String>,
     /// Shell command that applies the option immediately, e.g. an IPC call.
     /// `%%val%%` in the command stands for the option's new value.
     pub apply_command: Option<String>,
@@ -450,6 +455,7 @@ impl OptionSpec {
             item_label: d.string("itemLabel"),
             add_label: d.string("addLabel"),
             visible_when: parse_visibility(d),
+            wallpaper_dir: d.string("wallpaperDir"),
             apply_command: d.string("applyCommand"),
         }
     }

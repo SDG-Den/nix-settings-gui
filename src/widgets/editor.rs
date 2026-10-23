@@ -73,6 +73,11 @@ pub enum Editor {
         list: gtk::ListBox,
         entry: Option<gtk::Entry>,
     },
+    Wallpaper {
+        root: gtk::Box,
+        ui: Rc<RefCell<super::wallpaper::WallpaperUi>>,
+        on_change: ChangeHook,
+    },
     Keybinds {
         root: gtk::Box,
         rows: Rc<RefCell<Vec<KeybindRow>>>,
@@ -137,6 +142,7 @@ impl Editor {
             Editor::HorizontalSubmodule { root, .. } => root.clone().upcast(),
             Editor::Table { root, .. } => root.clone().upcast(),
             Editor::Theme { root, .. } => root.clone().upcast(),
+            Editor::Wallpaper { root, .. } => root.clone().upcast(),
             Editor::Keybinds { root, .. } => root.clone().upcast(),
             Editor::Monitors { root, .. } => root.clone().upcast(),
             Editor::Menu { root, .. } => root.clone().upcast(),
@@ -208,6 +214,7 @@ impl Editor {
             Editor::HorizontalSubmodule { .. } => "{ }".to_string(),
             Editor::Table { .. } => table_nix(self),
             Editor::Theme { current, .. } => quote(&current.borrow()),
+            Editor::Wallpaper { ui, .. } => ui.borrow().nix_value(),
             Editor::Keybinds { rows, .. } => keybinds_nix(&rows.borrow()),
             Editor::Monitors { rows, .. } => monitors_nix(&rows.borrow()),
             Editor::Menu { rows, .. } => menu_rows_nix(&rows.borrow()),
@@ -243,6 +250,15 @@ impl Editor {
                     .text(&buffer.start_iter(), &buffer.end_iter(), false)
                     .to_string()
             }
+        }
+    }
+
+    /// The value a live-apply command should receive. Most controls use their
+    /// Nix literal; the wallpaper picker resolves files to direct paths.
+    pub fn apply_value(&self) -> String {
+        match self {
+            Editor::Wallpaper { ui, .. } => ui.borrow().apply_literal(),
+            _ => self.to_nix(),
         }
     }
 
@@ -447,6 +463,7 @@ impl Editor {
                     connect_table_row(row, update);
                 }
             }
+            Editor::Wallpaper { ui, .. } => ui.borrow().nix_value().trim() == original.trim(),
             Editor::Theme { list, entry, .. } => {
                 if let Some(entry) = entry {
                     let update = update.clone();
@@ -454,6 +471,9 @@ impl Editor {
                 }
                 let update = update.clone();
                 list.connect_row_selected(move |_, _| update());
+            }
+            Editor::Wallpaper { on_change, .. } => {
+                *on_change.borrow_mut() = Some(update.clone());
             }
             Editor::Keybinds {
                 rows, on_change, ..

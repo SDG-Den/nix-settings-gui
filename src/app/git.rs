@@ -1,3 +1,4 @@
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use gtk::prelude::*;
@@ -33,6 +34,32 @@ fn git_commit_and_push(dir: &str, message: &str) -> Result<String, String> {
     run_git(dir, &["commit", "-m", message])?;
     run_git(dir, &["push"])?;
     Ok(message.to_string())
+}
+
+/// Stage one file inside the flake directory.
+pub(super) fn stage_path(dir: &str, path: &Path) -> Result<(), String> {
+    let relative = relative_in_repo(dir, path)?;
+    run_git(dir, &["add", "--", &relative]).map(|_| ())
+}
+
+/// The path of `path` relative to the repository root, for use as a git
+/// pathspec. The file must exist.
+pub(super) fn relative_in_repo(dir: &str, path: &Path) -> Result<String, String> {
+    let base = std::fs::canonicalize(dir).unwrap_or_else(|_| PathBuf::from(dir));
+    let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let relative = target.strip_prefix(&base).map_err(|_| {
+        format!(
+            "{} is outside the repository {}",
+            path.display(),
+            base.display()
+        )
+    })?;
+    Ok(relative.to_string_lossy().into_owned())
+}
+
+/// Stage the deletion of a file that has already been removed.
+pub(super) fn stage_deletion(dir: &str, relative: &str) -> Result<(), String> {
+    run_git(dir, &["add", "-u", "--", relative]).map(|_| ())
 }
 
 /// Run a git subcommand in `dir`, returning stdout on success and a message on
