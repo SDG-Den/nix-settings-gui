@@ -10,25 +10,16 @@ use crate::model::Record;
 use crate::widgets::{self, Editor};
 
 use super::state::{App, ControlRow, MenuPage, Msg};
-
 /// Bolt shown beside an option's label when its applyCommand runs on change.
 fn live_marker(record: &Record) -> gtk::Image {
-    let icon = match gtk::gdk::Display::default() {
-        Some(display) if gtk::IconTheme::for_display(&display).has_icon("flash-symbolic") => {
-            "flash-symbolic"
-        }
-        _ => "emblem-important-symbolic",
-    };
-    let marker = gtk::Image::from_icon_name(icon);
-    marker.set_pixel_size(14);
+    let marker = gtk::Image::from_icon_name("thunderbolt");
+    marker.set_pixel_size(16);
     marker.set_valign(gtk::Align::Center);
-    marker.add_css_class("accent");
     if let Some(command) = record.spec.apply_command.as_deref() {
         marker.set_tooltip_text(Some(&format!("Applies immediately: {command}")));
     }
     marker
 }
-
 /// Show the bolt only while live-apply is on and the row has a command.
 pub(super) fn refresh_live_markers(app: &Rc<App>) {
     let enabled = app.config.borrow().live_apply;

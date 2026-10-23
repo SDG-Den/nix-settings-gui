@@ -164,8 +164,7 @@ pub(crate) const MONITOR_EXTRAS: &[(&str, bool)] = &[
 pub(crate) const MONITOR_MATCH_FIELDS: &[(&str, &str)] =
     &[("make", "Make"), ("model", "Model"), ("serial", "Serial")];
 
-pub(crate) const MONITOR_PASSTHROUGH_FIELDS: &[&str] =
-    &["make", "model", "serial", "custom"];
+pub(crate) const MONITOR_PASSTHROUGH_FIELDS: &[&str] = &["make", "model", "serial", "custom"];
 
 /// Attach a caption and a control to a monitor form grid.
 pub(crate) fn attach_cell(
@@ -182,6 +181,109 @@ pub(crate) fn attach_cell(
         .build();
     grid.attach(&caption, col, row, 1, 1);
     grid.attach(widget, col + 1, row, 1, 1);
+}
+
+struct MonitorPalette {
+    background: gtk::gdk::RGBA,
+    monitor: gtk::gdk::RGBA,
+    selected: gtk::gdk::RGBA,
+    outline: gtk::gdk::RGBA,
+    dashed: gtk::gdk::RGBA,
+    text: gtk::gdk::RGBA,
+    selected_text: gtk::gdk::RGBA,
+}
+
+impl MonitorPalette {
+    fn from_style(style: &gtk::StyleContext) -> Self {
+        let color = |names: &[&str], fallback: (f32, f32, f32, f32)| {
+            names
+                .iter()
+                .find_map(|name| style.lookup_color(name))
+                .unwrap_or_else(|| {
+                    gtk::gdk::RGBA::new(fallback.0, fallback.1, fallback.2, fallback.3)
+                })
+        };
+        Self {
+            background: color(
+                &["window_bg_color", "theme_bg_color"],
+                (0.08, 0.08, 0.10, 1.0),
+            ),
+            monitor: color(
+                &["card_bg_color", "theme_base_color", "theme_bg_color"],
+                (0.42, 0.42, 0.47, 1.0),
+            ),
+            selected: color(
+                &["accent_bg_color", "theme_selected_bg_color"],
+                (0.27, 0.45, 0.75, 1.0),
+            ),
+            outline: color(
+                &["window_fg_color", "theme_fg_color", "theme_text_color"],
+                (1.0, 1.0, 1.0, 1.0),
+            ),
+            dashed: color(
+                &[
+                    "warning_bg_color",
+                    "warning_color",
+                    "theme_selected_bg_color",
+                ],
+                (0.95, 0.65, 0.25, 1.0),
+            ),
+            text: color(
+                &["card_fg_color", "window_fg_color", "theme_fg_color"],
+                (1.0, 1.0, 1.0, 1.0),
+            ),
+            selected_text: color(
+                &["accent_fg_color", "theme_selected_fg_color"],
+                (1.0, 1.0, 1.0, 1.0),
+            ),
+        }
+    }
+}
+
+fn set_color(cr: &gtk::cairo::Context, color: &gtk::gdk::RGBA, alpha: f64) {
+    cr.set_source_rgba(
+        color.red() as f64,
+        color.green() as f64,
+        color.blue() as f64,
+        color.alpha() as f64 * alpha,
+    );
+}
+
+fn draw_monitor_label(
+    cr: &gtk::cairo::Context,
+    label: &str,
+    px: f64,
+    py: f64,
+    pw: f64,
+    ph: f64,
+    color: &gtk::gdk::RGBA,
+) {
+    if label.is_empty() || pw <= 1.0 || ph <= 1.0 {
+        return;
+    }
+    cr.save().ok();
+    cr.rectangle(px, py, pw, ph);
+    cr.clip();
+    set_color(cr, color, 1.0);
+    let font_size = 14.0;
+    cr.set_font_size(font_size);
+    if let Ok(extents) = cr.text_extents(label) {
+        let max_width = (pw - 8.0).max(1.0);
+        let max_height = (ph - 8.0).max(1.0);
+        let scale = (max_width / extents.width().max(1.0))
+            .min(max_height / extents.height().max(1.0))
+            .min(1.0);
+        if scale < 1.0 {
+            cr.set_font_size((font_size * scale).max(9.0));
+        }
+    }
+    if let Ok(extents) = cr.text_extents(label) {
+        let x = px + (pw - extents.width()) / 2.0 - extents.x_bearing();
+        let y = py + (ph - extents.height()) / 2.0 - extents.y_bearing();
+        cr.move_to(x, y);
+        let _ = cr.show_text(label);
+    }
+    cr.restore().ok();
 }
 
 /// One monitor rule: core geometry and the disable/primary toggles on a grid,
@@ -368,7 +470,8 @@ impl MonitorCanvas {
     pub(crate) fn refit(&self, rows: &[MonitorRow]) {
         if let Some((min_x, min_y, max_x, max_y)) = scene_bounds(rows) {
             let (w, h) = self.last_size.get();
-            self.view.set(Viewport::fit(min_x, min_y, max_x, max_y, w, h));
+            self.view
+                .set(Viewport::fit(min_x, min_y, max_x, max_y, w, h));
         }
         self.canvas.queue_draw();
     }
@@ -413,7 +516,7 @@ pub(crate) fn build_monitors(record: &Record) -> Editor {
         let selected = selected.clone();
         let view = view.clone();
         let last_size = last_size.clone();
-        move |_, cr, width, height| {
+        move |area, cr, width, height| {
             let (last_w, last_h) = last_size.get();
             if last_w != width as f64 || last_h != height as f64 {
                 last_size.set((width as f64, height as f64));
@@ -429,7 +532,8 @@ pub(crate) fn build_monitors(record: &Record) -> Editor {
                     ));
                 }
             }
-            cr.set_source_rgb(0.08, 0.08, 0.10);
+            let palette = MonitorPalette::from_style(&area.style_context());
+            set_color(cr, &palette.background, 1.0);
             cr.rectangle(0.0, 0.0, width as f64, height as f64);
             cr.fill().ok();
             let v = view.get();
@@ -437,36 +541,30 @@ pub(crate) fn build_monitors(record: &Record) -> Editor {
             for (index, row) in rows.iter().enumerate() {
                 let (x, y, w, h, label, sized) = row_footprint(row);
                 let (px, py, pw, ph) = v.rect_on_screen(x, y, w, h);
-                if index == selected.get() {
-                    cr.set_source_rgb(0.27, 0.45, 0.75);
+                let is_selected = index == selected.get();
+                if is_selected {
+                    set_color(cr, &palette.selected, 1.0);
                 } else {
-                    cr.set_source_rgb(0.42, 0.42, 0.47);
+                    set_color(cr, &palette.monitor, 1.0);
                 }
                 cr.rectangle(px, py, pw, ph);
                 cr.fill_preserve().ok();
                 if sized {
-                    cr.set_source_rgba(1.0, 1.0, 1.0, 0.6);
+                    set_color(cr, &palette.outline, 0.6);
                     cr.set_line_width(1.0);
                 } else {
-                    cr.set_source_rgb(0.95, 0.65, 0.25);
+                    set_color(cr, &palette.dashed, 1.0);
                     cr.set_line_width(2.0);
                     cr.set_dash(&[4.0, 4.0], 0.0);
                 }
                 cr.stroke().ok();
                 cr.set_dash(&[], 0.0);
-                cr.set_source_rgb(1.0, 1.0, 1.0);
-                cr.save().ok();
-                let rr = row.rr.current_choice() as i32;
-                if rr != 0 {
-                    let angle = (rr % 4) as f64 * 90.0_f64.to_radians();
-                    cr.translate(px + pw / 2.0, py + ph / 2.0);
-                    cr.rotate(-angle);
-                    cr.move_to(-pw / 2.0 + 6.0, -ph / 2.0 + 16.0);
+                let text_color = if is_selected {
+                    &palette.selected_text
                 } else {
-                    cr.move_to(px + 6.0, py + 16.0);
-                }
-                let _ = cr.show_text(&label);
-                cr.restore().ok();
+                    &palette.text
+                };
+                draw_monitor_label(cr, &label, px, py, pw, ph, text_color);
             }
         }
     });
@@ -677,10 +775,7 @@ pub(crate) fn build_monitors(record: &Record) -> Editor {
                             cb();
                         }
                     }
-                    DragMode::Pan {
-                        origin_x,
-                        origin_y,
-                    } => {
+                    DragMode::Pan { origin_x, origin_y } => {
                         let v = view.get();
                         view.set(Viewport {
                             scale: v.scale,

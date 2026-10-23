@@ -3,7 +3,7 @@ use super::editor::Editor;
 use super::nix::entry_text;
 use crate::dsl::OptionSpec;
 use gtk::prelude::*;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 mod schemes {
     include!(concat!(env!("OUT_DIR"), "/schemes.rs"));
@@ -17,29 +17,54 @@ pub(crate) struct SchemeMeta {
     pub index: usize,
     pub name: String,
     pub category: Option<String>,
+    pub variant: String,
 }
 
-/// Split a scheme slug into (category, variant) using the prefix-counting
-/// rule from the G7 research answers. `all` is every bundled scheme name.
+fn prefix_matches(prefix: &str, all: &[&str]) -> usize {
+    all.iter()
+        .filter(|other| **other == prefix || other.starts_with(&format!("{prefix}-")))
+        .count()
+}
+
+fn is_scheme(name: &str, all: &[&str]) -> bool {
+    all.iter().any(|other| *other == name)
+}
+
+fn variant_of<'a>(name: &'a str, category: &str) -> &'a str {
+    if name.len() == category.len() {
+        ""
+    } else {
+        &name[category.len() + 1..]
+    }
+}
+
+/// Split a scheme slug into (category, variant). A scheme joins the shortest
+/// exact scheme prefix that covers more than one scheme, so `black-metal-venom`
+/// groups under `black-metal` rather than `black`. With no exact prefix the
+/// longest shared prefix wins, which keeps families such as `catppuccin` and
+/// `da-one` grouped even though those base names are not schemes themselves.
 pub(crate) fn split_variant<'a>(name: &'a str, all: &[&str]) -> (Option<&'a str>, &'a str) {
     let tokens: Vec<&str> = name.split('-').collect();
-    let mut width = 1;
-    while width < tokens.len() {
-        let prefix = tokens[..width].join("-");
-        let hits = all
-            .iter()
-            .filter(|other| **other == prefix.as_str() || other.starts_with(&format!("{prefix}-")))
-            .count();
-        if hits <= 1 {
-            break;
+    let mut boundary = 0;
+    for (index, token) in tokens.iter().enumerate() {
+        if index > 0 {
+            boundary += 1;
         }
-        width += 1;
+        boundary += token.len();
+        let prefix = &name[..boundary];
+        if is_scheme(prefix, all) && prefix_matches(prefix, all) > 1 {
+            return (Some(prefix), variant_of(name, prefix));
+        }
     }
-    if width == 1 {
-        return (None, name);
+    let mut boundary = name.len();
+    for index in (1..tokens.len()).rev() {
+        boundary -= tokens[index].len() + 1;
+        let prefix = &name[..boundary];
+        if prefix_matches(prefix, all) > 1 {
+            return (Some(prefix), variant_of(name, prefix));
+        }
     }
-    let cut = tokens[..width - 1].join("-").len();
-    (Some(&name[..cut]), &name[cut + 1..])
+    (None, name)
 }
 
 /// Turn a raw category slug into a display header: `everforest-dark` ->
@@ -63,47 +88,162 @@ pub(crate) fn pretty_category(category: &str) -> String {
 
 pub(crate) fn scheme_metas() -> Vec<SchemeMeta> {
     let names: Vec<&str> = schemes::SCHEMES.iter().map(|(name, _)| *name).collect();
-    names
+    let mut metas: Vec<SchemeMeta> = names
         .iter()
         .enumerate()
         .map(|(index, name)| {
-            let (category, _variant) = split_variant(name, &names);
+            let (category, variant) = split_variant(name, &names);
             SchemeMeta {
                 index,
                 name: name.to_string(),
                 category: category.map(str::to_string),
+                variant: variant.to_string(),
             }
         })
-        .collect()
+        .collect();
+    collapse_nested_categories(&mut metas);
+    metas
 }
+
+fn collapse_nested_categories(metas: &mut [SchemeMeta]) {
+    let categories: Vec<String> = metas
+        .iter()
+        .filter_map(|meta| meta.category.clone())
+        .collect();
+    for meta in metas {
+        let Some(category) = meta.category.clone() else {
+            continue;
+        };
+        let parent = categories
+            .iter()
+            .filter(|other| category.starts_with(&format!("{other}-")))
+            .min_by_key(|other| other.len());
+        if let Some(parent) = parent {
+            meta.variant = variant_of(&meta.name, parent).to_string();
+            meta.category = Some(parent.clone());
+        }
+    }
+}
+
+fn row_label(meta: &SchemeMeta) -> &str {
+    match &meta.category {
+        Some(_) if meta.variant.is_empty() => "default",
+        Some(_) => &meta.variant,
+        None => &meta.name,
+    }
+}
+
+struct ThemeGroup {
+    header: gtk::ListBoxRow,
+    button: gtk::Button,
+    arrow: gtk::Image,
+    rows: Vec<gtk::ListBoxRow>,
+    gap: gtk::ListBoxRow,
+    expanded: Cell<bool>,
+}
+
+struct ThemeSchemeRow {
+    row: gtk::ListBoxRow,
+    name: String,
+    group: Option<usize>,
+}
+
 struct ThemeListRows {
-    scheme_rows: Vec<(gtk::ListBoxRow, String)>,
-    header_rows: Vec<(gtk::ListBoxRow, String)>,
+    scheme_rows: Vec<ThemeSchemeRow>,
+    groups: Vec<ThemeGroup>,
+    query: RefCell<String>,
+}
+
+fn build_group_header(category: &str) -> (gtk::ListBoxRow, gtk::Button, gtk::Image) {
+    let arrow = gtk::Image::from_icon_name("pan-down-symbolic");
+    let label = gtk::Label::builder()
+        .label(pretty_category(category))
+        .xalign(0.0)
+        .hexpand(true)
+        .ellipsize(gtk::pango::EllipsizeMode::End)
+        .css_classes(["group-header"])
+        .build();
+    let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    content.set_margin_top(6);
+    content.set_margin_bottom(2);
+    content.set_margin_start(6);
+    content.set_margin_end(6);
+    content.append(&arrow);
+    content.append(&label);
+    let button = gtk::Button::new();
+    button.add_css_class("flat");
+    button.add_css_class("theme-group-toggle");
+    button.set_hexpand(true);
+    button.set_child(Some(&content));
+    let row = gtk::ListBoxRow::builder()
+        .activatable(false)
+        .selectable(false)
+        .child(&button)
+        .build();
+    (row, button, arrow)
+}
+
+fn build_gap_row() -> gtk::ListBoxRow {
+    let spacer = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    spacer.set_size_request(-1, 8);
+    gtk::ListBoxRow::builder()
+        .activatable(false)
+        .selectable(false)
+        .child(&spacer)
+        .build()
+}
+
+fn set_group_expanded(group: &ThemeGroup, expanded: bool) {
+    let icon = if expanded {
+        "pan-down-symbolic"
+    } else {
+        "pan-end-symbolic"
+    };
+    group.arrow.set_icon_name(Some(icon));
+    for row in &group.rows {
+        row.set_visible(expanded);
+    }
+    group.gap.set_visible(expanded);
+}
+
+fn toggle_group(rows: &ThemeListRows, index: usize) {
+    if !rows.query.borrow().trim().is_empty() {
+        return;
+    }
+    let group = &rows.groups[index];
+    let expanded = !group.expanded.get();
+    group.expanded.set(expanded);
+    set_group_expanded(group, expanded);
 }
 
 fn build_theme_list(list: &gtk::ListBox, metas: &[SchemeMeta], current: &str) -> Rc<ThemeListRows> {
     let mut scheme_rows = Vec::with_capacity(metas.len());
-    let mut header_rows = Vec::new();
+    let mut groups: Vec<ThemeGroup> = Vec::new();
+    let mut current_group: Option<usize> = None;
+    let mut selected_group: Option<usize> = None;
     let mut last_category: Option<&str> = None;
     let mut to_select: Option<gtk::ListBoxRow> = None;
     for meta in metas {
         if meta.category.as_deref() != last_category {
+            if let Some(index) = current_group {
+                let gap = groups[index].gap.clone();
+                list.append(&gap);
+            }
             last_category = meta.category.as_deref();
             if let Some(category) = &meta.category {
-                let header = gtk::Label::builder()
-                    .label(pretty_category(category))
-                    .xalign(0.0)
-                    .ellipsize(gtk::pango::EllipsizeMode::End)
-                    .margin_top(6)
-                    .css_classes(["group-header"])
-                    .build();
-                let row = gtk::ListBoxRow::builder()
-                    .activatable(false)
-                    .selectable(false)
-                    .child(&header)
-                    .build();
-                list.append(&row);
-                header_rows.push((row, category.clone()));
+                let (header, button, arrow) = build_group_header(category);
+                list.append(&header);
+                groups.push(ThemeGroup {
+                    header,
+                    button,
+                    arrow,
+                    rows: Vec::new(),
+                    gap: build_gap_row(),
+                    expanded: Cell::new(true),
+                });
+                current_group = Some(groups.len() - 1);
+            } else {
+                current_group = None;
             }
         }
         let content = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -122,7 +262,7 @@ fn build_theme_list(list: &gtk::ListBox, metas: &[SchemeMeta], current: &str) ->
         content.append(&swatches);
         content.append(
             &gtk::Label::builder()
-                .label(&meta.name)
+                .label(row_label(meta))
                 .xalign(0.0)
                 .hexpand(true)
                 .ellipsize(gtk::pango::EllipsizeMode::End)
@@ -131,47 +271,99 @@ fn build_theme_list(list: &gtk::ListBox, metas: &[SchemeMeta], current: &str) ->
         let row = gtk::ListBoxRow::new();
         row.set_child(Some(&content));
         row.set_widget_name(&meta.name);
+        row.set_tooltip_text(Some(&meta.name));
         list.append(&row);
+        if let Some(index) = current_group {
+            groups[index].rows.push(row.clone());
+        }
         if meta.name == current {
+            selected_group = current_group;
             to_select = Some(row.clone());
         }
-        scheme_rows.push((row, meta.name.clone()));
+        scheme_rows.push(ThemeSchemeRow {
+            row,
+            name: meta.name.clone(),
+            group: current_group,
+        });
+    }
+    if let Some(index) = current_group {
+        let gap = groups[index].gap.clone();
+        list.append(&gap);
+    }
+    for (index, group) in groups.iter().enumerate() {
+        let expanded = selected_group == Some(index);
+        group.expanded.set(expanded);
+        set_group_expanded(group, expanded);
     }
     if let Some(row) = to_select {
         list.select_row(Some(&row));
     }
-    Rc::new(ThemeListRows {
+    let rows = Rc::new(ThemeListRows {
         scheme_rows,
-        header_rows,
-    })
+        groups,
+        query: RefCell::new(String::new()),
+    });
+    for (index, group) in rows.groups.iter().enumerate() {
+        let rows = rows.clone();
+        group
+            .button
+            .connect_clicked(move |_| toggle_group(&rows, index));
+    }
+    rows
 }
 
 fn apply_theme_filter(
     rows: &ThemeListRows,
-    metas: &[SchemeMeta],
     query: &str,
     list: &gtk::ListBox,
     scrolled: &gtk::ScrolledWindow,
 ) {
     let query = query.trim().to_lowercase();
-    let matches: Vec<bool> = metas
+    *rows.query.borrow_mut() = query.clone();
+    let matches: Vec<bool> = rows
+        .scheme_rows
         .iter()
-        .map(|meta| query.is_empty() || meta.name.to_lowercase().contains(&query))
+        .map(|scheme| query.is_empty() || scheme.name.to_lowercase().contains(&query))
         .collect();
-    let mut first_hit: Option<&gtk::ListBoxRow> = None;
-    for (visible, (row, _)) in matches.iter().zip(&rows.scheme_rows) {
-        row.remove_css_class("search-hit");
-        row.set_visible(*visible);
-        if *visible && !query.is_empty() && first_hit.is_none() {
-            first_hit = Some(row);
+    let mut group_hits = vec![false; rows.groups.len()];
+    for (scheme, matched) in rows.scheme_rows.iter().zip(&matches) {
+        if *matched {
+            if let Some(index) = scheme.group {
+                group_hits[index] = true;
+            }
         }
     }
-    for (header, category) in &rows.header_rows {
-        let visible = metas
-            .iter()
-            .zip(&matches)
-            .any(|(meta, ok)| *ok && meta.category.as_deref() == Some(category.as_str()));
-        header.set_visible(visible);
+    for (index, group) in rows.groups.iter().enumerate() {
+        let expanded = if query.is_empty() {
+            group.expanded.get()
+        } else {
+            group_hits[index]
+        };
+        group
+            .header
+            .set_visible(query.is_empty() || group_hits[index]);
+        let icon = if expanded {
+            "pan-down-symbolic"
+        } else {
+            "pan-end-symbolic"
+        };
+        group.arrow.set_icon_name(Some(icon));
+        group.gap.set_visible(expanded);
+    }
+    let mut first_hit: Option<&gtk::ListBoxRow> = None;
+    for (scheme, matched) in rows.scheme_rows.iter().zip(&matches) {
+        let visible = if query.is_empty() {
+            scheme
+                .group
+                .map_or(true, |index| rows.groups[index].expanded.get())
+        } else {
+            *matched
+        };
+        scheme.row.remove_css_class("search-hit");
+        scheme.row.set_visible(visible);
+        if visible && !query.is_empty() && first_hit.is_none() {
+            first_hit = Some(&scheme.row);
+        }
     }
     if let Some(row) = first_hit {
         row.add_css_class("search-hit");
@@ -202,7 +394,7 @@ pub(crate) fn build_theme(value_text: &str) -> Editor {
     list.add_css_class("theme-list");
     list.set_selection_mode(gtk::SelectionMode::Single);
 
-    let metas = Rc::new(scheme_metas());
+    let metas = scheme_metas();
     let selected_name = current.borrow().clone();
     let rows = build_theme_list(&list, &metas, &selected_name);
 
@@ -218,7 +410,7 @@ pub(crate) fn build_theme(value_text: &str) -> Editor {
         .build();
 
     let left = gtk::Box::new(gtk::Orientation::Vertical, 6);
-    left.set_hexpand(true);
+    left.set_hexpand(false);
     left.append(&search);
     left.append(&scrolled);
 
@@ -263,9 +455,8 @@ pub(crate) fn build_theme(value_text: &str) -> Editor {
     }
 
     search.connect_search_changed({
-        let (rows, metas, list, scrolled) =
-            (rows.clone(), metas.clone(), list.clone(), scrolled.clone());
-        move |entry| apply_theme_filter(&rows, &metas, &entry.text(), &list, &scrolled)
+        let (rows, list, scrolled) = (rows.clone(), list.clone(), scrolled.clone());
+        move |entry| apply_theme_filter(&rows, &entry.text(), &list, &scrolled)
     });
 
     Editor::Theme {
@@ -321,7 +512,8 @@ fn raw_strip(index: usize) -> gtk::Box {
     strip.add_css_class(&format!("s{index}"));
     for ci in 0..16 {
         let swatch = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        swatch.set_size_request(28, 28);
+        swatch.set_size_request(-1, 28);
+        swatch.set_hexpand(true);
         swatch.add_css_class("theme-swatch");
         swatch.add_css_class(&format!("s{index}-c{ci}"));
         strip.append(&swatch);
@@ -482,6 +674,9 @@ pub(crate) fn install_swatch_css() {
 
 fn static_theme_css() -> String {
     let mut css = String::new();
+    css.push_str(
+        ".theme-group-toggle { padding: 0; background-color: transparent; background-image: none; box-shadow: none; }\n",
+    );
     css.push_str(".theme-raw { padding: 6px; border-radius: 6px; }\n");
     css.push_str(".theme-raw .theme-swatch { border-radius: 3px; }\n");
     css.push_str(".theme-ui { padding: 10px; border-radius: 6px; }\n");
@@ -568,38 +763,142 @@ mod tests {
     }
 
     #[test]
-    fn variant_split_matches_research_examples() {
+    fn variant_split_groups_under_meaningful_prefixes() {
         let all = [
+            "aroz-con-dulce",
+            "aroz-con-dulce-dark",
+            "ascendancy",
+            "ashes",
+            "atelier-cave",
+            "atelier-cave-light",
+            "atelier-dune",
+            "atelier-dune-light",
+            "black-metal",
+            "black-metal-bathory",
+            "black-metal-venom",
             "catppuccin-latte",
             "catppuccin-mocha",
             "da-one-dark",
             "da-one-gruvbox",
+            "everforest",
             "everforest-dark-hard",
             "everforest-dark-medium",
             "everforest-light-hard",
+            "github",
+            "github-dark",
             "github-dark-dimmed",
             "github-dark-high-contrast",
             "github-light",
             "nord",
+            "nord-light",
         ];
-        assert_eq!(split_variant("nord", &all), (None, "nord"));
+        assert_eq!(split_variant("nord", &all), (Some("nord"), ""));
         assert_eq!(
             split_variant("catppuccin-mocha", &all),
             (Some("catppuccin"), "mocha")
         );
         assert_eq!(
             split_variant("everforest-dark-hard", &all),
-            (Some("everforest-dark"), "hard")
+            (Some("everforest"), "dark-hard")
         );
         assert_eq!(split_variant("da-one-dark", &all), (Some("da-one"), "dark"));
         assert_eq!(
             split_variant("github-dark-high-contrast", &all),
-            (Some("github-dark"), "high-contrast")
+            (Some("github"), "dark-high-contrast")
         );
         assert_eq!(
             split_variant("github-light", &all),
             (Some("github"), "light")
         );
+        assert_eq!(
+            split_variant("black-metal", &all),
+            (Some("black-metal"), "")
+        );
+        assert_eq!(
+            split_variant("black-metal-venom", &all),
+            (Some("black-metal"), "venom")
+        );
+        assert_eq!(
+            split_variant("atelier-cave", &all),
+            (Some("atelier-cave"), "")
+        );
+        assert_eq!(
+            split_variant("atelier-cave-light", &all),
+            (Some("atelier-cave"), "light")
+        );
+        assert_eq!(
+            split_variant("aroz-con-dulce", &all),
+            (Some("aroz-con-dulce"), "")
+        );
+        assert_eq!(
+            split_variant("aroz-con-dulce-dark", &all),
+            (Some("aroz-con-dulce"), "dark")
+        );
+        assert_eq!(split_variant("ascendancy", &all), (None, "ascendancy"));
+        assert_eq!(split_variant("ashes", &all), (None, "ashes"));
+    }
+
+    #[test]
+    fn grouped_rows_show_only_the_variant() {
+        let metas = vec![
+            SchemeMeta {
+                index: 0,
+                name: "atelier-cave".to_string(),
+                category: Some("atelier-cave".to_string()),
+                variant: String::new(),
+            },
+            SchemeMeta {
+                index: 1,
+                name: "atelier-cave-light".to_string(),
+                category: Some("atelier-cave".to_string()),
+                variant: "light".to_string(),
+            },
+            SchemeMeta {
+                index: 2,
+                name: "ashes".to_string(),
+                category: None,
+                variant: "ashes".to_string(),
+            },
+        ];
+        assert_eq!(row_label(&metas[0]), "default");
+        assert_eq!(row_label(&metas[1]), "light");
+        assert_eq!(row_label(&metas[2]), "ashes");
+    }
+
+    #[test]
+    fn nested_categories_collapse_into_the_shortest_parent() {
+        let mut metas = vec![
+            SchemeMeta {
+                index: 0,
+                name: "equilibrium-dark".to_string(),
+                category: Some("equilibrium".to_string()),
+                variant: "dark".to_string(),
+            },
+            SchemeMeta {
+                index: 1,
+                name: "equilibrium-gray-dark".to_string(),
+                category: Some("equilibrium-gray".to_string()),
+                variant: "dark".to_string(),
+            },
+            SchemeMeta {
+                index: 2,
+                name: "equilibrium-gray-light".to_string(),
+                category: Some("equilibrium-gray".to_string()),
+                variant: "light".to_string(),
+            },
+            SchemeMeta {
+                index: 3,
+                name: "equilibrium-light".to_string(),
+                category: Some("equilibrium".to_string()),
+                variant: "light".to_string(),
+            },
+        ];
+        collapse_nested_categories(&mut metas);
+        for meta in &metas {
+            assert_eq!(meta.category.as_deref(), Some("equilibrium"));
+        }
+        assert_eq!(metas[1].variant, "gray-dark");
+        assert_eq!(metas[2].variant, "gray-light");
     }
 
     #[test]
@@ -624,6 +923,16 @@ mod tests {
                     meta.name,
                     category
                 );
+            }
+        }
+        for (name, category) in [
+            ("black-metal", "black-metal"),
+            ("atelier-cave", "atelier-cave"),
+            ("everforest", "everforest"),
+            ("github", "github"),
+        ] {
+            if let Some(meta) = metas.iter().find(|meta| meta.name == name) {
+                assert_eq!(meta.category.as_deref(), Some(category), "{name}");
             }
         }
     }
@@ -667,27 +976,30 @@ mod tests {
                 index: 0,
                 name: "nord".to_string(),
                 category: None,
+                variant: "nord".to_string(),
             },
             SchemeMeta {
                 index: 1,
                 name: "catppuccin-latte".to_string(),
                 category: Some("catppuccin".to_string()),
+                variant: "latte".to_string(),
             },
             SchemeMeta {
                 index: 2,
                 name: "catppuccin-mocha".to_string(),
                 category: Some("catppuccin".to_string()),
+                variant: "mocha".to_string(),
             },
         ];
         let list = gtk::ListBox::new();
         let rows = build_theme_list(&list, &metas, "nord");
         let scrolled = gtk::ScrolledWindow::new();
 
-        apply_theme_filter(&rows, &metas, "mocha", &list, &scrolled);
+        apply_theme_filter(&rows, "mocha", &list, &scrolled);
         let visible: Vec<(&str, bool)> = rows
             .scheme_rows
             .iter()
-            .map(|(row, name)| (name.as_str(), row.is_visible()))
+            .map(|scheme| (scheme.name.as_str(), scheme.row.is_visible()))
             .collect();
         assert_eq!(
             visible,
@@ -697,11 +1009,14 @@ mod tests {
                 ("catppuccin-mocha", true)
             ]
         );
-        assert!(rows.header_rows[0].0.is_visible());
+        assert!(rows.groups[0].header.is_visible());
 
-        apply_theme_filter(&rows, &metas, "no-such-scheme", &list, &scrolled);
-        assert!(rows.scheme_rows.iter().all(|(row, _)| !row.is_visible()));
-        assert!(!rows.header_rows[0].0.is_visible());
-        assert_eq!(rows.scheme_rows[0].1.as_str(), "nord");
+        apply_theme_filter(&rows, "no-such-scheme", &list, &scrolled);
+        assert!(rows
+            .scheme_rows
+            .iter()
+            .all(|scheme| !scheme.row.is_visible()));
+        assert!(!rows.groups[0].header.is_visible());
+        assert_eq!(rows.scheme_rows[0].name.as_str(), "nord");
     }
 }

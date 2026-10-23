@@ -151,12 +151,7 @@ fn build_heads_stage(
         let click = gtk::GestureClick::new();
         click.connect_pressed(move |_, n_press, _, _| {
             if n_press == 2 {
-                show_mode_stage(
-                    &monitor_click,
-                    &stack_click,
-                    &on_pick_click,
-                    &popover_click,
-                );
+                show_mode_stage(&monitor_click, &stack_click, &on_pick_click, &popover_click);
             }
         });
         row.add_controller(click);
