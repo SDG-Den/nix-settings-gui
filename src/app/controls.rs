@@ -11,6 +11,42 @@ use crate::widgets::{self, Editor};
 
 use super::state::{App, ControlRow, MenuPage, Msg};
 
+/// Bolt shown beside an option's label when its applyCommand runs on change.
+fn live_marker(record: &Record) -> gtk::Image {
+    let icon = match gtk::gdk::Display::default() {
+        Some(display)
+            if gtk::IconTheme::for_display(&display).has_icon("flash-symbolic") =>
+        {
+            "flash-symbolic"
+        }
+        _ => "emblem-important-symbolic",
+    };
+    let marker = gtk::Image::from_icon_name(icon);
+    marker.set_pixel_size(14);
+    marker.set_valign(gtk::Align::Center);
+    marker.add_css_class("accent");
+    if let Some(command) = record.spec.apply_command.as_deref() {
+        marker.set_tooltip_text(Some(&format!("Applies immediately: {command}")));
+    }
+    marker
+}
+
+/// Show the bolt only while live-apply is on and the row has a command.
+pub(super) fn refresh_live_markers(app: &Rc<App>) {
+    let enabled = app.config.borrow().live_apply;
+    for page in app.pages.borrow().iter() {
+        for control in &page.controls {
+            let container = matches!(
+                &*control.editor.borrow(),
+                Editor::Submodule { .. } | Editor::HorizontalSubmodule { .. }
+            );
+            control.live.set_visible(
+                enabled && !container && control.record.spec.apply_command.is_some(),
+            );
+        }
+    }
+}
+
 pub(super) fn control_cmp(
     a: &ControlRow,
     b: &ControlRow,
@@ -145,9 +181,20 @@ pub(super) fn build_control_row(
     let name = gtk::Label::builder()
         .label(label_text)
         .xalign(0.0)
+        .hexpand(true)
         .wrap(true)
         .build();
-    labels.append(&name);
+    let live = live_marker(record);
+    live.set_visible(
+        app.config.borrow().live_apply
+            && record.spec.apply_command.is_some()
+            && !matches!(&editor, Editor::Submodule { .. } | Editor::HorizontalSubmodule { .. }),
+    );
+    let title = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    title.set_hexpand(true);
+    title.append(&name);
+    title.append(&live);
+    labels.append(&title);
 
     let desc = gtk::Label::builder()
         .label(record.spec.description.clone().unwrap_or_default())
@@ -221,6 +268,7 @@ pub(super) fn build_control_row(
         slot,
         desc,
         dirty,
+        live,
         reset,
         src_index,
         dep_visible: Cell::new(true),

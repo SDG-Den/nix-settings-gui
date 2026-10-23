@@ -470,6 +470,7 @@ fn wire_preferences(
         live_apply.connect_active_notify(move |switch| {
             app.config.borrow_mut().live_apply = switch.is_active();
             let _ = app.config.borrow().save();
+            controls::refresh_live_markers(&app);
         });
     }
     {

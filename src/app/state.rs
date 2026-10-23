@@ -49,6 +49,7 @@ pub(super) struct ControlRow {
     pub(super) slot: gtk::Box,
     pub(super) desc: gtk::Label,
     pub(super) dirty: gtk::Label,
+    pub(super) live: gtk::Image,
     pub(super) reset: gtk::Button,
     /// Position of this control's record in source order, used to preserve
     /// declaration order when no explicit `order` is set.
