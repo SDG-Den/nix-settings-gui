@@ -1,5 +1,6 @@
 use super::context::{BuildContext, ChangeHook};
 use super::dispatch::build;
+use super::dms_catalog::{widget_description, widget_icon};
 use super::fields::{dim_line, make_attrset_field, AttrsetField};
 use super::names::{field_caption, field_help, known_widget_name, widget_display_name};
 use super::submodule::hook_notify;
@@ -380,30 +381,49 @@ pub(crate) fn make_widget_tile(
     let row = gtk::ListBoxRow::new();
     row.set_activatable(false);
     row.set_selectable(false);
-    let body = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    body.set_margin_top(4);
-    body.set_margin_bottom(4);
-    body.set_margin_start(6);
-    body.set_margin_end(4);
+    row.add_css_class("dms-widget-row");
+    let body = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    body.set_margin_top(8);
+    body.set_margin_bottom(8);
+    body.set_margin_start(10);
+    body.set_margin_end(10);
     row.set_child(Some(&body));
 
     let grip = gtk::Image::from_icon_name("open-menu-symbolic");
+    grip.add_css_class("dim-label");
+    grip.set_tooltip_text(Some("Drag to reorder"));
     body.append(&grip);
 
+    let icon_name = preset
+        .as_ref()
+        .and_then(|preset| preset.icon.clone())
+        .unwrap_or_else(|| widget_icon(id).to_string());
+    let icon = gtk::Image::from_icon_name(&icon_name);
+    icon.set_pixel_size(22);
+    icon.add_css_class("dms-widget-icon");
+    body.append(&icon);
+
+    let text = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    text.set_hexpand(true);
     let label = gtk::Label::builder()
         .xalign(0.0)
         .ellipsize(gtk::pango::EllipsizeMode::End)
         .label(&display)
         .css_classes(["heading"])
         .build();
-    label.set_hexpand(true);
-    if let Some(description) = preset
+    text.append(&label);
+    let description = preset
         .as_ref()
-        .and_then(|preset| preset.description.as_deref())
-    {
-        label.set_tooltip_text(Some(description));
-    }
-    body.append(&label);
+        .and_then(|preset| preset.description.clone())
+        .unwrap_or_else(|| widget_description(id).to_string());
+    let subtitle = gtk::Label::builder()
+        .xalign(0.0)
+        .ellipsize(gtk::pango::EllipsizeMode::End)
+        .label(&description)
+        .css_classes(["dim-label", "caption"])
+        .build();
+    text.append(&subtitle);
+    body.append(&text);
 
     let enabled_state = Rc::new(Cell::new(enabled));
     if !section.is_center() {
@@ -432,7 +452,7 @@ pub(crate) fn make_widget_tile(
             None => orig_id.is_empty() || !fields.borrow().is_empty(),
         };
         if show_cog {
-            let cog = gtk::Button::from_icon_name("preferences-system-symbolic");
+            let cog = gtk::Button::from_icon_name("go-next-symbolic");
             cog.add_css_class("flat");
             cog.set_tooltip_text(Some("Widget settings"));
             body.append(&cog);

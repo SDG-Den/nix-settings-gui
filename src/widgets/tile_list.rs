@@ -1,5 +1,6 @@
 use super::basic::clear_rows;
 use super::context::{BuildContext, ChangeHook};
+use super::dms_catalog::{widget_description, widget_icon};
 use super::names::widget_display_name;
 use super::nix::truthy;
 use super::tile::{attach_tile_dnd, make_field_for_preset, make_widget_tile, WidgetTile};
@@ -285,16 +286,18 @@ pub(crate) fn populate_widget_picker(
         line.set_margin_bottom(6);
         line.set_margin_start(8);
         line.set_margin_end(8);
-        if let Some(icon) = &preset.icon {
-            let resolved = gtk::gdk::Display::default().and_then(|display| {
-                let theme = gtk::IconTheme::for_display(&display);
-                pick_icon_name(|name| theme.has_icon(name), Some(icon.as_str()))
-            });
-            if let Some(name) = resolved {
-                let image = gtk::Image::from_icon_name(&name);
-                image.set_pixel_size(24);
-                line.append(&image);
-            }
+        let icon_name = preset
+            .icon
+            .clone()
+            .unwrap_or_else(|| widget_icon(&preset.id).to_string());
+        let resolved = gtk::gdk::Display::default().and_then(|display| {
+            let theme = gtk::IconTheme::for_display(&display);
+            pick_icon_name(|name| theme.has_icon(name), Some(&icon_name))
+        });
+        if let Some(name) = resolved {
+            let image = gtk::Image::from_icon_name(&name);
+            image.set_pixel_size(24);
+            line.append(&image);
         }
         let text = gtk::Box::new(gtk::Orientation::Vertical, 2);
         text.set_hexpand(true);
@@ -310,19 +313,43 @@ pub(crate) fn populate_widget_picker(
             .css_classes(["heading"])
             .build();
         text.append(&label);
-        if let Some(description) = &preset.description {
-            let dim = gtk::Label::builder()
-                .xalign(0.0)
-                .ellipsize(gtk::pango::EllipsizeMode::End)
-                .label(description)
-                .css_classes(["dim-label"])
-                .build();
-            text.append(&dim);
-        }
+        let description = preset
+            .description
+            .clone()
+            .unwrap_or_else(|| widget_description(&preset.id).to_string());
+        let dim = gtk::Label::builder()
+            .xalign(0.0)
+            .ellipsize(gtk::pango::EllipsizeMode::End)
+            .label(&description)
+            .css_classes(["dim-label", "caption"])
+            .build();
+        text.append(&dim);
         line.append(&text);
         row.set_child(Some(&line));
         picker_list.append(&row);
     }
+}
+
+fn install_tile_css() {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        let css = "
+            .dms-widget-row { border-radius: 12px; }
+            .dms-widget-row:hover { background-color: alpha(@window_fg_color, 0.06); }
+            .dms-widget-icon { -gtk-icon-size: 22px; color: @window_fg_color; }
+            list.dms-widget-list > row { border-radius: 12px; margin: 1px 0; }
+        ";
+        let provider = gtk::CssProvider::new();
+        provider.load_from_data(css);
+        if let Some(display) = gtk::gdk::Display::default() {
+            gtk::style_context_add_provider_for_display(
+                &display,
+                &provider,
+                gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+            );
+        }
+    });
 }
 
 impl WidgetTileList {
@@ -336,6 +363,7 @@ impl WidgetTileList {
         on_change: &ChangeHook,
         shared: Option<SharedBarSections>,
     ) -> Self {
+        install_tile_css();
         let root = gtk::Box::new(gtk::Orientation::Vertical, 6);
         root.set_hexpand(true);
         let heading = gtk::Label::builder()
@@ -346,6 +374,7 @@ impl WidgetTileList {
         root.append(&heading);
 
         let list = gtk::ListBox::new();
+        list.add_css_class("dms-widget-list");
         list.set_selection_mode(gtk::SelectionMode::None);
         list.set_hexpand(true);
         let tiles: Rc<RefCell<Vec<WidgetTile>>> = Rc::new(RefCell::new(Vec::new()));

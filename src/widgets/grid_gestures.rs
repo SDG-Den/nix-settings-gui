@@ -2,7 +2,7 @@ use super::grid::{
     grid_index_of, grid_reattach, grid_repack, grid_restore_pinned, grid_select, grid_set_status,
     grid_update_size_caption, GridLayoutState, GridTile,
 };
-use super::grid_details::grid_refresh_details;
+use super::grid_details::{grid_delete, grid_refresh_details};
 use super::grid_layout::GRID_GAP;
 use super::names::widget_display_name;
 use gtk::prelude::*;
@@ -46,6 +46,26 @@ pub(crate) fn wire_grid_tile(state: &Rc<GridLayoutState>, tile: &GridTile) {
             st.notify();
         });
     }
+    {
+        let st = state.clone();
+        let button = tile.tile.clone();
+        tile.options_button.connect_clicked(move |_| {
+            if let Some(index) = grid_index_of(&st, &button) {
+                grid_select(&st, index);
+            }
+        });
+    }
+    {
+        let st = state.clone();
+        let button = tile.tile.clone();
+        tile.remove_button.connect_clicked(move |_| {
+            if let Some(index) = grid_index_of(&st, &button) {
+                grid_select(&st, index);
+                grid_delete(&st);
+            }
+        });
+    }
+
     wire_grid_move(state, tile);
     wire_grid_resize(state, tile, &tile.right_strip, true, false);
     wire_grid_resize(state, tile, &tile.bottom_strip, false, true);

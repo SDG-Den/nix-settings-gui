@@ -147,6 +147,86 @@ pub(crate) fn card_defaults(surface: GridSurface, id: &str) -> Vec<(&'static str
     }
 }
 
+/// Symbolic icon used by the editor when it cannot render the real widget.
+pub(crate) fn widget_icon(id: &str) -> &'static str {
+    match id {
+        "user" => "avatar-default-symbolic",
+        "battery" => "battery-symbolic",
+        "settings" | "controlCenterButton" => "emblem-system-symbolic",
+        "lock" => "system-lock-screen-symbolic",
+        "power" => "system-shutdown-symbolic",
+        "brightnessSlider" => "display-brightness-symbolic",
+        "volumeSlider" | "audioOutput" | "audioInput" | "music" => "audio-volume-high-symbolic",
+        "wifi" | "network" | "network_speed_monitor" => "network-wireless-symbolic",
+        "bluetooth" => "bluetooth-symbolic",
+        "diskUsage" | "disk" => "drive-harddisk-symbolic",
+        "clock" => "alarm-symbolic",
+        "weather" | "conditions" | "hourly" | "daily" | "sun" | "moon" => "weather-clear-symbolic",
+        "clipboard" => "edit-paste-symbolic",
+        "cpuUsage" | "cpu" | "sysmon" => "utilities-system-monitor-symbolic",
+        "memUsage" | "memory" => "media-flash-symbolic",
+        "calendar" => "x-office-calendar-symbolic",
+        "notifications" => "preferences-system-notifications-symbolic",
+        "doNotDisturb" => "notifications-disabled-symbolic",
+        "idleInhibitor" => "preferences-system-time-symbolic",
+        "nightMode" => "night-light-symbolic",
+        "darkMode" => "weather-clear-night-symbolic",
+        "colorPicker" => "color-select-symbolic",
+        "runningApps" => "view-app-grid-symbolic",
+        "systemTray" | "tray" => "preferences-system-symbolic",
+        "wellbeing" => "emblem-favorite-symbolic",
+        "humidity" => "weather-showers-symbolic",
+        "wind" => "weather-windy-symbolic",
+        "pressure" => "weather-severe-alert-symbolic",
+        "precipitation" => "weather-showers-scattered-symbolic",
+        "visibility" => "view-reveal-symbolic",
+        "uv" => "weather-clear-symbolic",
+        _ => "application-x-executable-symbolic",
+    }
+}
+
+pub(crate) fn widget_description(id: &str) -> &'static str {
+    match id {
+        "user" => "Profile and account",
+        "battery" => "Battery and power profile",
+        "settings" => "Open settings",
+        "lock" => "Lock the session",
+        "power" => "Power menu",
+        "brightnessSlider" => "Display brightness",
+        "volumeSlider" => "Audio volume",
+        "audioOutput" => "Output device",
+        "audioInput" => "Input device",
+        "wifi" => "Network connection",
+        "bluetooth" => "Bluetooth devices",
+        "diskUsage" => "Filesystem usage",
+        "clock" => "Time and date",
+        "weather" => "Current conditions",
+        "music" => "Now playing",
+        "clipboard" => "Clipboard history",
+        "cpuUsage" => "CPU usage",
+        "memUsage" => "Memory usage",
+        "notifications" => "Notification center",
+        "calendar" => "Calendar and events",
+        "media" => "Media controls",
+        "sysmon" => "System monitor",
+        "network" => "Network throughput",
+        "disk" => "Disk activity",
+        "wellbeing" => "Screen time",
+        "conditions" => "Current weather",
+        "hourly" => "Hourly forecast",
+        "daily" => "Daily forecast",
+        "sun" => "Sunrise and sunset",
+        "moon" => "Moon position",
+        "humidity" => "Humidity reading",
+        "wind" => "Wind speed",
+        "pressure" => "Pressure reading",
+        "precipitation" => "Precipitation chance",
+        "visibility" => "Visibility distance",
+        "uv" => "UV index",
+        _ => "DMS widget",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

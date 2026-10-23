@@ -1,5 +1,5 @@
 use super::context::{BuildContext, ChangeHook};
-use super::dms_catalog::GridSurface;
+use super::dms_catalog::{widget_description, widget_icon, GridSurface};
 use super::editor::Editor;
 use super::grid_details::{
     grid_clear_all, grid_refresh_adder, grid_refresh_details, grid_reset_layout,
@@ -36,6 +36,10 @@ pub(crate) struct GridTile {
     pub(crate) right_strip: gtk::Box,
     pub(crate) bottom_strip: gtk::Box,
     pub(crate) corner_strip: gtk::Box,
+    pub(crate) chrome: gtk::Box,
+    pub(crate) remove_button: gtk::Button,
+    pub(crate) options_button: gtk::Button,
+    pub(crate) size_badge: gtk::Label,
 }
 
 /// The per-page shape of a grid control, derived from the record path.
@@ -191,6 +195,7 @@ pub(crate) fn build_grid_configuration(record: &Record, ctx: &BuildContext) -> E
     root.set_hexpand(true);
     let on_change: ChangeHook = Rc::new(RefCell::new(None));
     let canvas = gtk::Grid::new();
+    canvas.add_css_class("dms-card-canvas");
     canvas.set_column_homogeneous(true);
     canvas.set_row_homogeneous(true);
     canvas.set_column_spacing(GRID_GAP as u32);
@@ -377,10 +382,37 @@ pub(crate) fn install_grid_css() {
     use std::sync::Once;
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
-        let css = ".grid-resize {
-            background-color: alpha(@window_fg_color, 0.25);
-            border-radius: 3px;
-        }";
+        let css = "
+            .grid-resize {
+                background-color: alpha(@window_fg_color, 0.25);
+                border-radius: 3px;
+            }
+            .dms-card {
+                background-color: alpha(@window_fg_color, 0.05);
+                border: 1px solid alpha(@window_fg_color, 0.10);
+                border-radius: 14px;
+                padding: 8px;
+            }
+            .dms-card:hover { background-color: alpha(@window_fg_color, 0.09); }
+            .dms-card:checked {
+                border: 2px solid @accent_bg_color;
+                background-color: alpha(@accent_bg_color, 0.12);
+            }
+            .dms-card-size {
+                background-color: alpha(@window_fg_color, 0.85);
+                color: @window_bg_color;
+                border-radius: 8px;
+                padding: 2px 7px;
+                font-size: 11px;
+                font-weight: 700;
+            }
+            .dms-card-chrome button { border-radius: 999px; }
+            .dms-card-canvas {
+                background-color: alpha(@window_fg_color, 0.03);
+                border-radius: 18px;
+                padding: 8px;
+            }
+        ";
         let provider = gtk::CssProvider::new();
         provider.load_from_data(css);
         if let Some(display) = gtk::gdk::Display::default() {
@@ -479,12 +511,27 @@ pub(crate) fn make_grid_tile(
         .xalign(0.5)
         .wrap(true)
         .label(widget_display_name(id))
+        .css_classes(["heading"])
         .build();
+    let subtitle = gtk::Label::builder()
+        .xalign(0.5)
+        .wrap(true)
+        .label(widget_description(id))
+        .css_classes(["dim-label", "caption"])
+        .build();
+    let icon = gtk::Image::from_icon_name(widget_icon(id));
+    icon.set_pixel_size(28);
+    let card = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    card.set_valign(gtk::Align::Center);
+    card.set_halign(gtk::Align::Center);
+    card.append(&icon);
+    card.append(&label);
+    card.append(&subtitle);
     let button = gtk::ToggleButton::new();
-    button.add_css_class("flat");
+    button.add_css_class("dms-card");
     button.set_hexpand(true);
     button.set_vexpand(true);
-    button.set_child(Some(&label));
+    button.set_child(Some(&card));
 
     let overlay = gtk::Overlay::new();
     overlay.set_child(Some(&button));
@@ -495,6 +542,32 @@ pub(crate) fn make_grid_tile(
     right_strip.set_visible(false);
     bottom_strip.set_visible(false);
     corner_strip.set_visible(false);
+
+    let chrome = gtk::Box::new(gtk::Orientation::Horizontal, 2);
+    chrome.add_css_class("dms-card-chrome");
+    chrome.set_halign(gtk::Align::End);
+    chrome.set_valign(gtk::Align::Start);
+    chrome.set_margin_top(6);
+    chrome.set_margin_end(6);
+    let options_button = gtk::Button::from_icon_name("emblem-system-symbolic");
+    options_button.add_css_class("flat");
+    options_button.set_tooltip_text(Some("Card options"));
+    let remove_button = gtk::Button::from_icon_name("user-trash-symbolic");
+    remove_button.add_css_class("flat");
+    remove_button.set_tooltip_text(Some("Remove card"));
+    chrome.append(&options_button);
+    chrome.append(&remove_button);
+    chrome.set_visible(false);
+    overlay.add_overlay(&chrome);
+
+    let size_badge = gtk::Label::new(None);
+    size_badge.add_css_class("dms-card-size");
+    size_badge.set_halign(gtk::Align::Start);
+    size_badge.set_valign(gtk::Align::Start);
+    size_badge.set_margin_top(6);
+    size_badge.set_margin_start(6);
+    size_badge.set_visible(false);
+    overlay.add_overlay(&size_badge);
 
     let tile = GridTile {
         id: id.to_string(),
@@ -511,6 +584,10 @@ pub(crate) fn make_grid_tile(
         right_strip,
         bottom_strip,
         corner_strip,
+        chrome,
+        remove_button,
+        options_button,
+        size_badge,
     };
     grid_update_tile_visual(&tile);
     tile
@@ -608,6 +685,17 @@ pub(crate) fn grid_reattach(state: &Rc<GridLayoutState>) {
         }
     }
     let tiles = state.tiles.borrow();
+    if tiles.is_empty() {
+        let empty = gtk::Label::builder()
+            .label("No cards yet. Use Add widget to start.")
+            .css_classes(["dim-label"])
+            .margin_top(24)
+            .margin_bottom(24)
+            .build();
+        state
+            .canvas
+            .attach(&empty, 0, 0, state.profile.columns as i32, 2);
+    }
     let mut rows = 1i64;
     for tile in tiles.iter() {
         if state.profile.has_footer && grid_tile_is_footer(tile) {
@@ -644,6 +732,16 @@ pub(crate) fn grid_update_size_caption(state: &Rc<GridLayoutState>) {
         })
         .unwrap_or_default();
     state.size_caption.set_text(&text);
+    if let Some(tile) = state
+        .selected
+        .borrow()
+        .and_then(|index| state.tiles.borrow().get(index).cloned())
+    {
+        if tile.size_badge.is_visible() {
+            tile.size_badge
+                .set_text(&format!("{} x {}", tile.cell.w, tile.cell.h));
+        }
+    }
 }
 
 pub(crate) fn grid_set_status(state: &Rc<GridLayoutState>, message: &str) {
@@ -659,6 +757,12 @@ pub(crate) fn grid_update_strips(state: &Rc<GridLayoutState>) {
         tile.right_strip.set_visible(show);
         tile.bottom_strip.set_visible(show);
         tile.corner_strip.set_visible(show);
+        tile.chrome.set_visible(show);
+        tile.size_badge.set_visible(show);
+        if show {
+            tile.size_badge
+                .set_text(&format!("{} x {}", tile.cell.w, tile.cell.h));
+        }
     }
 }
 pub(crate) fn grid_tile_nix(tile: &GridTile, profile: GridProfile) -> String {

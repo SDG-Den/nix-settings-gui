@@ -60,6 +60,13 @@ fn render_section_overflow(
 pub(crate) fn build_bar(record: &Record, ctx: &BuildContext) -> Editor {
     let root = gtk::Box::new(gtk::Orientation::Vertical, 8);
     root.set_hexpand(true);
+    let hint = gtk::Label::builder()
+        .xalign(0.0)
+        .wrap(true)
+        .label("Drag to reorder. Move widgets between sections with drag or the row menu. Use the arrow to configure a widget.")
+        .css_classes(["dim-label", "caption"])
+        .build();
+    root.append(&hint);
     let on_change: ChangeHook = Rc::new(RefCell::new(None));
 
     let mut left_value = None;
@@ -208,6 +215,13 @@ pub(crate) fn bar_nix(
 pub(crate) fn build_dock(record: &Record, ctx: &BuildContext) -> Editor {
     let root = gtk::Box::new(gtk::Orientation::Vertical, 8);
     root.set_hexpand(true);
+    let hint = gtk::Label::builder()
+        .xalign(0.0)
+        .wrap(true)
+        .label("Drag to reorder. Use the arrow to configure a widget.")
+        .css_classes(["dim-label", "caption"])
+        .build();
+    root.append(&hint);
     let on_change: ChangeHook = Rc::new(RefCell::new(None));
 
     let mut widgets_value = None;

@@ -1,5 +1,5 @@
 use super::context::BuildContext;
-use super::dms_catalog::{card_defaults, card_size};
+use super::dms_catalog::{card_defaults, card_size, widget_description, widget_icon};
 use super::fields::{dim_line, dim_line_with_help};
 use super::grid::{
     grid_reattach, grid_repack, grid_select, grid_set_status, grid_tile_is_footer,
@@ -68,16 +68,25 @@ pub(crate) fn build_grid_adder(
                 }
                 let row = gtk::ListBoxRow::new();
                 row.set_widget_name(id);
-                let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+                let line = gtk::Box::new(gtk::Orientation::Horizontal, 10);
                 line.set_margin_top(6);
                 line.set_margin_bottom(6);
                 line.set_margin_start(8);
                 line.set_margin_end(8);
-                let text = gtk::Label::builder()
+                let icon = gtk::Image::from_icon_name(widget_icon(id));
+                icon.set_pixel_size(24);
+                line.append(&icon);
+                let text = gtk::Box::new(gtk::Orientation::Vertical, 2);
+                text.set_hexpand(true);
+                let title = gtk::Label::builder().xalign(0.0).label(label).build();
+                let subtitle = gtk::Label::builder()
                     .xalign(0.0)
-                    .label(label)
-                    .hexpand(true)
+                    .ellipsize(gtk::pango::EllipsizeMode::End)
+                    .label(widget_description(id))
+                    .css_classes(["dim-label", "caption"])
                     .build();
+                text.append(&title);
+                text.append(&subtitle);
                 line.append(&text);
                 let add = gtk::Image::from_icon_name("list-add-symbolic");
                 line.append(&add);
@@ -362,18 +371,25 @@ pub(crate) fn grid_refresh_details(state: &Rc<GridLayoutState>) {
         state.details.append(&hint);
         return;
     };
+    let heading_row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    let icon = gtk::Image::from_icon_name(widget_icon(&tile.id));
+    icon.set_pixel_size(28);
+    heading_row.append(&icon);
+    let heading_text = gtk::Box::new(gtk::Orientation::Vertical, 2);
     let heading = gtk::Label::builder()
         .xalign(0.0)
         .label(widget_display_name(&tile.id))
         .css_classes(["heading"])
         .build();
-    state.details.append(&heading);
     let caption = gtk::Label::builder()
         .xalign(0.0)
-        .label(tile.id.clone())
-        .css_classes(["dim-label"])
+        .label(widget_description(&tile.id))
+        .css_classes(["dim-label", "caption"])
         .build();
-    state.details.append(&caption);
+    heading_text.append(&heading);
+    heading_text.append(&caption);
+    heading_row.append(&heading_text);
+    state.details.append(&heading_row);
     if let Some(switch) = &tile.enabled {
         state.details.append(&dim_line_with_help(
             "Enabled",
