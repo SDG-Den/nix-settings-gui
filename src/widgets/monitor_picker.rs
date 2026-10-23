@@ -132,25 +132,36 @@ fn build_heads_stage(
         let row = gtk::ListBoxRow::new();
         row.set_child(Some(&label));
         list.append(&row);
-        let stack = stack.clone();
-        let on_pick = on_pick.clone();
-        let popover = popover.clone();
+        let stack_activate = stack.clone();
+        let on_pick_activate = on_pick.clone();
+        let popover_activate = popover.clone();
+        let monitor_activate = monitor.clone();
         row.connect_activate(move |_| {
-            if let Some(existing) = stack.child_by_name("modes") {
-                stack.remove(&existing);
-            }
-            let stage = build_monitor_mode_stage(&monitor, &on_pick, &popover, &stack);
-            stack.add_named(&stage, Some("modes"));
-            stack.set_visible_child_name("modes");
+            show_mode_stage(
+                &monitor_activate,
+                &stack_activate,
+                &on_pick_activate,
+                &popover_activate,
+            );
         });
+        let stack_click = stack.clone();
+        let on_pick_click = on_pick.clone();
+        let popover_click = popover.clone();
+        let monitor_click = monitor.clone();
+        let click = gtk::GestureClick::new();
+        click.connect_pressed(move |_, n_press, _, _| {
+            if n_press == 2 {
+                show_mode_stage(
+                    &monitor_click,
+                    &stack_click,
+                    &on_pick_click,
+                    &popover_click,
+                );
+            }
+        });
+        row.add_controller(click);
     }
     heads.append(&list);
-    let hint = gtk::Label::builder()
-        .label("Double-click a display to choose its mode.")
-        .xalign(0.0)
-        .css_classes(["dim-label", "caption"])
-        .build();
-    heads.append(&hint);
     let custom = gtk::Button::with_label("Add monitor manually");
     let on_pick_manual = on_pick.clone();
     let popover_manual = popover.clone();
@@ -160,6 +171,20 @@ fn build_heads_stage(
     });
     heads.append(&custom);
     heads
+}
+
+fn show_mode_stage(
+    monitor: &DetectedMonitor,
+    stack: &gtk::Stack,
+    on_pick: &MonitorPick,
+    popover: &gtk::Popover,
+) {
+    if let Some(existing) = stack.child_by_name("modes") {
+        stack.remove(&existing);
+    }
+    let stage = build_monitor_mode_stage(monitor, on_pick, popover, stack);
+    stack.add_named(&stage, Some("modes"));
+    stack.set_visible_child_name("modes");
 }
 
 /// The stage-two page of the monitor picker: choose one advertised mode for a
