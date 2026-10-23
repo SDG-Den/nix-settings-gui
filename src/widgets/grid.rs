@@ -226,7 +226,7 @@ pub(crate) fn build_grid_configuration(record: &Record, ctx: &BuildContext) -> E
             let visible = !(child.spec.hidden && !ctx.advanced);
             let editor = build_bespoke_child(&child, ctx);
             if visible {
-                extras_box.append(&build_child_row(&child, &editor, 1));
+                extras_box.append(&build_child_row(&child, &editor, 1, ctx.expand_details));
             }
             (child, editor)
         })

@@ -58,18 +58,23 @@ the `nixd` JSON-RPC client, and the span-patch plus `nixfmt` write path.
   then the remaining groups in order of first source appearance. Within a group,
   controls with an explicit `order` come first ordered by value, and the rest
   keep declaration order. The same rule applies inside a submodule.
-- Control layout is vertical by default: the label and helper text sit above the
-  widget, left-aligned, and the widget fills the width underneath. A control
+- Control layout is vertical by default: the label sits above the widget,
+  left-aligned, and the widget fills the width underneath. A control
   stays inline (label left, widget right) only for `switch`, `spin`, and
   `dropdown` whose longest choice is under 24 characters. `slider` is vertical.
   Width-hungry widgets (`text`, `multiline`, `path`, `package`, `packages`,
   `list`, module lists, `submodule`, `horizontal-submodule`, tables, and `raw`)
   are full-width.
-- The "imported from <origin>" footer sits below the widget body, last in the
-  control. A submodule shows its own label above the group and its own footer
-  below it, with each nested level indented 12px (capped at four levels).
+- Helper text is collapsed behind an information icon below the widget body.
+  Activating the icon reveals the nixd or comment description and the
+  "imported from <origin>" footer. The icon is hidden when both are absent. A
+  submodule shows its own label above the group and its own collapsed details
+  row below it, with each nested level indented 12px (capped at four levels).
 - A `horizontal-submodule` lays its labelled children out in a homogeneous
-  `FlowBox` that wraps to an equal grid, capped by `maxColumns`.
+  `FlowBox` that wraps to an equal grid, capped by `maxColumns`; each child's
+  description uses the same collapsed details row.
+- `expand_details_by_default` in the config file opens every details row
+  initially. The "Expand setting details" preference toggles it at runtime.
 - Tables (`table-attrset`, `table-list`) render one row per set, one cell per
   `columns` entry, typed by value (switch/spin/text), with built-in add and
   remove. A `@table-item` comment above a row sets its `label`, `hidden`, and
@@ -79,10 +84,11 @@ the `nixd` JSON-RPC client, and the span-patch plus `nixfmt` write path.
 - A control with `visibleWhen` renders only while another option in the same
   menu satisfies the condition, re-evaluated live as values change. Hidden
   controls are not written on save.
-- Each control shows its label, helper text, and an unsaved indicator when its
-  staged value differs from the file.
-- Controls that resolve to another module (a merged import) render with an
-  "imported from <origin>" badge, and edits are applied at the origin file.
+- Each control shows its label, a collapsed details toggle for helper text, and
+  an unsaved indicator when its staged value differs from the file.
+- Controls that resolve to another module (a merged import) include an
+  "imported from <origin>" line in their details, and edits are applied at the
+  origin file.
 - A per-option action resets the control to the nixd default.
 - The "Add option" button sits below the controls.
 - Each `@insert` marker renders an "Add <label>" button at the end of its group
@@ -153,9 +159,9 @@ configuration by following `imports` transitively. `@menu systems` overrides
 the graph, and the `hosts/<host>/` directory name is the fallback when no origin
 can be resolved. The special name `"all"` in a `systems` list matches every host.
 
-Bespoke controls (`keybinds`, `monitors`, `theme`, `menu`, `plugins`, `bar`,
-`dock`) render a configuration-specific UI for a single option, with their own
-add, remove, and reorder actions. Their field shapes are hard-coded in the
+Bespoke controls (`keybinds`, `monitors`, `theme`, `wallpaper`, `menu`, `plugins`,
+`bar`, `dock`) render a configuration-specific UI for a single option, with
+their own add, remove, and reorder actions. Their field shapes are hard-coded in the
 application; the configuration only names the widget through `@option`.
 
 ## 7. Settings submenu
@@ -167,6 +173,7 @@ Stored in `~/.config/nix-settings-gui/config.json`:
 | `flake_path`       | Path to the flake or config directory to open. |
 | `terminal_command` | Terminal prefix used to spawn the rebuild. |
 | `rebuild_command`  | Command run inside the terminal to rebuild. |
+| `expand_details_by_default` | Open setting descriptions and import origins initially. |
 
 The app runs `terminal_command` with `rebuild_command`. If `terminal_command`
 contains a `{cmd}` placeholder it is replaced; otherwise the rebuild command is

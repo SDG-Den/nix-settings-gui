@@ -611,6 +611,16 @@ mod tests {
     }
 
     #[test]
+    fn parses_wallpaper_dir() {
+        let text = "/* @option widget = \"wallpaper\"; wallpaperDir = \"./wallpapers\"; */";
+        let (kind, d) = parse_comment(text).unwrap();
+        assert_eq!(kind, MarkerKind::Option);
+        let opt = OptionSpec::from_directives(&d);
+        assert_eq!(opt.widget, Some(WidgetKind::Wallpaper));
+        assert_eq!(opt.wallpaper_dir.as_deref(), Some("./wallpapers"));
+    }
+
+    #[test]
     fn parses_apply_command() {
         let text =
             "/* @option widget = \"switch\"; applyCommand = \"dms ipc call theme set %%val%%\"; */";
@@ -790,6 +800,7 @@ mod tests {
         assert_eq!(WidgetKind::parse("keybinds"), Some(WidgetKind::Keybinds));
         assert_eq!(WidgetKind::parse("monitors"), Some(WidgetKind::Monitors));
         assert_eq!(WidgetKind::parse("theme"), Some(WidgetKind::Theme));
+        assert_eq!(WidgetKind::parse("wallpaper"), Some(WidgetKind::Wallpaper));
         assert_eq!(WidgetKind::parse("menu"), Some(WidgetKind::Menu));
         assert_eq!(WidgetKind::parse("plugins"), Some(WidgetKind::Plugins));
         assert_eq!(WidgetKind::parse("bar"), Some(WidgetKind::Bar));

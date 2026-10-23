@@ -1,8 +1,6 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use gtk::prelude::*;
-
 use crate::dsl::WidgetKind;
 use crate::metadata::{self, Target};
 use crate::nixd::OptionInfo;
@@ -91,8 +89,7 @@ pub(super) fn apply_infos(app: &Rc<App>, file: &str, infos: &[(String, OptionInf
                 continue;
             };
             if !info.description.is_empty() {
-                control.desc.set_text(&info.description);
-                control.desc.set_visible(true);
+                control.details.set_description(&info.description);
             }
             if let Some(type_str) = &info.type_str {
                 if let Some(widget) = type_widget(type_str) {

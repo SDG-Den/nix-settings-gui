@@ -305,10 +305,7 @@ mod tests {
         assert_eq!(WidgetKind::parse("keybinds"), Some(WidgetKind::Keybinds));
         assert_eq!(WidgetKind::parse("monitors"), Some(WidgetKind::Monitors));
         assert_eq!(WidgetKind::parse("theme"), Some(WidgetKind::Theme));
-        assert_eq!(
-            WidgetKind::parse("wallpaper"),
-            Some(WidgetKind::Wallpaper)
-        );
+        assert_eq!(WidgetKind::parse("wallpaper"), Some(WidgetKind::Wallpaper));
         assert_eq!(WidgetKind::parse("menu"), Some(WidgetKind::Menu));
         assert_eq!(WidgetKind::parse("plugins"), Some(WidgetKind::Plugins));
         assert_eq!(WidgetKind::parse("bar"), Some(WidgetKind::Bar));

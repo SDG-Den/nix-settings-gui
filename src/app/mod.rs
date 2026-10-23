@@ -182,6 +182,12 @@ fn build_ui(app: &adw::Application, tx: &Tx) -> Rc<App> {
         "Run each option's applyCommand as soon as it changes",
         &live_apply_switch,
     ));
+    let expand_details_switch = gtk::Switch::new();
+    menu_box.append(&preference_row(
+        "Expand setting details",
+        "Show setting descriptions and import origins by default",
+        &expand_details_switch,
+    ));
     let mango_reload_switch = gtk::Switch::new();
     menu_box.append(&preference_row(
         "Reload mango after rebuild",
@@ -287,6 +293,7 @@ fn build_ui(app: &adw::Application, tx: &Tx) -> Rc<App> {
     {
         let config = app_state.config.borrow();
         live_apply_switch.set_active(config.live_apply);
+        expand_details_switch.set_active(config.expand_details_by_default);
         mango_reload_switch.set_active(config.reload_mango_on_rebuild);
         dms_reload_switch.set_active(config.reload_dms_on_rebuild);
     }
@@ -305,6 +312,7 @@ fn build_ui(app: &adw::Application, tx: &Tx) -> Rc<App> {
     wire_preferences(
         &app_state,
         &live_apply_switch,
+        &expand_details_switch,
         &mango_reload_switch,
         &dms_reload_switch,
     );
@@ -463,6 +471,7 @@ fn wire(
 fn wire_preferences(
     app: &Rc<App>,
     live_apply: &gtk::Switch,
+    expand_details: &gtk::Switch,
     reload_mango: &gtk::Switch,
     reload_dms: &gtk::Switch,
 ) {
@@ -472,6 +481,15 @@ fn wire_preferences(
             app.config.borrow_mut().live_apply = switch.is_active();
             let _ = app.config.borrow().save();
             controls::refresh_live_markers(&app);
+        });
+    }
+    {
+        let app = app.clone();
+        expand_details.connect_active_notify(move |switch| {
+            let expanded = switch.is_active();
+            app.config.borrow_mut().expand_details_by_default = expanded;
+            let _ = app.config.borrow().save();
+            controls::set_all_details_expanded(&app, expanded);
         });
     }
     {

@@ -21,6 +21,28 @@ fn live_marker(record: &Record) -> gtk::Image {
     }
     marker
 }
+/// Set the expansion state of every built details row, including nested rows.
+pub(super) fn set_all_details_expanded(app: &Rc<App>, expanded: bool) {
+    for page in app.pages.borrow().iter() {
+        for control in &page.controls {
+            set_details_expanded_in(control.row.upcast_ref(), expanded);
+        }
+    }
+}
+
+fn set_details_expanded_in(widget: &gtk::Widget, expanded: bool) {
+    if widget.has_css_class("details-toggle") {
+        if let Some(button) = widget.downcast_ref::<gtk::ToggleButton>() {
+            button.set_active(expanded);
+        }
+    }
+    let mut child = widget.first_child();
+    while let Some(widget) = child {
+        set_details_expanded_in(&widget, expanded);
+        child = widget.next_sibling();
+    }
+}
+
 /// Show the bolt only while live-apply is on and the row has a command.
 pub(super) fn refresh_live_markers(app: &Rc<App>) {
     let enabled = app.config.borrow().live_apply;
@@ -44,6 +66,8 @@ pub(super) fn control_cmp(
 ) -> std::cmp::Ordering {
     crate::model::record_order(&a.record, a.src_index, &b.record, b.src_index, ranks)
 }
+
+const INLINE_LAYOUT_ENABLED: bool = false;
 
 /// A control stays inline (label left, widget right) only for a `switch`, a
 /// `spin`, and a `dropdown` whose longest choice is short. Everything else
@@ -90,6 +114,7 @@ pub(super) fn build_context(app: &Rc<App>) -> widgets::BuildContext {
     ctx.apply = Some(apply_hook(app));
     ctx.base = app.base.borrow().clone();
     ctx.wallpaper = Some(super::wallpaper::actions(app));
+    ctx.expand_details = app.config.borrow().expand_details_by_default;
     ctx
 }
 
@@ -150,7 +175,8 @@ pub(super) fn build_control_row(
     let mut ctx = build_context(app);
     ctx.advanced = app.advanced.get();
     let editor = widgets::build(record, None, &ctx);
-    let inline = control_is_inline(&editor)
+    let inline = INLINE_LAYOUT_ENABLED
+        && control_is_inline(&editor)
         && record
             .spec
             .description
@@ -193,17 +219,11 @@ pub(super) fn build_control_row(
     title.append(&spacer);
     labels.append(&title);
 
-    let desc = gtk::Label::builder()
-        .label(record.spec.description.clone().unwrap_or_default())
-        .xalign(0.0)
-        .hexpand(true)
-        .halign(gtk::Align::Fill)
-        .wrap(true)
-        .wrap_mode(gtk::pango::WrapMode::WordChar)
-        .css_classes(["dim-label", "caption"])
-        .width_chars(48)
-        .build();
-    desc.set_visible(!desc.label().is_empty());
+    let details = widgets::InfoDetails::new(
+        record.spec.description.as_deref(),
+        &record.origin,
+        ctx.expand_details,
+    );
 
     let dirty = gtk::Label::builder()
         .label("•")
@@ -242,19 +262,7 @@ pub(super) fn build_control_row(
         row.append(&labels);
         row.append(&slot);
     }
-    row.append(&desc);
-
-    if !record.origin.is_empty() {
-        let origin = gtk::Label::builder()
-            .label(format!("imported from {}", record.origin))
-            .xalign(0.0)
-            .hexpand(true)
-            .halign(gtk::Align::Fill)
-            .wrap(true)
-            .css_classes(["dim-label", "caption"])
-            .build();
-        row.append(&origin);
-    }
+    row.append(&details.root);
 
     row.set_tooltip_text(Some(&record.path()));
 
@@ -263,7 +271,7 @@ pub(super) fn build_control_row(
         editor: Rc::new(RefCell::new(editor)),
         row,
         slot,
-        desc,
+        details,
         dirty,
         live,
         reset,

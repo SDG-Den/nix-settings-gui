@@ -91,4 +91,6 @@ pub struct BuildContext {
     /// path instead of one relative to its parent.
     pub path_prefix: String,
     pub presets: PresetMap,
+    /// Whether helper text rows start expanded.
+    pub expand_details: bool,
 }

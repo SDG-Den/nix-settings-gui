@@ -11,7 +11,7 @@ use crate::config::AppConfig;
 use crate::model::Record;
 use crate::nixd::OptionInfo;
 use crate::scan::ScanResult;
-use crate::widgets::Editor;
+use crate::widgets::{Editor, InfoDetails};
 
 use super::apply::ApplyState;
 
@@ -47,7 +47,7 @@ pub(super) struct ControlRow {
     pub(super) editor: Rc<RefCell<Editor>>,
     pub(super) row: gtk::Box,
     pub(super) slot: gtk::Box,
-    pub(super) desc: gtk::Label,
+    pub(super) details: InfoDetails,
     pub(super) dirty: gtk::Label,
     pub(super) live: gtk::Image,
     pub(super) reset: gtk::Button,

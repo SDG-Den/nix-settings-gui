@@ -19,6 +19,8 @@ pub struct AppConfig {
     pub reload_mango_on_rebuild: bool,
     #[serde(default)]
     pub reload_dms_on_rebuild: bool,
+    #[serde(default)]
+    pub expand_details_by_default: bool,
 }
 
 fn default_true() -> bool {
@@ -35,6 +37,7 @@ impl Default for AppConfig {
             live_apply: true,
             reload_mango_on_rebuild: false,
             reload_dms_on_rebuild: false,
+            expand_details_by_default: false,
         }
     }
 }
@@ -99,6 +102,7 @@ mod tests {
         assert!(config.live_apply);
         assert!(!config.reload_mango_on_rebuild);
         assert!(!config.reload_dms_on_rebuild);
+        assert!(!config.expand_details_by_default);
     }
 
     #[test]
@@ -109,6 +113,7 @@ mod tests {
         config.live_apply = false;
         config.reload_mango_on_rebuild = true;
         config.reload_dms_on_rebuild = true;
+        config.expand_details_by_default = true;
         let json = serde_json::to_string(&config).unwrap();
         let back: AppConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(back.flake_path, config.flake_path);
@@ -116,5 +121,9 @@ mod tests {
         assert_eq!(back.live_apply, config.live_apply);
         assert_eq!(back.reload_mango_on_rebuild, config.reload_mango_on_rebuild);
         assert_eq!(back.reload_dms_on_rebuild, config.reload_dms_on_rebuild);
+        assert_eq!(
+            back.expand_details_by_default,
+            config.expand_details_by_default
+        );
     }
 }

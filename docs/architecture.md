@@ -11,6 +11,7 @@ modules, their responsibilities, and the data that flows between them.
 main.rs
   app.rs        GTK4 / libadwaita shell, view state, flows
     widgets.rs  widget factory and value serialization
+      wallpaper.rs  horizontal wallpaper picker, previews, file operations
     edit.rs     span-patch engine, nixfmt, atomic write
     scan.rs     file discovery and record extraction
     dsl.rs      @menu / @option / @template comment parsing
@@ -63,6 +64,9 @@ widget factory can pick a control.
 ## 5. Widgets
 
 `widgets.rs` maps a record and its type string to one of the `Editor` variants.
+`widgets/wallpaper.rs` renders the horizontal wallpaper strip, resolves
+`wallpaperDir` relative to the module file, and asks the app to copy or remove
+images and stage them with git.
 Each editor owns a GTK root widget, reports whether it is `unchanged`, produces
 its `PendingEdit`s, and renders its value as a Nix literal. Serialization rules
 live here: strings are quoted and escaped, numbers respect `digits`, paths stay

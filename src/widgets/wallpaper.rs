@@ -42,10 +42,6 @@ impl WallpaperChoice {
             WallpaperChoice::File(file) => quote(&file.absolute.to_string_lossy()),
         }
     }
-
-    fn is_auto(&self) -> bool {
-        matches!(self, WallpaperChoice::Auto)
-    }
 }
 
 pub(crate) struct WallpaperUi {
@@ -87,11 +83,7 @@ struct WallpaperView {
     actions: WallpaperActions,
 }
 
-pub(crate) fn build_wallpaper(
-    record: &Record,
-    value_text: &str,
-    ctx: &BuildContext,
-) -> Editor {
+pub(crate) fn build_wallpaper(record: &Record, value_text: &str, ctx: &BuildContext) -> Editor {
     let Some(actions) = ctx.wallpaper.clone() else {
         return Editor::Path(super::basic::build_entry(value_text, &record.spec, false));
     };
@@ -177,14 +169,15 @@ pub(crate) fn build_wallpaper(
         let view = view.clone();
         let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::BOTH_AXES);
         scroll.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let scrolled = view.scrolled.clone();
         scroll.connect_scroll(move |controller, dx, dy| {
-            if !view.scrolled.has_focus() {
+            if !scrolled.has_focus() {
                 return gtk::glib::Propagation::Proceed;
             }
             let delta = if dx.abs() > f64::EPSILON { dx } else { dy };
-            let adjustment = view.scrolled.hadjustment();
-            let next = adjustment.value()
-                + scroll_delta(delta, controller.unit(), adjustment.page_size());
+            let adjustment = scrolled.hadjustment();
+            let next =
+                adjustment.value() + scroll_delta(delta, controller.unit(), adjustment.page_size());
             let upper = (adjustment.upper() - adjustment.page_size()).max(adjustment.lower());
             adjustment.set_value(next.clamp(adjustment.lower(), upper));
             gtk::glib::Propagation::Stop
@@ -391,7 +384,7 @@ impl WallpaperView {
         let filter = gtk::FileFilter::new();
         filter.set_name(Some("Images"));
         filter.add_mime_type("image/*");
-        let filters = gtk::gio::ListStore::new(gtk::FileFilter::static_type());
+        let filters = gtk::gio::ListStore::new::<gtk::FileFilter>();
         filters.append(&filter);
 
         let dialog = gtk::FileDialog::builder()
@@ -523,12 +516,17 @@ fn initial_choice(value_text: &str, module_dir: &Path) -> WallpaperChoice {
     } else {
         normalize_path(&module_dir.join(path))
     };
+    let value = if text.starts_with('"') || text.starts_with("''") {
+        text.to_string()
+    } else {
+        nix_path_literal(text)
+    };
     WallpaperChoice::File(WallpaperFile {
         name: path
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| raw.clone()),
-        value: nix_path_literal(text),
+        value,
         absolute,
     })
 }
@@ -543,7 +541,7 @@ fn list_images(dir: &Path, module_dir: &Path) -> Vec<WallpaperFile> {
         .filter(|path| path.is_file() && is_image(path))
         .map(|path| wallpaper_file(module_dir, &path))
         .collect();
-    images.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    images.sort_by_key(|image| image.name.to_lowercase());
     images
 }
 
@@ -657,14 +655,8 @@ mod tests {
 
     #[test]
     fn default_dir_is_next_to_the_module_file() {
-        let directory = wallpaper_dir(
-            &spec(None),
-            Path::new("/repo/modules/02-core"),
-        );
-        assert_eq!(
-            directory,
-            PathBuf::from("/repo/modules/02-core/wallpapers")
-        );
+        let directory = wallpaper_dir(&spec(None), Path::new("/repo/modules/02-core"));
+        assert_eq!(directory, PathBuf::from("/repo/modules/02-core/wallpapers"));
     }
 
     #[test]

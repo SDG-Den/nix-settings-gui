@@ -463,7 +463,6 @@ impl Editor {
                     connect_table_row(row, update);
                 }
             }
-            Editor::Wallpaper { ui, .. } => ui.borrow().nix_value().trim() == original.trim(),
             Editor::Theme { list, entry, .. } => {
                 if let Some(entry) = entry {
                     let update = update.clone();

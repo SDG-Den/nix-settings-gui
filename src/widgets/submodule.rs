@@ -29,7 +29,7 @@ pub(crate) fn build_submodule(
         child_ctx.depth = depth;
         child_ctx.path_prefix = full_path(record, ctx);
         let editor = build(&child, type_str, &child_ctx);
-        root.append(&build_child_row(&child, &editor, depth));
+        root.append(&build_child_row(&child, &editor, depth, ctx.expand_details));
         children.push((child, editor));
     }
     Editor::Submodule { root, children }
@@ -79,15 +79,12 @@ pub(crate) fn build_horizontal_submodule(
             heading.set_tooltip_text(Some(desc));
         }
         cell.append(&heading);
-        if let Some(desc) = child.spec.description.as_deref() {
-            let caption = gtk::Label::builder()
-                .xalign(0.0)
-                .wrap(true)
-                .label(desc)
-                .css_classes(["dim-label", "caption"])
-                .build();
-            cell.append(&caption);
-        }
+        let details = super::InfoDetails::new(
+            child.spec.description.as_deref(),
+            &child.origin,
+            ctx.expand_details,
+        );
+        cell.append(&details.root);
         cell.append(&editor.root());
         flow.append(&cell);
         children.push((child, editor));
@@ -270,7 +267,7 @@ pub(crate) fn append_settings_rows(
                 index += 2;
             }
             None => {
-                root.append(&build_child_row(record, editor, 1));
+                root.append(&build_child_row(record, editor, 1, ctx.expand_details));
                 index += 1;
             }
         }
@@ -301,9 +298,14 @@ pub(crate) fn scan_children(record: &Record, advanced: bool) -> Vec<Record> {
     scanned
 }
 
-/// One nested control: heading, editor, and an "imported from" footer, indented
+/// One nested control: heading, editor, and a collapsible details row, indented
 /// by `depth * 12` pixels (capped at four levels).
-pub(crate) fn build_child_row(record: &Record, editor: &Editor, depth: usize) -> gtk::Widget {
+pub(crate) fn build_child_row(
+    record: &Record,
+    editor: &Editor,
+    depth: usize,
+    expanded: bool,
+) -> gtk::Widget {
     let row = gtk::Box::new(gtk::Orientation::Vertical, 2);
     row.set_margin_start((depth.min(4) * 12) as i32);
     let name = record.segments.last().cloned().unwrap_or_default();
@@ -327,15 +329,9 @@ pub(crate) fn build_child_row(record: &Record, editor: &Editor, depth: usize) ->
     }
     row.append(&heading);
     row.append(&editor.root());
-    if !record.origin.is_empty() {
-        let origin = gtk::Label::builder()
-            .xalign(0.0)
-            .wrap(true)
-            .label(format!("imported from {}", record.origin))
-            .css_classes(["dim-label", "caption"])
-            .build();
-        row.append(&origin);
-    }
+    let details =
+        super::InfoDetails::new(record.spec.description.as_deref(), &record.origin, expanded);
+    row.append(&details.root);
     row.upcast()
 }
 

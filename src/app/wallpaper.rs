@@ -95,14 +95,18 @@ mod tests {
 
     #[test]
     fn sanitizes_names_for_nix_path_literals() {
-        assert_eq!(safe_name("ever forest (dark).png"), "ever-forest--dark-.png");
+        assert_eq!(
+            safe_name("ever forest (dark).png"),
+            "ever-forest--dark-.png"
+        );
         assert_eq!(safe_name("paper.png"), "paper.png");
         assert_eq!(safe_name(""), "wallpaper");
     }
 
     #[test]
     fn refuses_to_overwrite_an_existing_wallpaper() {
-        let root = std::env::temp_dir().join(format!("nix-settings-gui-wallpaper-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("nix-settings-gui-wallpaper-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let source = root.join("source.png");
