@@ -18,6 +18,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 /// One monitor rule of the `monitors` widget: core geometry editors plus the
 /// rule's remaining fields and the original source text per field.
+#[derive(Clone)]
 pub(crate) struct MonitorRow {
     pub(crate) name: gtk::Entry,
     pub(crate) width: gtk::SpinButton,

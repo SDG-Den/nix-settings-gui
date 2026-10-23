@@ -196,6 +196,7 @@ pub(super) fn handle_msg(app: &Rc<App>, tx: &Tx, msg: Msg) {
             app.status.set_text("Git sync failed");
             show_error(&app.window, &e);
         }
+        Msg::ApplyFinished { path, result } => super::apply::finished(app, &path, result),
     }
 }
 

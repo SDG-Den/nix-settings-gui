@@ -66,6 +66,7 @@ impl MenuPopout {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct MenuRow {
     pub(crate) section: String,
     pub(crate) key: gtk::Entry,

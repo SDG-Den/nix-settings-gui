@@ -1,6 +1,8 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use crate::apply::ApplyRequest;
+
 /// A late-bound change callback, set when the app wires a table editor's rows
 /// so dynamically added rows can notify the same handler.
 pub(crate) type ChangeHook = Rc<RefCell<Option<Rc<dyn Fn()>>>>;
@@ -38,6 +40,10 @@ pub type PackageSearch = Rc<dyn Fn(String, Box<dyn FnOnce(Vec<String>)>)>;
 pub type PluginRegistryHook =
     Rc<dyn Fn(Box<dyn FnOnce(Vec<crate::metadata::RegistryPlugin>)>)>;
 
+/// Runs the apply command of an option the user changed. Supplied by the app
+/// so the widgets stay free of process handling.
+pub type ApplyHook = Rc<dyn Fn(ApplyRequest)>;
+
 /// File path -> presets declared by @widget-preset markers in that file.
 pub type PresetMap = std::rc::Rc<
     std::collections::HashMap<
@@ -58,9 +64,14 @@ pub struct BuildContext {
     pub search: Option<PackageSearch>,
     /// Fetches the DMS plugin registry ids for the plugins picker.
     pub plugin_registry: Option<PluginRegistryHook>,
+    /// Runs the apply command of an option that carries one.
+    pub apply: Option<ApplyHook>,
     /// Whether the Advanced toggle is on, so nested hidden controls show.
     pub advanced: bool,
     /// Nesting depth of the control being built, used for submodule indent.
     pub depth: usize,
+    /// The path of the enclosing option, so a nested option reports its full
+    /// path instead of one relative to its parent.
+    pub path_prefix: String,
     pub presets: PresetMap,
 }

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 /// User settings persisted to `~/.config/nix-settings-gui/config.json`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     #[serde(default)]
     pub flake_path: Option<String>,
@@ -13,6 +13,30 @@ pub struct AppConfig {
     pub rebuild_command: Option<String>,
     #[serde(default)]
     pub recent_flake_paths: Vec<String>,
+    #[serde(default = "default_true")]
+    pub live_apply: bool,
+    #[serde(default)]
+    pub reload_mango_on_rebuild: bool,
+    #[serde(default)]
+    pub reload_dms_on_rebuild: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            flake_path: None,
+            terminal_command: None,
+            rebuild_command: None,
+            recent_flake_paths: Vec::new(),
+            live_apply: true,
+            reload_mango_on_rebuild: false,
+            reload_dms_on_rebuild: false,
+        }
+    }
 }
 
 impl AppConfig {
@@ -70,13 +94,30 @@ mod tests {
     }
 
     #[test]
+    fn defaults_enable_live_apply() {
+        let config = AppConfig::default();
+        assert!(config.live_apply);
+        assert!(!config.reload_mango_on_rebuild);
+        assert!(!config.reload_dms_on_rebuild);
+    }
+
+    #[test]
     fn round_trips_through_json() {
         let mut config = AppConfig::default();
         config.remember("/tmp/flake");
         config.terminal_command = Some("ghostty -e zsh -c '{cmd}'".into());
+        config.live_apply = false;
+        config.reload_mango_on_rebuild = true;
+        config.reload_dms_on_rebuild = true;
         let json = serde_json::to_string(&config).unwrap();
         let back: AppConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(back.flake_path, config.flake_path);
         assert_eq!(back.terminal_command, config.terminal_command);
+        assert_eq!(back.live_apply, config.live_apply);
+        assert_eq!(
+            back.reload_mango_on_rebuild,
+            config.reload_mango_on_rebuild
+        );
+        assert_eq!(back.reload_dms_on_rebuild, config.reload_dms_on_rebuild);
     }
 }

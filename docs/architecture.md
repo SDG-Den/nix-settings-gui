@@ -20,6 +20,7 @@ main.rs
     value.rs    Nix literal classification and rendering
     templates.rs  _-prefixed file templates and placeholder rendering
     config.rs   ~/.config/nix-settings-gui/config.json
+    apply.rs    apply-command helpers: value substitution and shell quoting
   nix/options-to-json.nix  eval fallback that enumerates options
 ```
 
@@ -83,6 +84,13 @@ filter, advanced filter, current menu, staged editors), and drives the flows:
 open, reload, search, save, save-and-rebuild, add-file, add-option, and
 configure. Background work (scan, nixd, eval, rebuild) runs on worker threads
 and reports back over an `async-channel`, so the UI thread never blocks.
+
+An option can carry an `applyCommand`, which runs it right away instead of
+waiting for a save. The widget that changed hands the command and the new
+value to the app through a `BuildContext` hook; `app/apply.rs` debounces the
+change, keeps one command running at a time, and runs it through `sh -c`.
+`apply.rs` holds the pure part: it substitutes `%%val%%` with the option's
+plain value and quotes it for the shell.
 
 ## 8. Configuration
 

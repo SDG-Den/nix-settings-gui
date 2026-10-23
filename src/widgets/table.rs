@@ -14,6 +14,7 @@ use std::rc::Rc;
 #[cfg(test)]
 mod display_tests;
 /// One cell of a table row: a keyed value with an inferred editor.
+#[derive(Clone)]
 pub(crate) struct TableCell {
     /// The column name this cell belongs to.
     pub(crate) column: String,
@@ -24,6 +25,7 @@ pub(crate) struct TableCell {
 }
 
 /// One editable row of a table.
+#[derive(Clone)]
 pub(crate) struct TableRow {
     pub(crate) key_entry: gtk::Entry,
     pub(crate) orig_key: String,

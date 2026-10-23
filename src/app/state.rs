@@ -13,6 +13,8 @@ use crate::nixd::OptionInfo;
 use crate::scan::ScanResult;
 use crate::widgets::Editor;
 
+use super::apply::ApplyState;
+
 pub(super) enum Msg {
     Scanned(Result<ScanResult, String>),
     Saved(Result<usize, String>),
@@ -25,6 +27,10 @@ pub(super) enum Msg {
     Invalid(Vec<String>),
     GitPulled(Result<bool, String>),
     GitSynced(Result<String, String>),
+    ApplyFinished {
+        path: String,
+        result: Result<(), String>,
+    },
 }
 
 pub(super) type Tx = async_channel::Sender<Msg>;
@@ -153,9 +159,11 @@ pub(super) struct App {
     pub(super) nixd_banner: adw::Banner,
     pub(super) status: gtk::Label,
     pub(super) spinner: gtk::Spinner,
+    pub(super) apply_spinner: gtk::Spinner,
     pub(super) progress: gtk::ProgressBar,
     pub(super) package_service: Rc<PackageService>,
     pub(super) plugin_registry: Rc<PluginRegistryState>,
+    pub(super) apply_state: Rc<ApplyState>,
     pub(super) tx: Tx,
 
     pub(super) config: RefCell<AppConfig>,

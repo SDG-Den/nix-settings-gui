@@ -44,6 +44,7 @@ impl TileSection {
     }
 }
 /// A whole tile list: heading, tiles, and add buttons.
+#[derive(Clone)]
 pub(crate) struct WidgetTileList {
     pub(crate) root: gtk::Box,
     pub(crate) tiles: Rc<RefCell<Vec<WidgetTile>>>,

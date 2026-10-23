@@ -94,6 +94,7 @@ services.pipewire.enable = true;
 | `visibleWhen.path` | string     | Another option in the same menu; the control shows only when its value satisfies the conditions below. |
 | `visibleWhen.equals` | literal | Value the governing option must equal. |
 | `visibleWhen.notEquals` | literal | Value the governing option must not equal. |
+| `applyCommand` | string     | Shell command that applies the option immediately, without saving. |
 
 ### Visibility dependencies
 
@@ -118,6 +119,34 @@ The dependency is evaluated live as you edit, and is scoped to the menu. If the
 named option is not found in the menu, the control stays visible, so a stale
 path never hides a setting unexpectedly. A control hidden by its dependency is
 not written on save, so a disabled parent cannot commit its children.
+
+### Applying a change immediately
+
+`applyCommand` names a shell command that runs as soon as the option changes,
+so a setting takes effect without waiting for "Save & rebuild":
+
+```nix
+/* @option widget = "switch"; label = "Dark mode";
+   applyCommand = "dms ipc call theme set %%val%%"; */
+services.dms.theme.dark = false;
+```
+
+`%%val%%` stands for the option's new value. The value is the plain text of
+the setting: a string loses its quotes (`"dark"` becomes `dark`), a number
+stays a number, and it reaches the command as a single argument. A command
+without `%%val%%` runs as it is.
+
+The command runs in the flake's root directory. Changes are collected for a
+moment before the command runs, so dragging a slider sends one command with
+the value it ended on. Only one command runs at a time: a change made while a
+command is still running waits for it and then runs with the newest value. The
+bottom bar shows a spinner and the status line names the option while the
+command runs.
+
+What the command does is up to the command. Applying a setting this way only
+changes the running session: the file is untouched until it is saved, and the
+change is gone after a reboot. Use it for settings that a service exposes over
+its own interface, such as a DMS or mango IPC call.
 
 ## 3. Widgets
 

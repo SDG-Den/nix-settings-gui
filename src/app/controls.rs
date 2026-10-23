@@ -61,7 +61,17 @@ pub(super) fn build_context(app: &Rc<App>) -> widgets::BuildContext {
     ctx.hm_modules.sort();
     ctx.search = Some(package_search(app));
     ctx.plugin_registry = Some(plugin_registry_hook(app));
+    ctx.apply = Some(apply_hook(app));
     ctx
+}
+
+/// Apply hook: queues the option's apply command, so the command runs on the
+/// app's schedule instead of the widget's.
+fn apply_hook(app: &Rc<App>) -> widgets::ApplyHook {
+    let app = app.clone();
+    Rc::new(move |request: crate::apply::ApplyRequest| {
+        super::apply::schedule(&app, request);
+    })
 }
 
 /// Package search hook: queries nixd off the main thread and delivers the
@@ -233,19 +243,46 @@ pub(super) fn build_control_row(
 /// Set the dirty bullet whenever any editor widget changes, based on whether
 /// the editor still matches the record's original value, and re-evaluate any
 /// visibility dependencies that key off the changed editor.
+///
+/// The same callback runs the option's apply command, so a change that the
+/// widget reports through its shared change hook reaches the command too.
 pub(super) fn connect_dirty(app: &Rc<App>, row: &ControlRow) {
     let dirty = row.dirty.clone();
     let original = row.record.value.clone();
     let weak = Rc::downgrade(&row.editor);
     let app = app.clone();
+    let apply_command = row.record.spec.apply_command.clone();
+    let apply_path = row.record.path();
     let update: Rc<dyn Fn()> = Rc::new(move || {
         if let Some(editor) = weak.upgrade() {
             let unchanged = editor.borrow().unchanged(&original);
             dirty.set_visible(!unchanged);
+            if let Some(command) = apply_command.clone() {
+                apply_now(&app, &apply_path, &command, &editor.borrow());
+            }
         }
         refresh_dependencies(&app);
     });
     connect_editor_signals(&row.editor.borrow(), &update);
+}
+
+/// Queue the apply command of an option with the value its editor holds now.
+/// An option that holds other options has no value of its own to apply.
+fn apply_now(app: &Rc<App>, path: &str, command: &str, editor: &Editor) {
+    if matches!(
+        editor,
+        Editor::Submodule { .. } | Editor::HorizontalSubmodule { .. }
+    ) {
+        return;
+    }
+    super::apply::schedule(
+        app,
+        crate::apply::ApplyRequest {
+            path: path.to_string(),
+            command: command.to_string(),
+            value: editor.to_nix(),
+        },
+    );
 }
 
 /// Connect `update` to the change signal of every widget owned by the editor,
@@ -402,10 +439,28 @@ fn reset_to_default(app: &Rc<App>, control: &ControlRow) {
             control.set_editor(editor);
             connect_dirty(app, control);
             app.status.set_text("Reset to default");
+            apply_reset(app, control);
         }
         Ok(_) => app.status.set_text("No default available"),
         Err(e) => app.status.set_text(&format!("Cannot resolve default: {e}")),
     }
+}
+
+/// Apply the reset value right away, so a control with an apply command does
+/// not wait for the next edit to reach the running system.
+fn apply_reset(app: &Rc<App>, control: &ControlRow) {
+    let Some(command) = control.record.spec.apply_command.clone() else {
+        return;
+    };
+    let value = control.editor.borrow().to_nix();
+    super::apply::schedule(
+        app,
+        crate::apply::ApplyRequest {
+            path: control.record.path(),
+            command,
+            value,
+        },
+    );
 }
 
 #[cfg(test)]

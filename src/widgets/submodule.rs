@@ -1,6 +1,6 @@
 use super::basic::build_raw;
 use super::context::{BuildContext, ChangeHook};
-use super::dispatch::build;
+use super::dispatch::{build, full_path};
 use super::editor::Editor;
 use super::names::{field_caption, field_help};
 use crate::dsl::WidgetKind;
@@ -27,6 +27,7 @@ pub(crate) fn build_submodule(
     for (_index, child) in indexed {
         let mut child_ctx = ctx.clone();
         child_ctx.depth = depth;
+        child_ctx.path_prefix = full_path(record, ctx);
         let editor = build(&child, type_str, &child_ctx);
         root.append(&build_child_row(&child, &editor, depth));
         children.push((child, editor));
@@ -58,7 +59,9 @@ pub(crate) fn build_horizontal_submodule(
 
     let mut children = Vec::new();
     for child in scan_children(record, ctx.advanced) {
-        let editor = build(&child, type_str, ctx);
+        let mut child_ctx = ctx.clone();
+        child_ctx.path_prefix = full_path(record, ctx);
+        let editor = build(&child, type_str, &child_ctx);
         let cell = gtk::Box::new(gtk::Orientation::Vertical, 2);
         cell.set_hexpand(true);
         let label = child

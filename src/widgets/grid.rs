@@ -17,6 +17,7 @@ use std::cell::Cell;
 use std::cell::RefCell;
 use std::rc::Rc;
 /// A tile on the fixed-width placement grid of a `grid-configuration` control.
+#[derive(Clone)]
 pub(crate) struct GridTile {
     pub(crate) id: String,
     pub(crate) added: bool,
@@ -127,6 +128,7 @@ impl GridProfile {
 /// Shared state of one grid control. The editor, the canvas, the details pane
 /// and every gesture closure hold the same `Rc`, so tile indices are always
 /// resolved against the live list rather than captured at build time.
+#[derive(Clone)]
 pub(crate) struct GridLayoutState {
     pub(crate) profile: GridProfile,
     pub(crate) tiles: Rc<RefCell<Vec<GridTile>>>,

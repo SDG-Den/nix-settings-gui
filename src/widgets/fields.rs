@@ -8,6 +8,7 @@ use crate::value;
 use gtk::prelude::*;
 /// One freeform field of a bespoke widget row: a named value with an inferred
 /// editor.
+#[derive(Clone)]
 pub(crate) struct AttrsetField {
     pub(crate) name: String,
     pub(crate) editor: Editor,

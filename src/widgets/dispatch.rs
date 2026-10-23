@@ -14,13 +14,60 @@ use super::nix::unwrap_modifiers;
 use super::submodule::{build_horizontal_submodule, build_submodule};
 use super::table::build_table;
 use super::theme::build_theme;
+use crate::apply::ApplyRequest;
 use crate::dsl::{OptionSpec, WidgetKind};
 use crate::model::Record;
 use crate::value;
+use std::rc::Rc;
 /// Build the appropriate control for a record. `type_str` is the nixd type when
 /// it is known; the `@option widget` takes precedence, then the type, then the
 /// shape of the current value.
 pub fn build(record: &Record, type_str: Option<&str>, ctx: &BuildContext) -> Editor {
+    let editor = build_editor(record, type_str, ctx);
+    connect_apply(record, &editor, ctx);
+    editor
+}
+
+/// The record's path, prefixed with the path of the option that holds it, so
+/// a nested option reports its full path.
+pub(crate) fn full_path(record: &Record, ctx: &BuildContext) -> String {
+    if ctx.path_prefix.is_empty() {
+        record.path()
+    } else {
+        format!("{}.{}", ctx.path_prefix, record.path())
+    }
+}
+
+/// Wire an option's apply command: every change runs the command with the
+/// option's new value. The editor is cloned as a snapshot, which shares the
+/// widgets, so the snapshot reads the value the user just entered.
+fn connect_apply(record: &Record, editor: &Editor, ctx: &BuildContext) {
+    let Some(command) = record.spec.apply_command.clone() else {
+        return;
+    };
+    let Some(hook) = ctx.apply.clone() else {
+        return;
+    };
+    if matches!(
+        editor,
+        Editor::Submodule { .. } | Editor::HorizontalSubmodule { .. }
+    ) {
+        return;
+    }
+    let snapshot = editor.clone();
+    let path = full_path(record, ctx);
+    let update: Rc<dyn Fn()> = Rc::new(move || {
+        hook(ApplyRequest {
+            path: path.clone(),
+            command: command.clone(),
+            value: snapshot.to_nix(),
+        });
+    });
+    editor.connect_changed(&update);
+}
+
+/// Build the control for a record.
+fn build_editor(record: &Record, type_str: Option<&str>, ctx: &BuildContext) -> Editor {
     let spec = &record.spec;
     let value_text = unwrap_modifiers(&record.value);
     let value_text = value_text.as_str();

@@ -17,6 +17,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 /// One bind of the `keybinds` widget: a display label and description on the
 /// main line, the bind's full field set in a hidden edit popup.
+#[derive(Clone)]
 pub(crate) struct KeybindRow {
     pub(crate) key: gtk::Entry,
     pub(crate) orig_key: String,

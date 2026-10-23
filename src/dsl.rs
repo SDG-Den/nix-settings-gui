@@ -412,6 +412,9 @@ pub struct OptionSpec {
     pub item_label: Option<String>,
     pub add_label: Option<String>,
     pub visible_when: Option<Visibility>,
+    /// Shell command that applies the option immediately, e.g. an IPC call.
+    /// `%%val%%` in the command stands for the option's new value.
+    pub apply_command: Option<String>,
 }
 
 impl OptionSpec {
@@ -447,6 +450,7 @@ impl OptionSpec {
             item_label: d.string("itemLabel"),
             add_label: d.string("addLabel"),
             visible_when: parse_visibility(d),
+            apply_command: d.string("applyCommand"),
         }
     }
 }
@@ -597,6 +601,19 @@ mod tests {
         assert_eq!(
             opt.choices,
             Some(vec!["Europe/Amsterdam".into(), "UTC".into()])
+        );
+    }
+
+    #[test]
+    fn parses_apply_command() {
+        let text =
+            "/* @option widget = \"switch\"; applyCommand = \"dms ipc call theme set %%val%%\"; */";
+        let (kind, d) = parse_comment(text).unwrap();
+        assert_eq!(kind, MarkerKind::Option);
+        let opt = OptionSpec::from_directives(&d);
+        assert_eq!(
+            opt.apply_command.as_deref(),
+            Some("dms ipc call theme set %%val%%")
         );
     }
 

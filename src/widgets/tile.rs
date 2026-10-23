@@ -12,6 +12,7 @@ use gtk::prelude::*;
 use std::cell::RefCell;
 use std::rc::Rc;
 /// One draggable widget tile. Order in the enclosing Vec is the position.
+#[derive(Clone)]
 pub(crate) struct WidgetTile {
     /// Current attrset key; editable in the cog pop-out for unknown ids.
     pub(crate) id: String,

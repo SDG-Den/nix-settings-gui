@@ -8,6 +8,7 @@ use gtk::prelude::*;
 
 use crate::config::AppConfig;
 
+mod apply;
 mod controls;
 mod dialogs;
 mod enrich;
@@ -17,6 +18,7 @@ mod pump;
 mod save;
 mod state;
 
+use apply::ApplyState;
 use controls::apply_control_filter;
 use dialogs::{open_add_file, open_configure};
 use enrich::query_current_page;
@@ -31,6 +33,19 @@ pub const APP_ID: &str = "org.nix_settings_gui.NixSettingsGui";
 // ---------------------------------------------------------------------------
 // UI construction
 // ---------------------------------------------------------------------------
+
+fn preference_row(label: &str, tooltip: &str, switch: &gtk::Switch) -> gtk::Box {
+    let text = gtk::Label::builder()
+        .label(label)
+        .xalign(0.0)
+        .hexpand(true)
+        .tooltip_text(tooltip)
+        .build();
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    row.append(&text);
+    row.append(switch);
+    row
+}
 
 fn build_ui(app: &adw::Application, tx: &Tx) -> Rc<App> {
     let provider = gtk::CssProvider::new();
@@ -124,6 +139,10 @@ fn build_ui(app: &adw::Application, tx: &Tx) -> Rc<App> {
     spinner.set_visible(false);
     spinner.set_tooltip_text(Some("Working..."));
 
+    let apply_spinner = gtk::Spinner::new();
+    apply_spinner.set_visible(false);
+    apply_spinner.set_tooltip_text(Some("Applying the changed setting..."));
+
     let progress = gtk::ProgressBar::new();
     progress.set_visible(false);
     progress.set_width_request(160);
@@ -155,6 +174,26 @@ fn build_ui(app: &adw::Application, tx: &Tx) -> Rc<App> {
     menu_box.set_margin_bottom(6);
     menu_box.set_margin_start(6);
     menu_box.set_margin_end(6);
+
+    let live_apply_switch = gtk::Switch::new();
+    menu_box.append(&preference_row(
+        "Apply changes immediately",
+        "Run each option's applyCommand as soon as it changes",
+        &live_apply_switch,
+    ));
+    let mango_reload_switch = gtk::Switch::new();
+    menu_box.append(&preference_row(
+        "Reload mango after rebuild",
+        "Run mmsg dispatch reload_config after a successful rebuild",
+        &mango_reload_switch,
+    ));
+    let dms_reload_switch = gtk::Switch::new();
+    menu_box.append(&preference_row(
+        "Reload DMS after rebuild",
+        "Run dms kill && mmsg dispatch spawn_shell,dms run after a successful rebuild",
+        &dms_reload_switch,
+    ));
+
     for button in [&configure_btn, &add_file_btn, &refresh_btn, &info_btn] {
         button.set_halign(gtk::Align::Fill);
         menu_box.append(button);
@@ -178,6 +217,7 @@ fn build_ui(app: &adw::Application, tx: &Tx) -> Rc<App> {
     bottom.set_margin_end(8);
     bottom.append(&menu_button);
     bottom.append(&spinner);
+    bottom.append(&apply_spinner);
     bottom.append(&status);
     bottom.append(&progress);
     bottom.append(&save_btn);
@@ -213,6 +253,7 @@ fn build_ui(app: &adw::Application, tx: &Tx) -> Rc<App> {
         nixd_banner,
         status,
         spinner,
+        apply_spinner,
         progress,
         package_service: PackageService::new(),
         plugin_registry: Rc::new(PluginRegistryState {
@@ -220,6 +261,7 @@ fn build_ui(app: &adw::Application, tx: &Tx) -> Rc<App> {
             pending: RefCell::new(Vec::new()),
             loading: Cell::new(false),
         }),
+        apply_state: ApplyState::new(),
         tx: tx.clone(),
         config: RefCell::new(AppConfig::load()),
         base: RefCell::new(String::new()),
@@ -241,6 +283,13 @@ fn build_ui(app: &adw::Application, tx: &Tx) -> Rc<App> {
         watchers: RefCell::new(Vec::new()),
     });
 
+    {
+        let config = app_state.config.borrow();
+        live_apply_switch.set_active(config.live_apply);
+        mango_reload_switch.set_active(config.reload_mango_on_rebuild);
+        dms_reload_switch.set_active(config.reload_dms_on_rebuild);
+    }
+
     wire(
         &app_state,
         tx,
@@ -251,6 +300,12 @@ fn build_ui(app: &adw::Application, tx: &Tx) -> Rc<App> {
         &rebuild_btn,
         &git_btn,
         &info_btn,
+    );
+    wire_preferences(
+        &app_state,
+        &live_apply_switch,
+        &mango_reload_switch,
+        &dms_reload_switch,
     );
     install_actions(&app_state);
     {
@@ -401,6 +456,35 @@ fn wire(
         info_btn
             .clone()
             .connect_clicked(move |_| query_current_page(&app, &tx));
+    }
+}
+
+fn wire_preferences(
+    app: &Rc<App>,
+    live_apply: &gtk::Switch,
+    reload_mango: &gtk::Switch,
+    reload_dms: &gtk::Switch,
+) {
+    {
+        let app = app.clone();
+        live_apply.connect_active_notify(move |switch| {
+            app.config.borrow_mut().live_apply = switch.is_active();
+            let _ = app.config.borrow().save();
+        });
+    }
+    {
+        let app = app.clone();
+        reload_mango.connect_active_notify(move |switch| {
+            app.config.borrow_mut().reload_mango_on_rebuild = switch.is_active();
+            let _ = app.config.borrow().save();
+        });
+    }
+    {
+        let app = app.clone();
+        reload_dms.connect_active_notify(move |switch| {
+            app.config.borrow_mut().reload_dms_on_rebuild = switch.is_active();
+            let _ = app.config.borrow().save();
+        });
     }
 }
 

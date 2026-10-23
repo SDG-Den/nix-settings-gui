@@ -96,6 +96,10 @@ the `nixd` JSON-RPC client, and the span-patch plus `nixfmt` write path.
 - Add file: opens the new-file dialog (section 9).
 - Save: writes all staged edits (section 5).
 - Save & rebuild: saves, then spawns the rebuild (section 8).
+- A spinner shows while a save or rebuild runs. A second spinner shows while an
+  option's apply command runs, so the two never share one indicator.
+- The status line names the option that is being applied and reports whether
+  the command succeeded.
 
 ## 3. Global search
 
@@ -128,6 +132,11 @@ The valid option keys used by add-autocomplete come from the same source.
 - Dynamic attribute paths and non-literal keys are not addressable and produce
   no control.
 - An optional diff preview shows the pending changes before writing.
+- An option that carries an `applyCommand` runs that command as soon as its
+  value changes, without saving. Changes are collected for a moment first, so a
+  slider drag sends one command with the value it ended on, and only one
+  command runs at a time. The file is not written, so the change lasts until
+  the next rebuild.
 
 ## 6. Current system detection
 

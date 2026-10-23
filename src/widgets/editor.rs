@@ -21,6 +21,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 /// The editing control backing one option. Each variant knows how to render
 /// its current state back to Nix and whether it still holds the original value.
+#[derive(Clone)]
 pub enum Editor {
     Switch(gtk::Switch),
     Dropdown {

@@ -274,6 +274,11 @@ pub(super) fn run_rebuild(app: &Rc<App>) {
         app.status.set_text("No rebuild command configured");
         return;
     };
+    let command = with_reloads(
+        command,
+        config.reload_mango_on_rebuild,
+        config.reload_dms_on_rebuild,
+    );
     let terminal = config.terminal_command.clone();
     let mut process = match terminal {
         Some(prefix) if prefix.contains("{cmd}") => {
@@ -313,6 +318,16 @@ pub(super) fn run_rebuild(app: &Rc<App>) {
     }
 }
 
+fn with_reloads(mut command: String, reload_mango: bool, reload_dms: bool) -> String {
+    if reload_mango {
+        command.push_str(" && mmsg dispatch reload_config");
+    }
+    if reload_dms {
+        command.push_str(" && dms kill && mmsg dispatch spawn_shell,dms run");
+    }
+    command
+}
+
 fn shell_words(input: &str) -> Vec<String> {
     input
         .split_whitespace()
@@ -324,6 +339,23 @@ fn shell_words(input: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reloads_are_appended_to_the_rebuild_command() {
+        assert_eq!(with_reloads("rebuild".into(), false, false), "rebuild");
+        assert_eq!(
+            with_reloads("rebuild".into(), true, false),
+            "rebuild && mmsg dispatch reload_config"
+        );
+        assert_eq!(
+            with_reloads("rebuild".into(), false, true),
+            "rebuild && dms kill && mmsg dispatch spawn_shell,dms run"
+        );
+        assert_eq!(
+            with_reloads("rebuild".into(), true, true),
+            "rebuild && mmsg dispatch reload_config && dms kill && mmsg dispatch spawn_shell,dms run"
+        );
+    }
 
     #[test]
     fn maps_prompt_responses() {

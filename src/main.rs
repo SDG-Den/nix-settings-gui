@@ -3,6 +3,7 @@
 use gtk::glib;
 
 mod app;
+mod apply;
 mod config;
 mod dsl;
 mod edit;

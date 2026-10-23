@@ -15,7 +15,7 @@ mod monitor_geometry;
 mod monitor_picker;
 mod monitors;
 mod names;
-mod nix;
+pub(crate) mod nix;
 mod submodule;
 mod table;
 mod theme;
@@ -24,7 +24,7 @@ mod tile_list;
 mod tile_nix;
 
 pub(crate) use basic::{build_entry, build_spin, build_switch};
-pub(crate) use context::{BuildContext, ChangeHook, PackageSearch, PluginRegistryHook};
+pub(crate) use context::{ApplyHook, BuildContext, ChangeHook, PackageSearch, PluginRegistryHook};
 pub(crate) use dispatch::{build, is_package};
 pub(crate) use editor::Editor;
 pub(crate) use nix::{attr_key, literal_for_widget};

@@ -16,6 +16,7 @@ use self::PluginFieldKind::{Bool, Float, Int, Text};
 
 /// One plugin entry of the `plugins` widget: the plugin id, its enable
 /// switch, and the entry's remaining settings behind a cog pop-out.
+#[derive(Clone)]
 struct PluginRow {
     key: gtk::Entry,
     orig_key: String,
@@ -218,6 +219,7 @@ fn humanize(raw: &str) -> String {
 
 /// The `plugins` widget: a list of plugin rows plus a footer that adds a
 /// plugin chosen from a dropdown of ids not already present.
+#[derive(Clone)]
 pub struct PluginList {
     root: gtk::Box,
     rows: PluginRows,
