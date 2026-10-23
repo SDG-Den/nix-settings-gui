@@ -42,17 +42,160 @@ impl TileSection {
     pub(crate) fn is_center(self) -> bool {
         matches!(self, TileSection::BarCenter)
     }
+
+    pub(crate) fn key(self) -> &'static str {
+        match self {
+            TileSection::BarLeft => "left",
+            TileSection::BarCenter => "center",
+            TileSection::BarRight => "right",
+            TileSection::Dock => "dock",
+        }
+    }
+
+    pub(crate) fn from_key(key: &str) -> Option<Self> {
+        match key {
+            "left" => Some(TileSection::BarLeft),
+            "center" => Some(TileSection::BarCenter),
+            "right" => Some(TileSection::BarRight),
+            "dock" => Some(TileSection::Dock),
+            _ => None,
+        }
+    }
 }
 /// A whole tile list: heading, tiles, and add buttons.
 #[derive(Clone)]
 pub(crate) struct WidgetTileList {
     pub(crate) root: gtk::Box,
+    pub(crate) list: gtk::ListBox,
     pub(crate) tiles: Rc<RefCell<Vec<WidgetTile>>>,
     /// Original id sequence as scanned, for unchanged detection.
     pub(crate) orig_ids: Vec<String>,
+    pub(crate) section: TileSection,
+    pub(crate) presets: Vec<(WidgetPresetSpec, Vec<PresetFieldSpec>)>,
+    pub(crate) ctx: BuildContext,
 }
+
+#[derive(Clone, Default)]
+pub(crate) struct BarSections {
+    pub(crate) left: Option<WidgetTileList>,
+    pub(crate) center: Option<WidgetTileList>,
+    pub(crate) right: Option<WidgetTileList>,
+}
+
+impl BarSections {
+    pub(crate) fn get(&self, section: TileSection) -> Option<WidgetTileList> {
+        match section {
+            TileSection::BarLeft => self.left.clone(),
+            TileSection::BarCenter => self.center.clone(),
+            TileSection::BarRight => self.right.clone(),
+            TileSection::Dock => None,
+        }
+    }
+}
+
+pub(crate) type SharedBarSections = Rc<RefCell<Option<BarSections>>>;
+pub(crate) type DragOrigin = Rc<RefCell<Option<(TileSection, usize)>>>;
+
+fn preset_fields(
+    preset: Option<&WidgetPresetSpec>,
+    specs: &[PresetFieldSpec],
+    ctx: &BuildContext,
+) -> Rc<RefCell<Vec<super::fields::AttrsetField>>> {
+    let Some(preset) = preset else {
+        return Rc::new(RefCell::new(Vec::new()));
+    };
+    Rc::new(RefCell::new(
+        preset
+            .defaults
+            .iter()
+            .filter(|(name, _)| name.as_str() != "enabled")
+            .map(|(name, lit)| {
+                let spec = specs.iter().find(|spec| spec.name == *name);
+                let mut field = make_field_for_preset(name, &lit.to_nix(), spec, ctx);
+                field.orig_present = true;
+                field
+            })
+            .collect(),
+    ))
+}
+
+/// Move a tile between two bar sections, rebuilding the row when the
+/// serialization shape changes between string-list center and object lists.
+pub(crate) fn move_tile_between(
+    shared: &SharedBarSections,
+    source_section: TileSection,
+    source_index: usize,
+    target_section: TileSection,
+    target_index: usize,
+    on_change: &ChangeHook,
+) -> bool {
+    if source_section == target_section {
+        return false;
+    }
+    let Some(sections) = shared.borrow().clone() else {
+        return false;
+    };
+    let Some(src) = sections.get(source_section) else {
+        return false;
+    };
+    let Some(dst) = sections.get(target_section) else {
+        return false;
+    };
+    let Some(mut tile) = ({
+        let mut tiles = src.tiles.borrow_mut();
+        if source_index >= tiles.len() {
+            None
+        } else {
+            Some(tiles.remove(source_index))
+        }
+    }) else {
+        return false;
+    };
+    src.list.remove(&tile.row);
+
+    let preset_entry = dst.presets.iter().find(|(preset, _)| preset.id == tile.id);
+    let preset = preset_entry.map(|(preset, _)| preset.clone());
+    let specs = preset_entry
+        .map(|(_, specs)| specs.clone())
+        .unwrap_or_default();
+    let fields = if dst.section.is_center() {
+        Rc::new(RefCell::new(Vec::new()))
+    } else if tile.fields.borrow().is_empty() {
+        preset_fields(preset.as_ref(), &specs, &dst.ctx)
+    } else {
+        tile.fields.clone()
+    };
+    let enabled = tile.enabled.get();
+    let rebuilt = make_widget_tile(
+        &tile.id,
+        &tile.orig_id,
+        &tile.orig_order,
+        preset,
+        fields,
+        specs,
+        dst.section,
+        &dst.ctx,
+        &dst.tiles,
+        &dst.list,
+        on_change,
+        enabled,
+        tile.orig_enabled,
+        None,
+        Some(shared.clone()),
+    );
+    tile = rebuilt;
+    let index = target_index.min(dst.tiles.borrow().len());
+    dst.list.insert(&tile.row, index as i32);
+    dst.tiles.borrow_mut().insert(index, tile);
+    if let Some(cb) = on_change.borrow().as_ref() {
+        cb();
+    }
+    true
+}
+
 /// Scaffold a tile from a catalog preset: `preset.defaults` become the
 /// fields, marked as present so they always serialize.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn add_tile_from_preset(
     preset: &WidgetPresetSpec,
     specs: &[PresetFieldSpec],
@@ -61,6 +204,8 @@ pub(crate) fn add_tile_from_preset(
     tiles: &Rc<RefCell<Vec<WidgetTile>>>,
     target: &gtk::ListBox,
     on_change: &ChangeHook,
+    drag_source: Option<DragOrigin>,
+    shared: Option<SharedBarSections>,
 ) {
     if tiles.borrow().iter().any(|tile| tile.id == preset.id) {
         return;
@@ -94,6 +239,10 @@ pub(crate) fn add_tile_from_preset(
         tiles,
         target,
         on_change,
+        true,
+        true,
+        drag_source,
+        shared,
     );
     target.append(&tile.row);
     tiles.borrow_mut().push(tile);
@@ -185,6 +334,7 @@ impl WidgetTileList {
         presets: &[(WidgetPresetSpec, Vec<PresetFieldSpec>)],
         ctx: &BuildContext,
         on_change: &ChangeHook,
+        shared: Option<SharedBarSections>,
     ) -> Self {
         let root = gtk::Box::new(gtk::Orientation::Vertical, 6);
         root.set_hexpand(true);
@@ -216,6 +366,10 @@ impl WidgetTileList {
                     &tiles,
                     &list,
                     on_change,
+                    true,
+                    true,
+                    None,
+                    shared.clone(),
                 );
                 list.append(&tile.row);
                 tiles.borrow_mut().push(tile);
@@ -233,9 +387,7 @@ impl WidgetTileList {
                         _ => scanned.push((name.clone(), raw.trim().to_string())),
                     }
                 }
-                if !truthy(&enabled_raw) {
-                    continue;
-                }
+                let enabled = truthy(&enabled_raw);
                 let preset_entry = presets.iter().find(|(preset, _)| preset.id == scan_row.key);
                 let preset = preset_entry.map(|(preset, _)| preset.clone());
                 let specs: Vec<PresetFieldSpec> = preset_entry
@@ -262,13 +414,17 @@ impl WidgetTileList {
                     &tiles,
                     &list,
                     on_change,
+                    enabled,
+                    enabled,
+                    None,
+                    shared.clone(),
                 );
                 list.append(&tile.row);
                 tiles.borrow_mut().push(tile);
             }
         }
 
-        attach_tile_dnd(&list, &tiles, on_change);
+        attach_tile_dnd(&list, &tiles, section, shared.clone(), on_change);
         root.append(&list);
 
         let presets = presets.to_vec();
@@ -315,12 +471,23 @@ impl WidgetTileList {
             let (target, on_change) = (list.clone(), on_change.clone());
             let ctx = ctx.clone();
             let popover = picker_popover.clone();
+            let shared = shared.clone();
             move |_, row| {
                 let preset_id = row.widget_name().to_string();
                 if let Some((preset, specs)) =
                     presets.iter().find(|(preset, _)| preset.id == preset_id)
                 {
-                    add_tile_from_preset(preset, specs, section, &ctx, &tiles, &target, &on_change);
+                    add_tile_from_preset(
+                        preset,
+                        specs,
+                        section,
+                        &ctx,
+                        &tiles,
+                        &target,
+                        &on_change,
+                        None,
+                        shared.clone(),
+                    );
                 }
                 popover.popdown();
             }
@@ -381,6 +548,10 @@ impl WidgetTileList {
                     &tiles,
                     &target,
                     &on_change,
+                    true,
+                    true,
+                    None,
+                    shared.clone(),
                 );
                 custom_entry.set_text("");
                 custom_row.set_visible(false);
@@ -394,12 +565,34 @@ impl WidgetTileList {
 
         Self {
             root,
+            list,
             tiles,
             orig_ids,
+            section,
+            presets,
+            ctx: ctx.clone(),
         }
     }
 
     pub(crate) fn root(&self) -> &gtk::Box {
         &self.root
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn section_keys_round_trip_drag_payloads() {
+        for section in [
+            TileSection::BarLeft,
+            TileSection::BarCenter,
+            TileSection::BarRight,
+            TileSection::Dock,
+        ] {
+            assert_eq!(TileSection::from_key(section.key()), Some(section));
+        }
+        assert_eq!(TileSection::from_key("nope"), None);
     }
 }

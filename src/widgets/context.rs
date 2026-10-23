@@ -36,9 +36,10 @@ impl ModuleKind {
 /// Supplied by the app so the widgets stay free of nixd plumbing.
 pub type PackageSearch = Rc<dyn Fn(String, Box<dyn FnOnce(Vec<String>)>)>;
 
-/// Fetches the DMS plugin registry and hands the id list back on the main
+/// Fetches the DMS plugin registry and hands the result back on the main
 /// thread. Supplied by the app so the widget stays free of nix plumbing.
-pub type PluginRegistryHook = Rc<dyn Fn(Box<dyn FnOnce(Vec<crate::metadata::RegistryPlugin>)>)>;
+pub type PluginRegistryHook =
+    Rc<dyn Fn(Box<dyn FnOnce(Result<Vec<crate::metadata::RegistryPlugin>, String>)>)>;
 
 /// Runs the apply command of an option the user changed. Supplied by the app
 /// so the widgets stay free of process handling.
@@ -55,6 +56,15 @@ pub type WallpaperRemove = Rc<dyn Fn(&Path) -> Result<(), String>>;
 pub struct WallpaperActions {
     pub add: WallpaperAdd,
     pub remove: WallpaperRemove,
+}
+
+/// Copies an icon into the repository and stages it with git.
+pub type IconAdd = Rc<dyn Fn(&Path, &Path) -> Result<PathBuf, String>>;
+
+/// File operations for the icon picker, supplied by the app.
+#[derive(Clone)]
+pub struct IconActions {
+    pub add: IconAdd,
 }
 
 /// File path -> presets declared by @widget-preset markers in that file.
@@ -83,6 +93,8 @@ pub struct BuildContext {
     pub base: String,
     /// Wallpaper copy and remove operations.
     pub wallpaper: Option<WallpaperActions>,
+    /// Icon copy operation for `icon` table columns.
+    pub icon: Option<IconActions>,
     /// Whether the Advanced toggle is on, so nested hidden controls show.
     pub advanced: bool,
     /// Nesting depth of the control being built, used for submodule indent.

@@ -2,12 +2,61 @@ use super::context::{BuildContext, ChangeHook};
 use super::editor::Editor;
 use super::nix::attr_key;
 use super::submodule::{append_settings_rows, build_extra_editor, scan_children};
-use super::tile_list::{TileSection, WidgetTileList};
+use super::tile_list::{BarSections, SharedBarSections, TileSection, WidgetTileList};
 use super::tile_nix::{center_tiles_nix, tile_emit_from_tile, tiles_nix, TileEmit};
 use crate::model::Record;
 use gtk::prelude::*;
 use std::cell::RefCell;
 use std::rc::Rc;
+fn is_overflow_field(name: &str) -> bool {
+    matches!(
+        name,
+        "leftOverflowMode"
+            | "leftOverflowPosition"
+            | "centerOverflowMode"
+            | "centerOverflowPosition"
+            | "rightOverflowMode"
+            | "rightOverflowPosition"
+    )
+}
+
+fn overflow_prefix(name: &str) -> Option<&'static str> {
+    name.strip_prefix("leftOverflow")
+        .map(|_| "left")
+        .or_else(|| name.strip_prefix("centerOverflow").map(|_| "center"))
+        .or_else(|| name.strip_prefix("rightOverflow").map(|_| "right"))
+}
+
+fn render_section_overflow(
+    root: &gtk::Box,
+    extras: &[(Record, Editor)],
+    section: &str,
+    ctx: &BuildContext,
+) {
+    let rows: Vec<(Record, Editor)> = extras
+        .iter()
+        .filter(|(record, _)| {
+            record
+                .segments
+                .last()
+                .map(String::as_str)
+                .and_then(overflow_prefix)
+                == Some(section)
+        })
+        .cloned()
+        .collect();
+    if rows.is_empty() {
+        return;
+    }
+    let label = gtk::Label::builder()
+        .xalign(0.0)
+        .label("Overflow")
+        .css_classes(["dim-label"])
+        .build();
+    root.append(&label);
+    append_settings_rows(root, &rows, ctx);
+}
+
 pub(crate) fn build_bar(record: &Record, ctx: &BuildContext) -> Editor {
     let root = gtk::Box::new(gtk::Orientation::Vertical, 8);
     root.set_hexpand(true);
@@ -31,12 +80,14 @@ pub(crate) fn build_bar(record: &Record, ctx: &BuildContext) -> Editor {
     let center_present = center_value.is_some();
     let presets = ctx.presets.get(&record.file).cloned().unwrap_or_default();
 
+    let shared: SharedBarSections = Rc::new(RefCell::new(None));
     let left = WidgetTileList::build(
         TileSection::BarLeft,
         left_value.as_deref().unwrap_or("{ }"),
         &presets,
         ctx,
         &on_change,
+        Some(shared.clone()),
     );
     let center = WidgetTileList::build(
         TileSection::BarCenter,
@@ -44,6 +95,7 @@ pub(crate) fn build_bar(record: &Record, ctx: &BuildContext) -> Editor {
         &presets,
         ctx,
         &on_change,
+        Some(shared.clone()),
     );
     let right = WidgetTileList::build(
         TileSection::BarRight,
@@ -51,11 +103,13 @@ pub(crate) fn build_bar(record: &Record, ctx: &BuildContext) -> Editor {
         &presets,
         ctx,
         &on_change,
+        Some(shared.clone()),
     );
-    root.append(left.root());
-    root.append(center.root());
-    root.append(right.root());
-
+    *shared.borrow_mut() = Some(BarSections {
+        left: Some(left.clone()),
+        center: Some(center.clone()),
+        right: Some(right.clone()),
+    });
     let extras: Vec<(Record, Editor)> = extras
         .into_iter()
         .map(|record| {
@@ -63,7 +117,26 @@ pub(crate) fn build_bar(record: &Record, ctx: &BuildContext) -> Editor {
             (record, editor)
         })
         .collect();
-    if extras
+
+    root.append(left.root());
+    render_section_overflow(&root, &extras, "left", ctx);
+    root.append(center.root());
+    render_section_overflow(&root, &extras, "center", ctx);
+    root.append(right.root());
+    render_section_overflow(&root, &extras, "right", ctx);
+
+    let rest: Vec<(Record, Editor)> = extras
+        .iter()
+        .filter(|(record, _)| {
+            !record
+                .segments
+                .last()
+                .map(String::as_str)
+                .is_some_and(is_overflow_field)
+        })
+        .cloned()
+        .collect();
+    if rest
         .iter()
         .any(|(record, _)| !(record.spec.hidden && !ctx.advanced))
     {
@@ -73,7 +146,7 @@ pub(crate) fn build_bar(record: &Record, ctx: &BuildContext) -> Editor {
             .css_classes(["heading"])
             .build();
         root.append(&heading);
-        append_settings_rows(&root, &extras, ctx);
+        append_settings_rows(&root, &rest, ctx);
     }
 
     Editor::Bar {
@@ -155,6 +228,7 @@ pub(crate) fn build_dock(record: &Record, ctx: &BuildContext) -> Editor {
         &presets,
         ctx,
         &on_change,
+        None,
     );
     root.append(widgets.root());
 

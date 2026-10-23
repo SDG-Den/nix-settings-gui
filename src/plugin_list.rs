@@ -259,6 +259,7 @@ impl PluginList {
 struct Picker {
     dropdown: gtk::DropDown,
     add: gtk::Button,
+    search: gtk::SearchEntry,
     rows: PluginRows,
     source: Rc<RefCell<Vec<String>>>,
     names: Rc<RefCell<HashMap<String, String>>>,
@@ -273,8 +274,9 @@ impl Picker {
             .iter()
             .map(|row| row.key.text().to_string())
             .collect();
-        let available = available_ids(&self.source.borrow(), &taken);
+        let candidates = available_ids(&self.source.borrow(), &taken);
         let names = self.names.borrow();
+        let available = filter_ids(&candidates, self.search.text().as_str(), &names);
         let labels: Vec<String> = available.iter().map(|id| label_for(&names, id)).collect();
         let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
         self.dropdown.set_model(Some(&gtk::StringList::new(&refs)));
@@ -294,10 +296,15 @@ pub fn build(record: &Record, ctx: &BuildContext) -> Editor {
     let on_change: ChangeHook = Rc::new(RefCell::new(None));
 
     let dropdown = gtk::DropDown::from_strings(&[]);
+    dropdown.set_hexpand(true);
     let add = gtk::Button::with_label("Add plugin");
+    let search = gtk::SearchEntry::new();
+    search.set_placeholder_text(Some("Filter plugins"));
+    search.set_width_chars(18);
     let picker = Picker {
         dropdown: dropdown.clone(),
         add: add.clone(),
+        search: search.clone(),
         rows: rows.clone(),
         source: Rc::new(RefCell::new(picker_source(record))),
         names: Rc::new(RefCell::new(HashMap::new())),
@@ -310,18 +317,69 @@ pub fn build(record: &Record, ctx: &BuildContext) -> Editor {
     }
     picker.refresh();
 
+    {
+        let picker = picker.clone();
+        search.connect_search_changed(move |_| picker.refresh());
+    }
+
+    let status = gtk::Label::builder()
+        .xalign(0.0)
+        .wrap(true)
+        .css_classes(["dim-label", "caption"])
+        .visible(false)
+        .build();
+    let retry = gtk::Button::with_label("Retry");
+    retry.add_css_class("flat");
+    retry.set_visible(false);
+
     let has_choices = matches!(&record.spec.choices, Some(list) if !list.is_empty());
     if !has_choices {
         if let Some(fetch) = ctx.plugin_registry.clone() {
-            let picker = picker.clone();
-            fetch(Box::new(move |plugins| {
-                apply_registry_source(
-                    &mut picker.source.borrow_mut(),
-                    &mut picker.names.borrow_mut(),
-                    &plugins,
-                );
-                picker.refresh();
-            }));
+            let load: Rc<dyn Fn()> = {
+                let fetch = fetch.clone();
+                let picker = picker.clone();
+                let status = status.clone();
+                let retry = retry.clone();
+                Rc::new(move || {
+                    let fetch = fetch.clone();
+                    let picker = picker.clone();
+                    let status = status.clone();
+                    let retry = retry.clone();
+                    status.set_visible(false);
+                    status.set_tooltip_text(None::<&str>);
+                    retry.set_visible(false);
+                    retry.set_sensitive(false);
+                    fetch(Box::new(move |result| {
+                        retry.set_sensitive(true);
+                        match result {
+                            Ok(plugins) if !plugins.is_empty() => {
+                                apply_registry_source(
+                                    &mut picker.source.borrow_mut(),
+                                    &mut picker.names.borrow_mut(),
+                                    &plugins,
+                                );
+                                picker.refresh();
+                            }
+                            Ok(_) => {
+                                status.set_label("No DMS plugin registry found");
+                                status.set_visible(true);
+                                retry.set_visible(true);
+                                picker.refresh();
+                            }
+                            Err(error) => {
+                                status.set_label("Could not load the DMS plugin registry");
+                                status.set_tooltip_text(Some(&error));
+                                status.set_visible(true);
+                                retry.set_visible(true);
+                                picker.refresh();
+                            }
+                        }
+                    }));
+                })
+            };
+            load();
+            let retry_load = load.clone();
+            retry.connect_clicked(move |_| retry_load());
         }
     }
 
@@ -352,11 +410,15 @@ pub fn build(record: &Record, ctx: &BuildContext) -> Editor {
     }
 
     let footer = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    footer.set_halign(gtk::Align::Start);
+    footer.set_halign(gtk::Align::Fill);
+    footer.set_hexpand(true);
+    footer.append(&search);
     footer.append(&dropdown);
     footer.append(&add);
+    footer.append(&retry);
 
     root.append(&container);
+    root.append(&status);
     root.append(&footer);
 
     Editor::Plugins {
@@ -758,6 +820,21 @@ fn available_ids(source: &[String], taken: &[String]) -> Vec<String> {
         .collect()
 }
 
+/// Keep ids whose id or display name contains the query, ignoring case.
+fn filter_ids(ids: &[String], query: &str, names: &HashMap<String, String>) -> Vec<String> {
+    let query = query.trim().to_lowercase();
+    if query.is_empty() {
+        return ids.to_vec();
+    }
+    ids.iter()
+        .filter(|id| {
+            let name = names.get(*id).map(String::as_str).unwrap_or(id);
+            id.to_lowercase().contains(&query) || name.to_lowercase().contains(&query)
+        })
+        .cloned()
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -813,6 +890,27 @@ mod tests {
         let registry: Vec<String> = (0..400).map(|i| format!("plugin{i}")).collect();
         let taken = vec!["plugin7".to_string(), "plugin399".to_string()];
         assert_eq!(available_ids(&registry, &taken).len(), 398);
+    }
+
+    #[test]
+    fn filter_ids_matches_id_and_display_name() {
+        let ids = vec![
+            "nixMonitor".to_string(),
+            "webSearch".to_string(),
+            "absPlayer".to_string(),
+        ];
+        let mut names = HashMap::new();
+        names.insert("absPlayer".to_string(), "Audiobookshelf".to_string());
+        assert_eq!(filter_ids(&ids, "", &names), ids);
+        assert_eq!(
+            filter_ids(&ids, "monitor", &names),
+            vec!["nixMonitor".to_string()]
+        );
+        assert_eq!(
+            filter_ids(&ids, "audiobook", &names),
+            vec!["absPlayer".to_string()]
+        );
+        assert!(filter_ids(&ids, "missing", &names).is_empty());
     }
 
     #[test]

@@ -191,12 +191,24 @@ pub(crate) const MENU_PROVIDERS: &[MenuProviderChoice] = &[
     },
 ];
 
-pub(crate) fn menu_provider_labels(extra: Option<String>) -> Vec<String> {
-    let mut labels: Vec<String> = MENU_PROVIDERS.iter().map(|c| c.label.to_string()).collect();
+/// Provider labels valid at one menu depth. The applications provider creates
+/// a dynamic submenu, so it is only valid on a top-level entry.
+pub(crate) fn menu_provider_labels_for(top_level: bool, extra: Option<String>) -> Vec<String> {
+    let mut labels: Vec<String> = MENU_PROVIDERS
+        .iter()
+        .filter(|choice| top_level || choice.provider != "apps")
+        .map(|choice| choice.label.to_string())
+        .collect();
     if let Some(extra) = extra {
-        labels.push(extra);
+        if top_level || menu_provider_value(&extra) != "apps" {
+            labels.push(extra);
+        }
     }
     labels
+}
+
+pub(crate) fn menu_provider_allowed(label: &str, top_level: bool) -> bool {
+    top_level || menu_provider_value(label) != "apps"
 }
 
 pub(crate) fn menu_provider_value(label: &str) -> &str {
@@ -310,6 +322,14 @@ mod tests {
             MENU_PROVIDERS.iter().any(|c| c.provider == "apps"),
             "upstream apps provider missing"
         );
+    }
+
+    #[test]
+    fn apps_provider_is_top_level_only() {
+        assert!(menu_provider_labels_for(true, None).contains(&"Apps List".to_string()));
+        assert!(!menu_provider_labels_for(false, None).contains(&"Apps List".to_string()));
+        assert!(menu_provider_allowed("Apps List", true));
+        assert!(!menu_provider_allowed("Apps List", false));
     }
 
     #[test]

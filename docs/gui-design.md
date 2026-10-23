@@ -77,8 +77,9 @@ the `nixd` JSON-RPC client, and the span-patch plus `nixfmt` write path.
   initially. The "Expand setting details" preference toggles it at runtime.
 - Tables (`table-attrset`, `table-list`) render one row per set, one cell per
   `columns` entry, typed by value (switch/spin/text), with built-in add and
-  remove. A `@table-item` comment above a row sets its `label`, `hidden`, and
-  `visibleWhen`.
+  remove. An `icon` column shows a preview and an "Add icon" button that copies
+  the image into `iconDir` and stages it with git. A `@table-item` comment above
+  a row sets its `label`, `hidden`, and `visibleWhen`.
 - `advanced` controls collapse into an "Advanced" section; `hidden` controls
   render only while the Advanced toggle is on, including inside submodules.
 - A control with `visibleWhen` renders only while another option in the same
@@ -163,6 +164,25 @@ Bespoke controls (`keybinds`, `monitors`, `theme`, `wallpaper`, `menu`, `plugins
 `bar`, `dock`) render a configuration-specific UI for a single option, with
 their own add, remove, and reorder actions. Their field shapes are hard-coded in the
 application; the configuration only names the widget through `@option`.
+
+Bar and dock editors load disabled entries and show an enable switch on each
+row. Bar sections support moving a widget between left, center, and right by
+drag or by the row's right-click menu; moving into or out of the string-list
+center section rebuilds the row with the correct representation. Section
+overflow fields (`leftOverflowMode`, `leftOverflowPosition`, and the equivalent
+center/right fields) render under their section instead of in the generic
+settings tail. Added widgets use `@widget-preset` metadata when present,
+otherwise a generic entry is created.
+
+Grid controls (`grid-configuration`) render a card canvas plus a side details
+pane. Cards can be added through a searchable picker, dragged, resized, enabled
+or footer-pinned where the profile supports it, and edited field by field. New
+cards use DMS default sizes for known ids. "Reset sizes" reapplies catalog
+sizes to every card, "Reset card size" restores the selected card, and "Clear
+all" requires a second click. Weather, dashboard, and control center are
+profiles over the same editor. The number of grid columns remains fixed by the
+`gridColumns` directive on the `@option`; column and row counts are not stored
+inside the card collection.
 
 ## 7. Settings submenu
 

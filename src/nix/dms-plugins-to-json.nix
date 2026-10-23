@@ -2,7 +2,7 @@
 # JSON: { plugins = [ { id, name, description, category, repo } ]; }.
 # The registry is reached through the config flake's ojuny-desktop input;
 # every step is tryEval-guarded so a flake without that input yields [].
-{flakePath}: let
+{flakePath, system ? null}: let
   root = builtins.getFlake flakePath;
 
   safe = default: e: let
@@ -12,9 +12,16 @@
 
   desktop = safe null (root.inputs.ojuny-desktop or null);
   registry = safe null (desktop.inputs.dms-plugin-registry or null);
-  system = builtins.currentSystem;
-  packages =
+
+  # The registry source ships this manifest, keyed by meta.id. It is the
+  # cheapest and most complete source for the picker.
+  prefetch =
     if registry == null
+    then null
+    else safe null (builtins.fromJSON (builtins.readFile (registry.outPath + "/nix/plugins-prefetch.json")));
+
+  packages =
+    if registry == null || system == null
     then {}
     else
       registry.packages.${system}
@@ -24,11 +31,11 @@
         in
           if values == [] then {} else builtins.head values
       );
-  ids = builtins.attrNames packages;
 
-  # Optional metadata: the registry source ships a prefetch manifest whose
-  # keys equal meta.id. A layout change upstream degrades to ids only.
-  prefetch = safe null (builtins.fromJSON (builtins.readFile (registry.outPath + "/nix/plugins-prefetch.json")));
+  ids =
+    if builtins.isAttrs prefetch && prefetch != {}
+    then builtins.attrNames prefetch
+    else builtins.attrNames packages;
 
   entryFor = id: let
     raw =

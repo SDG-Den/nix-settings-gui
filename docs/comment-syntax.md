@@ -82,6 +82,7 @@ services.pipewire.enable = true;
 | `order`       | integer         | Sort key within the menu or group. Controls with an explicit `order` come first, ordered by value; the rest keep declaration order. |
 | `maxColumns`  | integer         | Maximum children per line for `horizontal-submodule` (default 4). |
 | `columns`     | list of strings | Field names (columns) for `table-attrset` and `table-list`. |
+| `columnTypes` | list of strings | Per-column editor hints for tables: `bool`, `int`, `float`, `str`, or `icon`. |
 | `keyEditable` | boolean         | Table: whether cell keys are editable (default `false`). |
 | `firstValueEditable` | boolean   | Table: whether the first cell's value is editable (default `false`). |
 | `advanced`    | boolean         | Collapses the control under "Advanced". |
@@ -96,6 +97,7 @@ services.pipewire.enable = true;
 | `visibleWhen.notEquals` | literal | Value the governing option must not equal. |
 | `applyCommand` | string     | Shell command that applies the option immediately, without saving. |
 | `wallpaperDir` | string     | Directory holding wallpaper images, relative to the file containing the option. Defaults to `./wallpapers`. |
+| `iconDir`     | string          | Directory holding icons added by `icon` table columns, relative to the file containing the option. Defaults to `./icons`. |
 
 ### Visibility dependencies
 
@@ -224,6 +226,10 @@ monitors = {
 
 Cells are typed automatically: a boolean becomes a switch, a number a spin
 button, anything else a text field, so a cell is never plain text.
+`columnTypes` overrides that per column with `bool`, `int`, `float`, `str`, or
+`icon`. An `icon` column shows a preview with an "Add icon" button; the chosen
+image is copied into `iconDir` and staged with `git add`, and the cell stores
+its path.
 
 `keyEditable` (default `false`) makes each cell's key editable and shows it
 inline as `key = value`. `firstValueEditable` (default `false`) makes the first
@@ -262,6 +268,22 @@ widget; the field shape lives in the application.
 | `plugins` | `dms.plugins` | a name-keyed attribute set of `{ enable; src; settings; dir; config; }`. `settings` renders as `raw` unless annotated as a typed submodule. |
 | `bar` | `barConfigs` | a name-keyed attribute set with id-keyed `left`/`center`/`right` widget lists plus layout and appearance. |
 | `dock` | `dockConfigs` | the same shape as `bar`, in its own control. |
+
+The `menu` provider `apps` is only valid on a top-level entry. A top-level
+entry with `provider = "apps"` cannot receive child options because the
+provider generates its own dynamic submenu. The applications provider is not
+offered on non-top-level entries, and existing invalid combinations are kept
+and flagged until they are fixed.
+
+Bar and dock widget lists keep disabled entries (`enabled = false`) instead of
+dropping them. They can be re-enabled or removed from the editor. Each widget id
+appears once because the convenience options are id-keyed attrsets.
+
+Grid controls for control center widgets, dashboard cards, and weather widgets
+use the same editor. New cards use the DMS default size for their id, and the
+editor supports add, remove, move, resize, enable, footer, reset sizes, reset
+selected, and clear all. `gridColumns` fixes the column count for the control;
+panel column and row counts are not stored in the card collection.
 
 ## 4. Default type mapping
 

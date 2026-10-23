@@ -3,13 +3,13 @@ use super::dispatch::build;
 use super::fields::{dim_line, make_attrset_field, AttrsetField};
 use super::names::{field_caption, field_help, known_widget_name, widget_display_name};
 use super::submodule::hook_notify;
-use super::tile_list::TileSection;
+use super::tile_list::{move_tile_between, DragOrigin, SharedBarSections, TileSection};
 use super::tile_nix::valid_widget_id;
 use crate::dsl::{OptionSpec, PresetFieldSpec, WidgetPresetSpec};
 use crate::model::Record;
 use gtk::glib;
 use gtk::prelude::*;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 /// One draggable widget tile. Order in the enclosing Vec is the position.
 #[derive(Clone)]
@@ -23,6 +23,10 @@ pub(crate) struct WidgetTile {
     pub(crate) orig_order: String,
     /// gtk::ListBoxRow child; row widget is always the tile face box.
     pub(crate) row: gtk::ListBoxRow,
+    pub(crate) section: TileSection,
+    pub(crate) orig_section: TileSection,
+    pub(crate) enabled: Rc<Cell<bool>>,
+    pub(crate) orig_enabled: bool,
 }
 /// Build one freeform field from a preset's declared kind and bounds,
 /// falling back to value inference when the preset says nothing.
@@ -148,7 +152,7 @@ pub(crate) fn hide_all_indicators(list: &gtk::ListBox) {
         let wrapped_separator = widget
             .downcast_ref::<gtk::ListBoxRow>()
             .and_then(|row| row.child())
-            .map_or(false, |child| child.is::<gtk::Separator>());
+            .is_some_and(|child| child.is::<gtk::Separator>());
         if widget.is::<gtk::Separator>() || wrapped_separator {
             stray.push(widget);
         }
@@ -164,15 +168,17 @@ pub(crate) fn show_indicator(list: &gtk::ListBox, indicator: &gtk::Separator, in
 }
 
 /// Drop target on a tile list: a 2px separator tracks the pointer between
-/// rows, and a drop reorders the tiles.
+/// rows, and a drop reorders within the list or moves across bar sections.
 pub(crate) fn attach_tile_dnd(
     list: &gtk::ListBox,
     tiles: &Rc<RefCell<Vec<WidgetTile>>>,
+    section: TileSection,
+    shared: Option<SharedBarSections>,
     on_change: &ChangeHook,
 ) {
     let indicator = gtk::Separator::new(gtk::Orientation::Horizontal);
     indicator.set_height_request(2);
-    let drop = gtk::DropTarget::new(glib::Type::U32, gtk::gdk::DragAction::MOVE);
+    let drop = gtk::DropTarget::new(glib::Type::STRING, gtk::gdk::DragAction::MOVE);
     list.add_controller(drop.clone());
 
     let enter_list = list.clone();
@@ -197,22 +203,52 @@ pub(crate) fn attach_tile_dnd(
     let drop_tiles = tiles.clone();
     let drop_hook = on_change.clone();
     let drop_list = list.clone();
+    let drop_shared = shared.clone();
     drop.connect_drop(move |_, value, _, y| {
         hide_all_indicators(&drop_list);
-        let Ok(source) = value.get::<u32>() else {
+        let Ok(payload) = value.get::<String>() else {
             return false;
         };
-        let source = source as usize;
-        let count = drop_tiles.borrow().len();
-        if source >= count {
+        let Some((source_section, source_index)) =
+            payload.split_once(':').and_then(|(section, index)| {
+                Some((
+                    TileSection::from_key(section)?,
+                    index.parse::<usize>().ok()?,
+                ))
+            })
+        else {
             return false;
-        }
+        };
         let target = drop_index(&drop_list, y) as usize;
-        if target > count {
+        if source_section != section {
+            let Some(shared) = drop_shared.as_ref() else {
+                return false;
+            };
+            return move_tile_between(
+                shared,
+                source_section,
+                source_index,
+                section,
+                target,
+                &drop_hook,
+            );
+        }
+        let count = drop_tiles.borrow().len();
+        if source_index >= count {
             return false;
         }
-        let target = if target > source { target - 1 } else { target };
-        move_tile(&drop_list, &drop_tiles, source, target as isize, &drop_hook);
+        let target = if target > source_index {
+            target - 1
+        } else {
+            target
+        };
+        move_tile(
+            &drop_list,
+            &drop_tiles,
+            source_index,
+            target as isize,
+            &drop_hook,
+        );
         true
     });
 }
@@ -331,6 +367,10 @@ pub(crate) fn make_widget_tile(
     tiles: &Rc<RefCell<Vec<WidgetTile>>>,
     list: &gtk::ListBox,
     on_change: &ChangeHook,
+    enabled: bool,
+    orig_enabled: bool,
+    drag_source: Option<DragOrigin>,
+    shared: Option<SharedBarSections>,
 ) -> WidgetTile {
     let display = preset
         .as_ref()
@@ -364,6 +404,23 @@ pub(crate) fn make_widget_tile(
         label.set_tooltip_text(Some(description));
     }
     body.append(&label);
+
+    let enabled_state = Rc::new(Cell::new(enabled));
+    if !section.is_center() {
+        let toggle = gtk::Switch::new();
+        toggle.set_active(enabled);
+        toggle.set_valign(gtk::Align::Center);
+        toggle.set_tooltip_text(Some("Whether this widget is enabled."));
+        let state = enabled_state.clone();
+        let hook = on_change.clone();
+        toggle.connect_active_notify(move |toggle| {
+            state.set(toggle.is_active());
+            if let Some(cb) = hook.borrow().as_ref() {
+                cb();
+            }
+        });
+        body.append(&toggle);
+    }
 
     let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     spacer.set_hexpand(true);
@@ -439,6 +496,40 @@ pub(crate) fn make_widget_tile(
         });
         menu_box.append(&button);
     }
+    if let Some(shared) = shared {
+        for target in [
+            TileSection::BarLeft,
+            TileSection::BarCenter,
+            TileSection::BarRight,
+        ] {
+            if target == section || section == TileSection::Dock {
+                continue;
+            }
+            let label = match target {
+                TileSection::BarLeft => "Move to left",
+                TileSection::BarCenter => "Move to center",
+                TileSection::BarRight => "Move to right",
+                TileSection::Dock => "Move to dock",
+            };
+            let button = gtk::Button::with_label(label);
+            button.add_css_class("flat");
+            let (tiles_move, row_move, hook, menu_move) =
+                (tiles.clone(), row.clone(), on_change.clone(), menu.clone());
+            let shared_move = shared.clone();
+            button.connect_clicked(move |_| {
+                menu_move.popdown();
+                let index = tiles_move
+                    .borrow()
+                    .iter()
+                    .position(|tile| tile.row == row_move);
+                if let Some(index) = index {
+                    move_tile_between(&shared_move, section, index, target, usize::MAX, &hook);
+                }
+            });
+            menu_box.append(&button);
+        }
+    }
+
     let right_click = gtk::GestureClick::new();
     right_click.set_button(3);
     body.add_controller(right_click.clone());
@@ -449,15 +540,28 @@ pub(crate) fn make_widget_tile(
     drag.set_actions(gtk::gdk::DragAction::MOVE);
     body.add_controller(drag.clone());
     let (drag_tiles, drag_row) = (tiles.clone(), row.clone());
-    drag.connect_prepare(move |_, _, _| {
-        let index = drag_tiles
-            .borrow()
-            .iter()
-            .position(|tile| tile.row == drag_row)? as u32;
-        Some(gtk::gdk::ContentProvider::for_value(&index.to_value()))
-    });
+    {
+        let drag_source = drag_source.clone();
+        drag.connect_prepare(move |_, _, _| {
+            let index = drag_tiles
+                .borrow()
+                .iter()
+                .position(|tile| tile.row == drag_row)? as u32;
+            if let Some(state) = drag_source.as_ref() {
+                *state.borrow_mut() = Some((section, index as usize));
+            }
+            let payload = format!("{}:{}", section.key(), index);
+            Some(gtk::gdk::ContentProvider::for_value(&payload.to_value()))
+        });
+    }
     let end_list = list.clone();
-    drag.connect_drag_end(move |_, _, _| hide_all_indicators(&end_list));
+    let end_source = drag_source.clone();
+    drag.connect_drag_end(move |_, _, _| {
+        hide_all_indicators(&end_list);
+        if let Some(state) = end_source.as_ref() {
+            *state.borrow_mut() = None;
+        }
+    });
 
     let remove = gtk::Button::from_icon_name("user-trash-symbolic");
     remove.add_css_class("flat");
@@ -485,5 +589,9 @@ pub(crate) fn make_widget_tile(
         orig_order: orig_order.to_string(),
         fields,
         row,
+        section,
+        orig_section: section,
+        enabled: enabled_state,
+        orig_enabled,
     }
 }

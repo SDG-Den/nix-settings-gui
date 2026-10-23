@@ -1,11 +1,11 @@
 use super::context::{BuildContext, ChangeHook, WallpaperActions};
 use super::editor::Editor;
-use super::nix::{parse_string_literal, path_literal, quote};
+use super::nix::{nix_path_literal, normalize_path, parse_string_literal, quote, relative_path};
 use crate::dsl::OptionSpec;
 use crate::model::Record;
 use gtk::prelude::*;
 use std::cell::RefCell;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Once;
 
@@ -562,56 +562,6 @@ fn wallpaper_file(module_dir: &Path, path: &Path) -> WallpaperFile {
         value: nix_path_literal(&relative_path(module_dir, &path)),
         absolute: path,
     }
-}
-
-fn relative_path(from: &Path, to: &Path) -> String {
-    let from = normalize_path(from);
-    let to = normalize_path(to);
-    let from_parts: Vec<Component> = from.components().collect();
-    let to_parts: Vec<Component> = to.components().collect();
-    let common = from_parts
-        .iter()
-        .zip(to_parts.iter())
-        .take_while(|(a, b)| a == b)
-        .count();
-    let mut relative = PathBuf::new();
-    for _ in common..from_parts.len() {
-        relative.push("..");
-    }
-    for part in &to_parts[common..] {
-        relative.push(part.as_os_str());
-    }
-    let text = relative.to_string_lossy().into_owned();
-    if text.starts_with("..") || Path::new(&text).is_absolute() {
-        text
-    } else {
-        format!("./{text}")
-    }
-}
-
-fn nix_path_literal(value: &str) -> String {
-    if value.chars().any(char::is_whitespace) {
-        quote(value)
-    } else {
-        path_literal(value)
-    }
-}
-
-fn normalize_path(path: &Path) -> PathBuf {
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                if !normalized.pop() {
-                    normalized.push("..");
-                }
-            }
-            Component::RootDir | Component::Prefix(_) => normalized.push(component.as_os_str()),
-            Component::Normal(_) => normalized.push(component.as_os_str()),
-        }
-    }
-    normalized
 }
 
 fn install_css() {

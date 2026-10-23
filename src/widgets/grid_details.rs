@@ -1,4 +1,5 @@
 use super::context::BuildContext;
+use super::dms_catalog::{card_defaults, card_size};
 use super::fields::{dim_line, dim_line_with_help};
 use super::grid::{
     grid_reattach, grid_repack, grid_select, grid_set_status, grid_tile_is_footer,
@@ -7,6 +8,7 @@ use super::grid::{
 use super::grid_gestures::wire_grid_tile;
 use super::grid_layout::{grid_clamp_cell, grid_first_fit, CellRect};
 use super::names::{field_caption, field_help, widget_display_name};
+use super::nix::attr_key;
 use gtk::prelude::*;
 use std::rc::Rc;
 /// The add bar: a dropdown of registry ids not yet on the canvas, an optional
@@ -18,32 +20,186 @@ pub(crate) fn build_grid_adder(
     on_add: Rc<dyn Fn(&str)>,
 ) -> gtk::Box {
     let bar = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    let labels: Vec<String> = available.iter().map(|id| widget_display_name(id)).collect();
-    let label_refs: Vec<&str> = labels.iter().map(String::as_str).collect();
-    let combo = gtk::DropDown::from_strings(&label_refs);
-    bar.append(&combo);
-    let entry = gtk::Entry::new();
+    let button = gtk::MenuButton::builder()
+        .label("Add widget")
+        .halign(gtk::Align::Start)
+        .build();
+    let popover = gtk::Popover::new();
+    popover.set_position(gtk::PositionType::Bottom);
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    content.set_margin_top(12);
+    content.set_margin_bottom(12);
+    content.set_margin_start(12);
+    content.set_margin_end(12);
+    content.set_size_request(320, -1);
+    let search = gtk::SearchEntry::new();
+    search.set_placeholder_text(Some("Search widgets"));
+    let list = gtk::ListBox::new();
+    list.set_selection_mode(gtk::SelectionMode::None);
+    let scroll = gtk::ScrolledWindow::builder()
+        .min_content_height(160)
+        .max_content_height(280)
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .child(&list)
+        .build();
+    content.append(&search);
+    content.append(&scroll);
+    popover.set_child(Some(&content));
+    button.set_popover(Some(&popover));
+    bar.append(&button);
+
+    let all: Vec<String> = available.to_vec();
+    let repopulate: Rc<dyn Fn()> = {
+        let list = list.clone();
+        let search = search.clone();
+        let all = all.clone();
+        Rc::new(move || {
+            while let Some(child) = list.first_child() {
+                list.remove(&child);
+            }
+            let needle = search.text().trim().to_lowercase();
+            for id in &all {
+                let label = widget_display_name(id);
+                if !needle.is_empty()
+                    && !label.to_lowercase().contains(&needle)
+                    && !id.to_lowercase().contains(&needle)
+                {
+                    continue;
+                }
+                let row = gtk::ListBoxRow::new();
+                row.set_widget_name(id);
+                let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+                line.set_margin_top(6);
+                line.set_margin_bottom(6);
+                line.set_margin_start(8);
+                line.set_margin_end(8);
+                let text = gtk::Label::builder()
+                    .xalign(0.0)
+                    .label(label)
+                    .hexpand(true)
+                    .build();
+                line.append(&text);
+                let add = gtk::Image::from_icon_name("list-add-symbolic");
+                line.append(&add);
+                row.set_child(Some(&line));
+                list.append(&row);
+            }
+        })
+    };
+    popover.connect_map({
+        let repopulate = repopulate.clone();
+        move |_| repopulate()
+    });
+    search.connect_search_changed({
+        let repopulate = repopulate.clone();
+        move |_| repopulate()
+    });
+    {
+        let on_add = on_add.clone();
+        let popover = popover.clone();
+        list.connect_row_activated(move |_, row| {
+            let id = row.widget_name().to_string();
+            if !id.is_empty() {
+                on_add(&id);
+            }
+            popover.popdown();
+        });
+    }
     if advanced {
+        let entry = gtk::Entry::new();
         entry.set_placeholder_text(Some("Custom id"));
         entry.set_width_chars(14);
         bar.append(&entry);
+        let add = gtk::Button::with_label("Add custom");
+        let entry_add = entry.clone();
+        let on_add = on_add.clone();
+        add.connect_clicked(move |_| {
+            let id = entry_add.text().trim().to_string();
+            if !id.is_empty() {
+                on_add(&id);
+                entry_add.set_text("");
+            }
+        });
+        bar.append(&add);
     }
-    let add = gtk::Button::with_label("Add widget");
-    bar.append(&add);
-    let available = available.to_vec();
-    add.connect_clicked(move |_| {
-        let custom = entry.text().trim().to_string();
-        let selected = available
-            .get(combo.selected() as usize)
-            .cloned()
-            .unwrap_or_default();
-        let id = if custom.is_empty() { selected } else { custom };
-        if !id.is_empty() {
-            on_add(&id);
-        }
-    });
     bar
 }
+
+pub(crate) fn grid_clear_all(state: &Rc<GridLayoutState>) {
+    state.tiles.borrow_mut().clear();
+    *state.selected.borrow_mut() = None;
+    grid_repack(state, None, true);
+    grid_reattach(state);
+    grid_refresh_adder(state);
+    grid_refresh_details(state);
+    state.notify();
+}
+
+/// Reset every card to its catalog size and first-fit it again, keeping the
+/// card's fields and unknown settings.
+pub(crate) fn grid_reset_layout(state: &Rc<GridLayoutState>) {
+    let profile = state.profile;
+    let mut taken: Vec<CellRect> = Vec::new();
+    {
+        let mut tiles = state.tiles.borrow_mut();
+        for tile in tiles.iter_mut() {
+            if profile.has_footer && grid_tile_is_footer(tile) {
+                continue;
+            }
+            let spec = card_size(profile.surface, &tile.id);
+            let w = spec.w.clamp(spec.min_w, spec.max_w.min(profile.columns));
+            let h = spec.h.clamp(spec.min_h, spec.max_h);
+            let cell = grid_first_fit(&taken, profile.columns, w, h);
+            taken.push(cell);
+            tile.cell = cell;
+            tile.cell.w = w;
+            tile.cell.h = h;
+            if let Some(switch) = &tile.enabled {
+                switch.set_active(true);
+            }
+        }
+    }
+    grid_repack(state, None, true);
+    grid_reattach(state);
+    grid_update_size_caption(state);
+    grid_set_status(state, "");
+    state.notify();
+}
+
+pub(crate) fn grid_reset_tile(state: &Rc<GridLayoutState>, index: usize) {
+    let profile = state.profile;
+    let Some(tile) = state.tiles.borrow().get(index).cloned() else {
+        return;
+    };
+    let spec = card_size(profile.surface, &tile.id);
+    let previous = tile.cell;
+    let w = spec.w.clamp(spec.min_w, spec.max_w.min(profile.columns));
+    let h = spec.h.clamp(spec.min_h, spec.max_h);
+    {
+        let mut tiles = state.tiles.borrow_mut();
+        if let Some(tile) = tiles.get_mut(index) {
+            tile.cell.w = w;
+            tile.cell.h = h;
+            if let Some(switch) = &tile.enabled {
+                switch.set_active(true);
+            }
+        }
+    }
+    if !grid_repack(state, Some(index), false) {
+        if let Some(tile) = state.tiles.borrow_mut().get_mut(index) {
+            tile.cell = previous;
+        }
+        grid_repack(state, Some(index), false);
+        grid_set_status(state, "No room to reset this card's size.");
+    } else {
+        grid_set_status(state, "");
+    }
+    grid_reattach(state);
+    grid_update_size_caption(state);
+    grid_refresh_details(state);
+    state.notify();
+}
+
 pub(crate) fn grid_resize_step(state: &Rc<GridLayoutState>, dw: i64, dh: i64) {
     let Some(index) = *state.selected.borrow() else {
         return;
@@ -123,7 +279,12 @@ pub(crate) fn grid_refresh_adder(state: &Rc<GridLayoutState>) {
         .append(&build_grid_adder(state.advanced, &available, on_add));
 }
 
-pub(crate) fn grid_scaffold_value(profile: GridProfile, order: i64, cell: CellRect) -> String {
+pub(crate) fn grid_scaffold_value(
+    profile: GridProfile,
+    id: &str,
+    order: i64,
+    cell: CellRect,
+) -> String {
     let mut parts: Vec<String> = Vec::new();
     if profile.has_enabled {
         parts.push("enabled = true;".to_string());
@@ -133,6 +294,9 @@ pub(crate) fn grid_scaffold_value(profile: GridProfile, order: i64, cell: CellRe
         "col = {}; row = {}; w = {}; h = {};",
         cell.col, cell.row, cell.w, cell.h
     ));
+    for (name, value) in card_defaults(profile.surface, id) {
+        parts.push(format!("{} = {};", attr_key(name), value));
+    }
     format!("{{ {} }}", parts.join(" "))
 }
 
@@ -149,6 +313,9 @@ pub(crate) fn grid_add_tile(state: &Rc<GridLayoutState>, id: &str) {
         .max()
         .unwrap_or(0)
         + 10;
+    let spec = card_size(profile.surface, id);
+    let w = spec.w.clamp(spec.min_w, spec.max_w.min(profile.columns));
+    let h = spec.h.clamp(spec.min_h, spec.max_h);
     let cell = {
         let tiles = state.tiles.borrow();
         let taken: Vec<CellRect> = tiles
@@ -156,9 +323,9 @@ pub(crate) fn grid_add_tile(state: &Rc<GridLayoutState>, id: &str) {
             .filter(|tile| !(profile.has_footer && grid_tile_is_footer(tile)))
             .map(|tile| tile.cell)
             .collect();
-        grid_first_fit(&taken, profile.columns, 1, 1)
+        grid_first_fit(&taken, profile.columns, w, h)
     };
-    let value = grid_scaffold_value(profile, order, cell);
+    let value = grid_scaffold_value(profile, id, order, cell);
     let mut tile = make_grid_tile(id, &value, profile, &BuildContext::default());
     tile.added = true;
     wire_grid_tile(state, &tile);
@@ -351,6 +518,15 @@ pub(crate) fn grid_refresh_details(state: &Rc<GridLayoutState>) {
     state.details.append(&height_line);
 
     state.details.append(&state.status);
+
+    let reset = gtk::Button::with_label("Reset card size");
+    reset.add_css_class("flat");
+    state.details.append(&reset);
+    {
+        let st = state.clone();
+        let index = selected.unwrap_or(0);
+        reset.connect_clicked(move |_| grid_reset_tile(&st, index));
+    }
 
     let delete = gtk::Button::with_label("Delete widget");
     delete.add_css_class("destructive-action");

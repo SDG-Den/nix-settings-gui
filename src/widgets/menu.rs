@@ -5,8 +5,9 @@ use super::fields::{
     make_dropdown_field, popout_button_bar, restore_field_values, AttrsetField,
 };
 use super::names::{
-    menu_field_help, menu_provider_fields, menu_provider_initial, menu_provider_labels,
-    menu_provider_value, title_case_id, widget_display_name, MENU_PROVIDERS,
+    menu_field_help, menu_provider_allowed, menu_provider_fields, menu_provider_initial,
+    menu_provider_labels_for, menu_provider_value, title_case_id, widget_display_name,
+    MENU_PROVIDERS,
 };
 use super::nix::{attr_key, expr_literal, string_literal};
 use crate::model::Record;
@@ -27,6 +28,7 @@ pub(crate) struct PopoutSnapshot {
     pub(crate) modifier: String,
     pub(crate) keys: String,
     pub(crate) fields: Vec<(String, String)>,
+    pub(crate) invalid_provider: Option<String>,
 }
 
 /// One menu row's pop-out state, cloned into the shared edit/cancel wiring of
@@ -37,6 +39,7 @@ pub(crate) struct MenuPopout {
     pub(crate) fields: Rc<RefCell<Vec<AttrsetField>>>,
     pub(crate) blocks: Vec<(String, gtk::Box)>,
     pub(crate) snapshot: Rc<RefCell<Option<PopoutSnapshot>>>,
+    pub(crate) invalid_provider: Rc<RefCell<Option<String>>>,
 }
 
 impl MenuPopout {
@@ -48,6 +51,7 @@ impl MenuPopout {
             modifier: String::new(),
             keys: String::new(),
             fields: values,
+            invalid_provider: self.invalid_provider.borrow().clone(),
         });
     }
 
@@ -56,6 +60,7 @@ impl MenuPopout {
         let taken = self.snapshot.borrow_mut().take();
         if let Some(snapshot) = taken {
             restore_field_values(&self.fields.borrow(), &snapshot.fields);
+            *self.invalid_provider.borrow_mut() = snapshot.invalid_provider;
             apply_provider_visibility(&self.fields.borrow(), &self.blocks);
         }
     }
@@ -81,6 +86,8 @@ pub(crate) struct MenuRow {
     pub(crate) row_box: gtk::Box,
     pub(crate) remove: gtk::Button,
     pub(crate) snapshot: Rc<RefCell<Option<PopoutSnapshot>>>,
+    pub(crate) invalid_provider: Rc<RefCell<Option<String>>>,
+    pub(crate) orig_invalid_provider: Option<String>,
 }
 pub(crate) fn menu_aliases_text(raw: &str) -> String {
     raw.split('"')
@@ -169,6 +176,45 @@ fn apply_provider_visibility(fields: &[AttrsetField], blocks: &[(String, gtk::Bo
     }
 }
 
+pub(crate) fn menu_row_is_top_level(row: &MenuRow) -> bool {
+    row.key.text().is_empty()
+}
+
+pub(crate) fn menu_section_allows_children(rows: &[MenuRow], section: &str) -> bool {
+    let top_level: Vec<(String, String)> = rows
+        .iter()
+        .filter(|row| menu_row_is_top_level(row))
+        .map(|row| {
+            (
+                row.section.clone(),
+                provider_label(&row.popup_fields.borrow()),
+            )
+        })
+        .collect();
+    provider_map_allows_children(section, &top_level)
+}
+
+pub(crate) fn provider_map_allows_children(section: &str, top_level: &[(String, String)]) -> bool {
+    !top_level
+        .iter()
+        .any(|(name, provider)| name == section && menu_provider_value(provider) == "apps")
+}
+
+fn provider_label(fields: &[AttrsetField]) -> String {
+    provider_selected_label(fields).unwrap_or_default()
+}
+
+pub(crate) fn menu_add_targets(
+    rows: &[MenuRow],
+    sections: &[(String, gtk::Box)],
+) -> Vec<(String, gtk::Box)> {
+    sections
+        .iter()
+        .filter(|(section, _)| menu_section_allows_children(rows, section))
+        .cloned()
+        .collect()
+}
+
 pub(crate) fn connect_menu_edit(
     edit: &gtk::Button,
     row_box: &gtk::Box,
@@ -208,6 +254,9 @@ pub(crate) fn connect_menu_edit(
     });
 }
 
+pub(crate) type MenuRefresh = Rc<RefCell<Option<Rc<dyn Fn()>>>>;
+
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn make_menu_row(
     section: &str,
     rel_key: &str,
@@ -215,6 +264,8 @@ pub(crate) fn make_menu_row(
     ctx: &BuildContext,
     popup: &gtk::Window,
     popup_content: &gtk::Box,
+    rows: &Rc<RefCell<Vec<MenuRow>>>,
+    refresh_add_targets: &MenuRefresh,
     active: &Rc<RefCell<Option<MenuPopout>>>,
 ) -> MenuRow {
     let raw_of = |name: &str| {
@@ -234,6 +285,7 @@ pub(crate) fn make_menu_row(
     } else {
         format!("{section}.{rel_key}")
     };
+    let top_level = rel_key.is_empty();
 
     let icon = unquote(&raw_of("icon"));
     let label = gtk::Entry::new();
@@ -249,9 +301,12 @@ pub(crate) fn make_menu_row(
         .iter()
         .any(|c| c.label == provider_unquoted || c.provider == provider_unquoted);
     let extra = (!provider_unquoted.is_empty() && !in_table).then(|| provider_unquoted.clone());
-    let labels = menu_provider_labels(extra);
+    let labels = menu_provider_labels_for(top_level, extra);
     let initial = menu_provider_initial(&provider_unquoted, &raw_of("target"), &raw_of("action"));
     let selected = labels.iter().position(|l| *l == initial).unwrap_or(0);
+    let invalid_initial = (!provider_unquoted.is_empty()
+        && !menu_provider_allowed(&initial, top_level))
+    .then(|| provider_unquoted.clone());
     let popup_fields: Rc<RefCell<Vec<AttrsetField>>> = Rc::new(RefCell::new(
         POPOUT_MAIN_FIELDS
             .iter()
@@ -268,20 +323,75 @@ pub(crate) fn make_menu_row(
     };
     let layout = menu_popup_fields(&popup_fields.borrow(), on_resize.clone());
     let popup_box = layout.root.clone();
+    let invalid_provider = Rc::new(RefCell::new(invalid_initial.clone()));
+    let warning = gtk::Label::builder()
+        .xalign(0.0)
+        .wrap(true)
+        .css_classes(["dim-label", "caption"])
+        .build();
+    if invalid_initial.is_some() {
+        warning.set_text("Apps List is only valid on a top-level menu. Choose another provider.");
+        warning.set_visible(true);
+    } else {
+        warning.set_visible(false);
+    }
+    popup_box.append(&warning);
     let (bar, cancel, apply) = popout_button_bar();
     popup_box.append(&bar);
     apply_provider_visibility(&popup_fields.borrow(), &layout.blocks);
     if let Some(AttrsetField {
-        editor: Editor::Dropdown { combo, .. },
+        editor: Editor::Dropdown { combo, choices },
         ..
     }) = popup_fields.borrow().iter().find(|f| f.name == "provider")
     {
         let fields = popup_fields.clone();
         let blocks = layout.blocks.clone();
         let on_resize = on_resize.clone();
-        combo.connect_selected_notify(move |_| {
+        let rows_for_check = rows.clone();
+        let refresh_for_check = refresh_add_targets.clone();
+        let warning_for_check = warning.clone();
+        let invalid_for_check = invalid_provider.clone();
+        let choices_for_check = choices.clone();
+        let previous = std::rc::Rc::new(std::cell::Cell::new(combo.selected()));
+        let initial_selected = combo.selected();
+        let reverting = std::rc::Rc::new(std::cell::Cell::new(false));
+        let section_for_check = section.to_string();
+        combo.connect_selected_notify(move |combo| {
+            let selected = combo.selected();
+            let label = choices_for_check
+                .get(selected as usize)
+                .cloned()
+                .unwrap_or_default();
+            if top_level
+                && menu_provider_value(&label) == "apps"
+                && rows_for_check
+                    .borrow()
+                    .iter()
+                    .any(|row| row.section == section_for_check && !row.key.text().is_empty())
+            {
+                if !reverting.get() {
+                    reverting.set(true);
+                    combo.set_selected(previous.get());
+                    reverting.set(false);
+                }
+                warning_for_check
+                    .set_text("Remove this menu's child options before choosing Apps List.");
+                warning_for_check.set_visible(true);
+                return;
+            }
+            if invalid_for_check.borrow().is_some() && selected != initial_selected {
+                *invalid_for_check.borrow_mut() = None;
+                warning_for_check.set_visible(false);
+            }
+            previous.set(selected);
+            if invalid_for_check.borrow().is_none() {
+                warning_for_check.set_visible(false);
+            }
             apply_provider_visibility(&fields.borrow(), &blocks);
             on_resize();
+            if let Some(refresh) = refresh_for_check.borrow().as_ref() {
+                refresh();
+            }
         });
     }
 
@@ -340,6 +450,8 @@ pub(crate) fn make_menu_row(
         row_box,
         remove,
         snapshot: Rc::new(RefCell::new(None)),
+        invalid_provider,
+        orig_invalid_provider: invalid_initial,
     };
 
     let popout = MenuPopout {
@@ -347,6 +459,7 @@ pub(crate) fn make_menu_row(
         fields: row.popup_fields.clone(),
         blocks: layout.blocks.clone(),
         snapshot: row.snapshot.clone(),
+        invalid_provider: row.invalid_provider.clone(),
     };
     connect_menu_edit(&edit, &row.row_box, popup, popup_content, &popout, active);
     {
@@ -379,7 +492,10 @@ pub(crate) fn provider_nix_for_label(label: &str) -> Option<String> {
     (!value.is_empty()).then(|| format!("provider = {};", string_literal(value)))
 }
 
-fn provider_field_nix(field: &AttrsetField) -> Option<String> {
+fn provider_field_nix(field: &AttrsetField, invalid: &Option<String>) -> Option<String> {
+    if let Some(value) = invalid {
+        return Some(format!("provider = {};", string_literal(value)));
+    }
     match &field.editor {
         Editor::Dropdown { combo, choices } => {
             let label = choices.get(combo.selected() as usize)?;
@@ -424,9 +540,10 @@ pub(crate) fn menu_rows_nix(rows: &[MenuRow]) -> String {
             if let Some(line) = menu_aliases_nix(&row.aliases.text()) {
                 fields.push(line);
             }
+            let invalid_provider = row.invalid_provider.borrow().clone();
             for field in row.popup_fields.borrow().iter() {
                 let line = if field.name == "provider" {
-                    provider_field_nix(field)
+                    provider_field_nix(field, &invalid_provider)
                 } else {
                     attrset_field_nix(field)
                 };
@@ -450,8 +567,11 @@ pub(crate) fn menu_rows_unchanged(rows: &Rc<RefCell<Vec<MenuRow>>>) -> bool {
         full == row.orig_key
             && row.label.text() == row.orig_label
             && row.aliases.text() == row.orig_aliases
+            && *row.invalid_provider.borrow() == row.orig_invalid_provider
             && row.popup_fields.borrow().iter().all(|f| {
-                if f.name == "provider" {
+                if f.name == "provider" && row.invalid_provider.borrow().is_some() {
+                    true
+                } else if f.name == "provider" {
                     provider_field_unchanged(f)
                 } else {
                     f.editor.unchanged(&f.orig_value)
@@ -478,6 +598,7 @@ pub(crate) fn attach_menu_row(
     row: MenuRow,
     on_change: &ChangeHook,
     popup_content: &gtk::Box,
+    refresh_add_targets: Option<&MenuRefresh>,
 ) {
     {
         let container = container.clone();
@@ -488,6 +609,7 @@ pub(crate) fn attach_menu_row(
         let popup_content = popup_content.clone();
         let snapshot = row.snapshot.clone();
         let on_change = on_change.clone();
+        let refresh_add_targets = refresh_add_targets.cloned();
         row.remove.connect_clicked(move |_| {
             container.remove(&row_box);
             if popup_box.parent() == Some(popup_content.clone().upcast::<gtk::Widget>()) {
@@ -495,6 +617,12 @@ pub(crate) fn attach_menu_row(
             }
             snapshot.borrow_mut().take();
             rows.borrow_mut().retain(|r| r.key != key);
+            if let Some(refresh) = refresh_add_targets
+                .as_ref()
+                .and_then(|refresh| refresh.borrow().clone())
+            {
+                refresh();
+            }
             if let Some(cb) = on_change.borrow().as_ref() {
                 cb();
             }
@@ -508,6 +636,7 @@ pub(crate) fn build_menu(record: &Record, ctx: &BuildContext) -> Editor {
     let root = gtk::Box::new(gtk::Orientation::Vertical, 12);
     root.set_hexpand(true);
     let rows = Rc::new(RefCell::new(Vec::new()));
+    let refresh_add_targets: MenuRefresh = Rc::new(RefCell::new(None));
     let active: Rc<RefCell<Option<MenuPopout>>> = Rc::new(RefCell::new(None));
 
     let popup = gtk::Window::builder()
@@ -580,19 +709,23 @@ pub(crate) fn build_menu(record: &Record, ctx: &BuildContext) -> Editor {
             ctx,
             &popup,
             &popup_content,
+            &rows,
+            &refresh_add_targets,
             &active,
         );
-        attach_menu_row(&container, &rows, row, &on_change, &popup_content);
+        attach_menu_row(
+            &container,
+            &rows,
+            row,
+            &on_change,
+            &popup_content,
+            Some(&refresh_add_targets),
+        );
     }
 
     let add_box = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    let names: Vec<String> = sections
-        .borrow()
-        .iter()
-        .map(|(name, _)| widget_display_name(name))
-        .collect();
-    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
-    let parent_menu = gtk::DropDown::from_strings(&refs);
+    let add_targets: Rc<RefCell<Vec<(String, gtk::Box)>>> = Rc::new(RefCell::new(Vec::new()));
+    let parent_menu = gtk::DropDown::from_strings(&[]);
     let child = gtk::Entry::new();
     child.set_placeholder_text(Some("child-id"));
     child.set_width_chars(14);
@@ -620,11 +753,33 @@ pub(crate) fn build_menu(record: &Record, ctx: &BuildContext) -> Editor {
     root.append(&add_box);
     root.append(&section_box);
     {
+        let rows_refresh = rows.clone();
+        let sections_refresh = sections.clone();
+        let parent_refresh = parent_menu.clone();
+        let add_targets_refresh = add_targets.clone();
+        let add_button_refresh = add.clone();
+        *refresh_add_targets.borrow_mut() = Some(Rc::new(move || {
+            let targets = menu_add_targets(&rows_refresh.borrow(), &sections_refresh.borrow());
+            let names: Vec<String> = targets
+                .iter()
+                .map(|(name, _)| widget_display_name(name))
+                .collect();
+            let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+            parent_refresh.set_model(Some(&gtk::StringList::new(&refs)));
+            add_button_refresh.set_sensitive(!targets.is_empty());
+            *add_targets_refresh.borrow_mut() = targets;
+        }));
+        if let Some(refresh) = refresh_add_targets.borrow().as_ref() {
+            refresh();
+        }
+    }
+    {
         let child = child.clone();
         let new_label = new_label.clone();
         let parent_menu = parent_menu.clone();
-        let sections = sections.clone();
+        let add_targets = add_targets.clone();
         let rows = rows.clone();
+        let refresh_add_targets = refresh_add_targets.clone();
         let on_change = on_change.clone();
         let popup = popup.clone();
         let popup_content = popup_content.clone();
@@ -632,9 +787,12 @@ pub(crate) fn build_menu(record: &Record, ctx: &BuildContext) -> Editor {
         let active = active.clone();
         add.connect_clicked(move |_| {
             let idx = parent_menu.selected() as usize;
-            let Some((section, container)) = sections.borrow().get(idx).cloned() else {
+            let Some((section, container)) = add_targets.borrow().get(idx).cloned() else {
                 return;
             };
+            if !menu_section_allows_children(&rows.borrow(), &section) {
+                return;
+            }
             let fields = vec![
                 ("label".to_string(), string_literal(&new_label.text())),
                 ("icon".to_string(), String::new()),
@@ -646,6 +804,8 @@ pub(crate) fn build_menu(record: &Record, ctx: &BuildContext) -> Editor {
                 &ctx,
                 &popup,
                 &popup_content,
+                &rows,
+                &refresh_add_targets,
                 &active,
             );
             let hook: Rc<dyn Fn()> = {
@@ -657,7 +817,14 @@ pub(crate) fn build_menu(record: &Record, ctx: &BuildContext) -> Editor {
                 })
             };
             connect_menu_row(&row, &hook);
-            attach_menu_row(&container, &rows, row, &on_change, &popup_content);
+            attach_menu_row(
+                &container,
+                &rows,
+                row,
+                &on_change,
+                &popup_content,
+                Some(&refresh_add_targets),
+            );
             if let Some(cb) = on_change.borrow().as_ref() {
                 cb();
             }
@@ -669,9 +836,9 @@ pub(crate) fn build_menu(record: &Record, ctx: &BuildContext) -> Editor {
         let section_box = section_box.clone();
         let section_id = section_id.clone();
         let section_label = section_label.clone();
-        let parent_menu = parent_menu.clone();
         let sections = sections.clone();
         let rows = rows.clone();
+        let refresh_add_targets = refresh_add_targets.clone();
         let on_change = on_change.clone();
         let popup = popup.clone();
         let popup_content = popup_content.clone();
@@ -727,7 +894,17 @@ pub(crate) fn build_menu(record: &Record, ctx: &BuildContext) -> Editor {
                 ("label".to_string(), string_literal(&label_text)),
                 ("icon".to_string(), String::new()),
             ];
-            let row = make_menu_row(&id, "", &fields, &ctx, &popup, &popup_content, &active);
+            let row = make_menu_row(
+                &id,
+                "",
+                &fields,
+                &ctx,
+                &popup,
+                &popup_content,
+                &rows,
+                &refresh_add_targets,
+                &active,
+            );
             let hook: Rc<dyn Fn()> = {
                 let on_change = on_change.clone();
                 Rc::new(move || {
@@ -737,14 +914,17 @@ pub(crate) fn build_menu(record: &Record, ctx: &BuildContext) -> Editor {
                 })
             };
             connect_menu_row(&row, &hook);
-            attach_menu_row(&container, &rows, row, &on_change, &popup_content);
-            let names: Vec<String> = sections
-                .borrow()
-                .iter()
-                .map(|(name, _)| widget_display_name(name))
-                .collect();
-            let refs: Vec<&str> = names.iter().map(String::as_str).collect();
-            parent_menu.set_model(Some(&gtk::StringList::new(&refs)));
+            attach_menu_row(
+                &container,
+                &rows,
+                row,
+                &on_change,
+                &popup_content,
+                Some(&refresh_add_targets),
+            );
+            if let Some(refresh) = refresh_add_targets.borrow().as_ref() {
+                refresh();
+            }
             if let Some(cb) = on_change.borrow().as_ref() {
                 cb();
             }
@@ -788,6 +968,17 @@ mod tests {
             provider_nix_for_label("Apps List"),
             Some("provider = \"apps\";".to_string())
         );
+    }
+
+    #[test]
+    fn apps_sections_reject_children() {
+        let rows = vec![
+            ("apps".to_string(), "Apps List".to_string()),
+            ("tools".to_string(), "Run Command".to_string()),
+        ];
+        assert!(!provider_map_allows_children("apps", &rows));
+        assert!(provider_map_allows_children("tools", &rows));
+        assert!(provider_map_allows_children("new", &rows));
     }
 
     #[test]

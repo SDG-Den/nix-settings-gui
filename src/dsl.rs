@@ -417,6 +417,9 @@ pub struct OptionSpec {
     /// Directory holding wallpaper images, relative to the file containing the
     /// option. Defaults to `./wallpapers`.
     pub wallpaper_dir: Option<String>,
+    /// Directory holding icons for `icon` table columns, relative to the file
+    /// containing the option. Defaults to `./icons`.
+    pub icon_dir: Option<String>,
     /// Shell command that applies the option immediately, e.g. an IPC call.
     /// `%%val%%` in the command stands for the option's new value.
     pub apply_command: Option<String>,
@@ -456,6 +459,7 @@ impl OptionSpec {
             add_label: d.string("addLabel"),
             visible_when: parse_visibility(d),
             wallpaper_dir: d.string("wallpaperDir"),
+            icon_dir: d.string("iconDir"),
             apply_command: d.string("applyCommand"),
         }
     }
@@ -618,6 +622,16 @@ mod tests {
         let opt = OptionSpec::from_directives(&d);
         assert_eq!(opt.widget, Some(WidgetKind::Wallpaper));
         assert_eq!(opt.wallpaper_dir.as_deref(), Some("./wallpapers"));
+    }
+
+    #[test]
+    fn parses_icon_dir() {
+        let text =
+            "/* @option widget = \"table-attrset\"; columnTypes = [ \"icon\" ]; iconDir = \"./icons\"; */";
+        let (kind, d) = parse_comment(text).unwrap();
+        assert_eq!(kind, MarkerKind::Option);
+        let opt = OptionSpec::from_directives(&d);
+        assert_eq!(opt.icon_dir.as_deref(), Some("./icons"));
     }
 
     #[test]

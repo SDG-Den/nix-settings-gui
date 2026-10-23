@@ -2,6 +2,7 @@ use super::basic::build_raw;
 use super::context::{BuildContext, ChangeHook};
 use super::dispatch::build;
 use super::editor::Editor;
+use super::icon::{build_icon, icon_dir};
 use super::nix::{attr_key, entry_text, string_literal};
 use crate::dsl::{OptionSpec, WidgetKind};
 use crate::model::Record;
@@ -9,10 +10,39 @@ use crate::scan;
 use crate::value;
 use gtk::prelude::*;
 use std::cell::RefCell;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 #[cfg(test)]
 mod display_tests;
+
+/// The editor shape of one table column, from `columnTypes`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum ColumnKind {
+    Value(value::ValueKind),
+    Icon,
+}
+
+/// Paths a table cell needs to resolve files relative to its module.
+pub(crate) struct CellContext {
+    pub(crate) module_dir: PathBuf,
+    pub(crate) icon_dir: PathBuf,
+}
+
+impl CellContext {
+    fn new(record: &Record, ctx: &BuildContext) -> Self {
+        let module_dir = Path::new(&record.file)
+            .parent()
+            .map(super::nix::normalize_path)
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or_else(|| super::nix::normalize_path(Path::new(&ctx.base)));
+        let icon_dir = icon_dir(&record.spec, &module_dir);
+        Self {
+            module_dir,
+            icon_dir,
+        }
+    }
+}
 /// One cell of a table row: a keyed value with an inferred editor.
 #[derive(Clone)]
 pub(crate) struct TableCell {
@@ -67,6 +97,7 @@ pub(crate) fn build_table(record: &Record, ctx: &BuildContext, list: bool) -> Ed
         .enumerate()
         .map(|(index, column)| column_widens(first_row, column, type_hints[index]))
         .collect();
+    let cell_ctx = CellContext::new(record, ctx);
 
     // One grid for the whole table: each column sizes to the widest cell it
     // holds, so the header and every row share the same x positions.
@@ -113,6 +144,7 @@ pub(crate) fn build_table(record: &Record, ctx: &BuildContext, list: bool) -> Ed
             first_value_editable,
             &type_hints,
             &widens,
+            &cell_ctx,
             scan_row,
             ctx,
             None,
@@ -171,6 +203,7 @@ pub(crate) fn build_table(record: &Record, ctx: &BuildContext, list: bool) -> Ed
                 first_value_editable,
                 &type_hints,
                 &widens,
+                &cell_ctx,
                 &scan_row,
                 &ctx,
                 update.as_ref(),
@@ -276,8 +309,9 @@ pub(crate) fn make_table_row(
     list: bool,
     key_editable: bool,
     first_value_editable: bool,
-    type_hints: &[Option<value::ValueKind>],
+    type_hints: &[Option<ColumnKind>],
     widens: &[bool],
+    cell_ctx: &CellContext,
     scan_row: &scan::TableRowScan,
     ctx: &BuildContext,
     update: Option<&Rc<dyn Fn()>>,
@@ -334,7 +368,7 @@ pub(crate) fn make_table_row(
         cell_key.set_text(&field_key);
         cell_key.set_width_chars(10);
 
-        let editor = build_cell(&field_value, hint, ctx);
+        let editor = build_cell(&field_value, hint, ctx, cell_ctx);
         if key_editable {
             slots.push(cell_key.clone().upcast::<gtk::Widget>());
             slots.push(gtk::Label::new(Some("=")).upcast::<gtk::Widget>());
@@ -446,11 +480,12 @@ pub(crate) fn column_expands(first_row: Option<&scan::TableRowScan>, column: &st
 pub(crate) fn column_widens(
     first_row: Option<&scan::TableRowScan>,
     column: &str,
-    hint: Option<value::ValueKind>,
+    hint: Option<ColumnKind>,
 ) -> bool {
     match hint {
         None => column_expands(first_row, column),
-        Some(hint) => matches!(
+        Some(ColumnKind::Icon) => true,
+        Some(ColumnKind::Value(hint)) => matches!(
             cell_widget_kind(column_sample(first_row, column), Some(hint)),
             WidgetKind::Text
         ),
@@ -474,11 +509,11 @@ pub(crate) fn cell_widget_kind(value: &str, hint: Option<value::ValueKind>) -> W
 
 /// The scaffold value written for a freshly added cell, so the row opens with
 /// the right editor and serialises a sane default when saved untouched.
-pub(crate) fn empty_cell_literal(hint: Option<value::ValueKind>) -> String {
+pub(crate) fn empty_cell_literal(hint: Option<ColumnKind>) -> String {
     match hint {
-        Some(value::ValueKind::Bool) => "false",
-        Some(value::ValueKind::Int | value::ValueKind::Float) => "0",
-        Some(value::ValueKind::String) => "\"\"",
+        Some(ColumnKind::Value(value::ValueKind::Bool)) => "false",
+        Some(ColumnKind::Value(value::ValueKind::Int | value::ValueKind::Float)) => "0",
+        Some(ColumnKind::Value(value::ValueKind::String)) => "\"\"",
         _ => "null",
     }
     .to_string()
@@ -486,12 +521,13 @@ pub(crate) fn empty_cell_literal(hint: Option<value::ValueKind>) -> String {
 
 /// One `columnTypes` token, matched case-insensitively. Anything unrecognised
 /// yields no hint.
-pub(crate) fn column_type_hint(token: &str) -> Option<value::ValueKind> {
+pub(crate) fn column_type_hint(token: &str) -> Option<ColumnKind> {
     match token.trim().to_ascii_lowercase().as_str() {
-        "bool" | "boolean" => Some(value::ValueKind::Bool),
-        "int" | "integer" => Some(value::ValueKind::Int),
-        "float" => Some(value::ValueKind::Float),
-        "str" | "string" | "raw" => Some(value::ValueKind::String),
+        "bool" | "boolean" => Some(ColumnKind::Value(value::ValueKind::Bool)),
+        "int" | "integer" => Some(ColumnKind::Value(value::ValueKind::Int)),
+        "float" => Some(ColumnKind::Value(value::ValueKind::Float)),
+        "str" | "string" | "raw" => Some(ColumnKind::Value(value::ValueKind::String)),
+        "icon" | "image" => Some(ColumnKind::Icon),
         _ => None,
     }
 }
@@ -503,7 +539,7 @@ pub(crate) fn column_type_hints(
     column_types: Option<&[String]>,
     columns: &[String],
     first_row: Option<&scan::TableRowScan>,
-) -> Vec<Option<value::ValueKind>> {
+) -> Vec<Option<ColumnKind>> {
     match column_types {
         Some(types) => (0..columns.len())
             .map(|index| types.get(index).and_then(|token| column_type_hint(token)))
@@ -515,7 +551,7 @@ pub(crate) fn column_type_hints(
                     kind @ (value::ValueKind::Bool
                     | value::ValueKind::Int
                     | value::ValueKind::Float
-                    | value::ValueKind::String) => Some(kind),
+                    | value::ValueKind::String) => Some(ColumnKind::Value(kind)),
                     _ => None,
                 },
             )
@@ -527,10 +563,20 @@ pub(crate) fn column_type_hints(
 /// for a number, a text field otherwise.
 pub(crate) fn build_cell(
     value: &str,
-    hint: Option<value::ValueKind>,
+    hint: Option<ColumnKind>,
     ctx: &BuildContext,
+    cell: &CellContext,
 ) -> Editor {
-    let kind = cell_widget_kind(value, hint);
+    if hint == Some(ColumnKind::Icon) {
+        return build_icon(value, &cell.module_dir, &cell.icon_dir, ctx);
+    }
+    let kind = cell_widget_kind(
+        value,
+        hint.and_then(|hint| match hint {
+            ColumnKind::Value(kind) => Some(kind),
+            ColumnKind::Icon => None,
+        }),
+    );
     let spec = OptionSpec {
         widget: Some(kind),
         ..OptionSpec::default()
@@ -688,37 +734,65 @@ mod tests {
         );
     }
 
+    fn value_hint(kind: value::ValueKind) -> Option<ColumnKind> {
+        Some(ColumnKind::Value(kind))
+    }
+
     #[test]
     fn empty_cell_literals_follow_the_column_hint() {
         assert_eq!(
-            empty_cell_literal(Some(value::ValueKind::Bool)),
+            empty_cell_literal(value_hint(value::ValueKind::Bool)),
             "false".to_string()
         );
         assert_eq!(
-            empty_cell_literal(Some(value::ValueKind::Int)),
+            empty_cell_literal(value_hint(value::ValueKind::Int)),
             "0".to_string()
         );
         assert_eq!(
-            empty_cell_literal(Some(value::ValueKind::Float)),
+            empty_cell_literal(value_hint(value::ValueKind::Float)),
             "0".to_string()
         );
         assert_eq!(
-            empty_cell_literal(Some(value::ValueKind::String)),
+            empty_cell_literal(value_hint(value::ValueKind::String)),
             "\"\"".to_string()
+        );
+        assert_eq!(
+            empty_cell_literal(Some(ColumnKind::Icon)),
+            "null".to_string()
         );
         assert_eq!(empty_cell_literal(None), "null".to_string());
     }
 
     #[test]
     fn column_type_tokens_map_to_value_kinds() {
-        assert_eq!(column_type_hint("bool"), Some(value::ValueKind::Bool));
-        assert_eq!(column_type_hint("Boolean"), Some(value::ValueKind::Bool));
-        assert_eq!(column_type_hint("int"), Some(value::ValueKind::Int));
-        assert_eq!(column_type_hint("INTEGER"), Some(value::ValueKind::Int));
-        assert_eq!(column_type_hint("float"), Some(value::ValueKind::Float));
-        assert_eq!(column_type_hint("str"), Some(value::ValueKind::String));
-        assert_eq!(column_type_hint("string"), Some(value::ValueKind::String));
-        assert_eq!(column_type_hint("raw"), Some(value::ValueKind::String));
+        assert_eq!(column_type_hint("bool"), value_hint(value::ValueKind::Bool));
+        assert_eq!(
+            column_type_hint("Boolean"),
+            value_hint(value::ValueKind::Bool)
+        );
+        assert_eq!(column_type_hint("int"), value_hint(value::ValueKind::Int));
+        assert_eq!(
+            column_type_hint("INTEGER"),
+            value_hint(value::ValueKind::Int)
+        );
+        assert_eq!(
+            column_type_hint("float"),
+            value_hint(value::ValueKind::Float)
+        );
+        assert_eq!(
+            column_type_hint("str"),
+            value_hint(value::ValueKind::String)
+        );
+        assert_eq!(
+            column_type_hint("string"),
+            value_hint(value::ValueKind::String)
+        );
+        assert_eq!(
+            column_type_hint("raw"),
+            value_hint(value::ValueKind::String)
+        );
+        assert_eq!(column_type_hint("icon"), Some(ColumnKind::Icon));
+        assert_eq!(column_type_hint("image"), Some(ColumnKind::Icon));
         assert_eq!(column_type_hint("nope"), None);
     }
 
@@ -728,12 +802,15 @@ mod tests {
         let declared = ["bool".to_string(), "str".to_string()];
         assert_eq!(
             column_type_hints(Some(&declared), &columns, None),
-            vec![Some(value::ValueKind::Bool), Some(value::ValueKind::String)]
+            vec![
+                value_hint(value::ValueKind::Bool),
+                value_hint(value::ValueKind::String)
+            ]
         );
         let short = ["bool".to_string()];
         assert_eq!(
             column_type_hints(Some(&short), &columns, None),
-            vec![Some(value::ValueKind::Bool), None]
+            vec![value_hint(value::ValueKind::Bool), None]
         );
         let row = scan::TableRowScan {
             key: "llm".into(),
@@ -745,7 +822,10 @@ mod tests {
         };
         assert_eq!(
             column_type_hints(None, &columns, Some(&row)),
-            vec![Some(value::ValueKind::Bool), Some(value::ValueKind::String)]
+            vec![
+                value_hint(value::ValueKind::Bool),
+                value_hint(value::ValueKind::String)
+            ]
         );
         assert_eq!(column_type_hints(None, &columns, None), vec![None, None]);
     }

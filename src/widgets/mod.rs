@@ -3,12 +3,14 @@ mod basic;
 mod context;
 mod details;
 mod dispatch;
+mod dms_catalog;
 mod editor;
 mod fields;
 mod grid;
 mod grid_details;
 mod grid_gestures;
 mod grid_layout;
+mod icon;
 mod keybinds;
 mod menu;
 mod module_list;
@@ -27,7 +29,8 @@ mod wallpaper;
 
 pub(crate) use basic::{build_entry, build_spin, build_switch};
 pub(crate) use context::{
-    ApplyHook, BuildContext, ChangeHook, PackageSearch, PluginRegistryHook, WallpaperActions,
+    ApplyHook, BuildContext, ChangeHook, IconActions, PackageSearch, PluginRegistryHook,
+    WallpaperActions,
 };
 pub(crate) use details::InfoDetails;
 pub(crate) use dispatch::{build, is_package};

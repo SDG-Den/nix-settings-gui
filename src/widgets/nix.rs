@@ -1,5 +1,6 @@
 use crate::dsl::WidgetKind;
 use crate::value;
+use std::path::{Component, Path, PathBuf};
 
 /// Quote a value as a double-quoted Nix string. Backslashes, quotes, and
 /// interpolation openers are escaped so the result never gains meaning.
@@ -298,6 +299,61 @@ pub fn literal_for_widget(widget: WidgetKind, value: &str) -> String {
         | WidgetKind::GridConfiguration => expr_literal(value),
     }
 }
+
+/// A path stays a bare path literal when it looks like one, else a string.
+pub(crate) fn nix_path_literal(value: &str) -> String {
+    if value.chars().any(char::is_whitespace) {
+        quote(value)
+    } else {
+        path_literal(value)
+    }
+}
+
+/// Resolve `.` and `..` components without touching the filesystem.
+pub(crate) fn normalize_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !normalized.pop() {
+                    normalized.push("..");
+                }
+            }
+            Component::RootDir | Component::Prefix(_) => normalized.push(component.as_os_str()),
+            Component::Normal(_) => normalized.push(component.as_os_str()),
+        }
+    }
+    normalized
+}
+
+/// Render `to` as a relative path from `from`, keeping the `./` prefix that
+/// Nix treats as relative to the containing file.
+pub(crate) fn relative_path(from: &Path, to: &Path) -> String {
+    let from = normalize_path(from);
+    let to = normalize_path(to);
+    let from_parts: Vec<Component> = from.components().collect();
+    let to_parts: Vec<Component> = to.components().collect();
+    let common = from_parts
+        .iter()
+        .zip(to_parts.iter())
+        .take_while(|(a, b)| a == b)
+        .count();
+    let mut relative = PathBuf::new();
+    for _ in common..from_parts.len() {
+        relative.push("..");
+    }
+    for part in &to_parts[common..] {
+        relative.push(part.as_os_str());
+    }
+    let text = relative.to_string_lossy().into_owned();
+    if text.starts_with("..") || Path::new(&text).is_absolute() {
+        text
+    } else {
+        format!("./{text}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

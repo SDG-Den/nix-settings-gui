@@ -273,6 +273,7 @@ pub(crate) fn make_keybind_row(scan_row: &scan::TableRowScan, ctx: &BuildContext
                 modifier: modifier.text().to_string(),
                 keys: keys.text().to_string(),
                 fields: values,
+                invalid_provider: None,
             });
             popup.set_default_size(440, -1);
             popup.present();

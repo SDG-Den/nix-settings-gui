@@ -114,6 +114,7 @@ pub(super) fn build_context(app: &Rc<App>) -> widgets::BuildContext {
     ctx.apply = Some(apply_hook(app));
     ctx.base = app.base.borrow().clone();
     ctx.wallpaper = Some(super::wallpaper::actions(app));
+    ctx.icon = Some(super::icon::actions(app));
     ctx.expand_details = app.config.borrow().expand_details_by_default;
     ctx
 }
@@ -144,8 +145,9 @@ fn plugin_registry_hook(app: &Rc<App>) -> widgets::PluginRegistryHook {
     let tx = app.tx.clone();
     let base = app.base.borrow().clone();
     Rc::new(move |done| {
-        if let Some(cached) = state.cache.borrow().as_ref() {
-            done(cached.clone());
+        let cached = state.cache.borrow().clone();
+        if let Some(cached) = cached {
+            done(Ok(cached));
             return;
         }
         state.pending.borrow_mut().push(done);
@@ -154,9 +156,10 @@ fn plugin_registry_hook(app: &Rc<App>) -> widgets::PluginRegistryHook {
         }
         let tx = tx.clone();
         let base = base.clone();
+        let epoch = state.epoch.get();
         std::thread::spawn(move || {
             let result = crate::metadata::dms_plugins(&base);
-            let _ = tx.send_blocking(Msg::PluginRegistry(result));
+            let _ = tx.send_blocking(Msg::PluginRegistry { epoch, result });
         });
     })
 }

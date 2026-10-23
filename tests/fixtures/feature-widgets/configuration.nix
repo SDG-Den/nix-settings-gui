@@ -75,8 +75,9 @@
 
   /* @option widget = "menu"; label = "Menu"; */
   features.menu = {
-    "apps" = { icon = "apps"; label = "Apps"; };
-    "apps.files" = { icon = "folder"; label = "Files"; };
+    "apps" = { icon = "apps"; label = "Apps"; provider = "apps"; };
+    "tools" = { icon = "build"; label = "Tools"; };
+    "tools.files" = { icon = "folder"; label = "Files"; };
   };
 
   /* @option widget = "plugins"; label = "Plugins"; */
@@ -91,11 +92,26 @@
     /* @option label = "Left widgets"; */
     leftWidgets = {
       workspaceSwitcher = { enabled = true; _order = 10; };
+      clock = { enabled = false; _order = 20; clockCompactMode = true; };
     };
     /* @option label = "Right widgets"; */
     rightWidgets = {
       systemTray = { enabled = true; _order = 10; };
+      customThing = { enabled = true; _order = 20; };
     };
+  };
+
+  /* @option widget = "grid-configuration"; label = "Control center"; gridColumns = 8; */
+  features.controlCenterWidgets = {
+    user = { enabled = true; _order = 10; col = 0; row = 0; w = 5; h = 1; };
+    settings = { enabled = true; _order = 20; col = 5; row = 0; w = 1; h = 1; small = true; };
+    disabledCard = { enabled = false; _order = 30; col = 6; row = 0; w = 1; h = 1; };
+  };
+
+  /* @option widget = "grid-configuration"; label = "Weather widgets"; gridColumns = 4; */
+  features.weatherWidgets = {
+    conditions = { col = 0; row = 0; w = 2; h = 2; tone = "primary"; };
+    hourly = { col = 2; row = 0; w = 2; h = 2; forecast = "chart"; };
   };
 
   /* @option widget = "dock"; label = "Dock"; */
@@ -105,6 +121,8 @@
     /* @option label = "Widgets"; */
     widgets = {
       dock_launcher = { enabled = true; _order = 10; };
+      appsDock = { enabled = false; _order = 20; };
+      customDockThing = { enabled = true; _order = 30; };
     };
   };
 }

@@ -1,6 +1,9 @@
 use super::context::{BuildContext, ChangeHook};
+use super::dms_catalog::GridSurface;
 use super::editor::Editor;
-use super::grid_details::{grid_refresh_adder, grid_refresh_details};
+use super::grid_details::{
+    grid_clear_all, grid_refresh_adder, grid_refresh_details, grid_reset_layout,
+};
 use super::grid_gestures::wire_grid_tile;
 use super::grid_layout::{
     grid_tile_fields_nix, repack, CellRect, TileInput, GRID_DEFAULT_ORDER, GRID_GAP, GRID_ROW_UNIT,
@@ -38,6 +41,7 @@ pub(crate) struct GridTile {
 /// The per-page shape of a grid control, derived from the record path.
 #[derive(Clone, Copy)]
 pub(crate) struct GridProfile {
+    pub(crate) surface: GridSurface,
     pub(crate) columns: i64,
     pub(crate) max_rows: i64,
     pub(crate) has_enabled: bool,
@@ -56,12 +60,20 @@ pub(crate) const CC_GRID_REGISTRY: &[&str] = &[
     "inputVolumeSlider",
     "wifi",
     "bluetooth",
+    "audioOutput",
+    "audioInput",
     "builtin_vpn",
+    "builtin_cups",
+    "builtin_tailscale",
+    "builtin_display_profiles",
     "diskUsage",
     "nightMode",
+    "darkMode",
+    "colorPicker",
     "doNotDisturb",
     "idleInhibitor",
     "runningApps",
+    "quickTiles",
     "plugin_dankKDEConnect",
 ];
 pub(crate) const DASH_GRID_REGISTRY: &[&str] = &[
@@ -71,16 +83,25 @@ pub(crate) const DASH_GRID_REGISTRY: &[&str] = &[
     "calendar",
     "media",
     "sysmon",
+    "cpu",
+    "memory",
     "network",
+    "disk",
+    "battery",
     "user",
+    "wellbeing",
 ];
 pub(crate) const WEATHER_GRID_REGISTRY: &[&str] = &[
     "conditions",
     "hourly",
+    "sun",
+    "moon",
     "humidity",
     "wind",
     "daily",
+    "pressure",
     "precipitation",
+    "visibility",
     "uv",
 ];
 
@@ -88,6 +109,7 @@ impl GridProfile {
     pub(crate) fn for_path(path: &str) -> Option<Self> {
         if path.contains("controlCenterWidgets") {
             Some(Self {
+                surface: GridSurface::ControlCenter,
                 columns: 8,
                 max_rows: 64,
                 has_enabled: true,
@@ -96,6 +118,7 @@ impl GridProfile {
             })
         } else if path.contains("dashCards") {
             Some(Self {
+                surface: GridSurface::Dashboard,
                 columns: 6,
                 max_rows: 64,
                 has_enabled: false,
@@ -104,6 +127,7 @@ impl GridProfile {
             })
         } else if path.contains("weather.widgets") {
             Some(Self {
+                surface: GridSurface::Weather,
                 columns: 4,
                 max_rows: 64,
                 has_enabled: false,
@@ -117,6 +141,7 @@ impl GridProfile {
 
     pub(crate) fn generic() -> Self {
         Self {
+            surface: GridSurface::Generic,
             columns: 6,
             max_rows: 64,
             has_enabled: false,
@@ -259,6 +284,36 @@ pub(crate) fn build_grid_configuration(record: &Record, ctx: &BuildContext) -> E
         programmatic: Rc::new(Cell::new(false)),
     });
 
+    {
+        let toolbar = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        let reset = gtk::Button::with_label("Reset sizes");
+        reset.set_tooltip_text(Some("Reset every card to its default size."));
+        let clear = gtk::Button::with_label("Clear all");
+        clear.add_css_class("destructive-action");
+        let armed = Rc::new(Cell::new(false));
+        {
+            let state = state.clone();
+            reset.connect_clicked(move |_| grid_reset_layout(&state));
+        }
+        {
+            let state = state.clone();
+            let armed = armed.clone();
+            let clear_button = clear.clone();
+            clear.connect_clicked(move |_| {
+                if armed.get() {
+                    grid_clear_all(&state);
+                    armed.set(false);
+                    clear_button.set_label("Clear all");
+                    return;
+                }
+                armed.set(true);
+                clear_button.set_label("Confirm clear");
+            });
+        }
+        toolbar.append(&reset);
+        toolbar.append(&clear);
+        root.insert_child_after(&toolbar, Some(&canvas));
+    }
     {
         let tiles = state.tiles.borrow();
         for tile in tiles.iter() {

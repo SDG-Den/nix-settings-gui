@@ -10,6 +10,73 @@ const OPTIONS_TO_JSON: &str = include_str!("nix/options-to-json.nix");
 /// with `nix eval` and returns the registry's plugin ids as JSON.
 const DMS_PLUGINS_TO_JSON: &str = include_str!("nix/dms-plugins-to-json.nix");
 
+/// Applies the registry extractor to its named arguments. The values arrive
+/// through the environment so no user path is interpolated into Nix source.
+const DMS_PLUGINS_APPLY: &str = r#"f: f {
+  flakePath = builtins.getEnv "NSG_FLAKE_PATH";
+  system = builtins.getEnv "NSG_SYSTEM";
+}"#;
+
+/// Applies the option extractor to its named arguments.
+const OPTIONS_APPLY: &str = r#"f: f {
+  flakePath = builtins.getEnv "NSG_FLAKE_PATH";
+  target = builtins.getEnv "NSG_TARGET";
+  path = builtins.fromJSON (builtins.getEnv "NSG_PATH_JSON");
+  detail = builtins.fromJSON (builtins.getEnv "NSG_DETAIL");
+  full = builtins.fromJSON (builtins.getEnv "NSG_FULL");
+}"#;
+
+/// The Nix system string for the machine the app runs on.
+fn host_system() -> String {
+    let arch = match std::env::consts::ARCH {
+        "x86" => "i686",
+        "arm" => "armv7l",
+        other => other,
+    };
+    let os = match std::env::consts::OS {
+        "macos" => "darwin",
+        other => other,
+    };
+    format!("{arch}-{os}")
+}
+
+/// Evaluate an embedded extractor with explicit arguments.
+///
+/// `--impure` is required because the extractor reads a local flake through
+/// `builtins.getFlake`. `--apply` calls the file's top-level function; recent
+/// Nix versions do not auto-call it from `--argstr`.
+fn eval_command(script: &std::path::Path, apply: &str, envs: &[(&str, &str)]) -> Command {
+    let mut command = Command::new("nix");
+    command.args([
+        "eval",
+        "--json",
+        "--impure",
+        "--extra-experimental-features",
+        "nix-command flakes",
+        "--file",
+    ]);
+    command.arg(script).arg("--apply").arg(apply);
+    for (name, value) in envs {
+        command.env(name, value);
+    }
+    command
+}
+
+fn eval_script(
+    script: &std::path::Path,
+    apply: &str,
+    envs: &[(&str, &str)],
+) -> Result<String, String> {
+    let output = eval_command(script, apply, envs)
+        .output()
+        .map_err(|e| format!("failed to run nix: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("nix eval failed: {}", stderr.trim()));
+    }
+    String::from_utf8(output.stdout).map_err(|e| format!("nix output was not utf8: {e}"))
+}
+
 /// A configuration target inside a flake.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Target {
@@ -140,27 +207,12 @@ struct PluginsPayload {
 pub fn dms_plugins(flake_path: &str) -> Result<Vec<RegistryPlugin>, String> {
     let path = std::env::temp_dir().join("nix-settings-gui-dms-plugins-to-json.nix");
     let _ = std::fs::write(&path, DMS_PLUGINS_TO_JSON);
-    let output = Command::new("nix")
-        .args([
-            "eval",
-            "--json",
-            "--extra-experimental-features",
-            "nix-command flakes",
-            "--file",
-        ])
-        .arg(&path)
-        .arg("--argstr")
-        .arg("flakePath")
-        .arg(flake_path)
-        .output()
-        .map_err(|e| format!("failed to run nix: {e}"))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("nix eval failed: {}", stderr.trim()));
-    }
-    let json =
-        String::from_utf8(output.stdout).map_err(|e| format!("nix output was not utf8: {e}"))?;
+    let system = host_system();
+    let json = eval_script(
+        &path,
+        DMS_PLUGINS_APPLY,
+        &[("NSG_FLAKE_PATH", flake_path), ("NSG_SYSTEM", &system)],
+    )?;
     let payload: PluginsPayload =
         serde_json::from_str(&json).map_err(|e| format!("cannot parse nix output: {e}"))?;
     Ok(payload.plugins)
@@ -175,38 +227,19 @@ fn run(
 ) -> Result<String, String> {
     let script = script_path();
     let path_json = serde_json::to_string(path).map_err(|e| format!("cannot encode path: {e}"))?;
-    let output = Command::new("nix")
-        .args([
-            "eval",
-            "--json",
-            "--extra-experimental-features",
-            "nix-command flakes",
-            "--file",
-        ])
-        .arg(&script)
-        .arg("--argstr")
-        .arg("flakePath")
-        .arg(flake_path)
-        .arg("--argstr")
-        .arg("target")
-        .arg(target)
-        .arg("--arg")
-        .arg("path")
-        .arg(path_json)
-        .arg("--arg")
-        .arg("detail")
-        .arg(if detail { "true" } else { "false" })
-        .arg("--arg")
-        .arg("full")
-        .arg(if full { "true" } else { "false" })
-        .output()
-        .map_err(|e| format!("failed to run nix: {e}"))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("nix eval failed: {}", stderr.trim()));
-    }
-    String::from_utf8(output.stdout).map_err(|e| format!("nix output was not utf8: {e}"))
+    let detail_json = if detail { "true" } else { "false" };
+    let full_json = if full { "true" } else { "false" };
+    eval_script(
+        &script,
+        OPTIONS_APPLY,
+        &[
+            ("NSG_FLAKE_PATH", flake_path),
+            ("NSG_TARGET", target),
+            ("NSG_PATH_JSON", &path_json),
+            ("NSG_DETAIL", detail_json),
+            ("NSG_FULL", full_json),
+        ],
+    )
 }
 
 /// List the configurations a flake exposes.
@@ -271,6 +304,56 @@ fn find_default(options: &[ChildOption], name: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn registry_command_is_impure_and_applies_the_extractor() {
+        let command = eval_command(
+            std::path::Path::new("/tmp/dms.nix"),
+            DMS_PLUGINS_APPLY,
+            &[("NSG_FLAKE_PATH", "/repo"), ("NSG_SYSTEM", "x86_64-linux")],
+        );
+        let args: Vec<String> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert!(args.iter().any(|arg| arg == "--impure"));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair[0] == "--apply" && pair[1] == DMS_PLUGINS_APPLY));
+        let envs: Vec<(String, Option<String>)> = command
+            .get_envs()
+            .map(|(name, value)| {
+                (
+                    name.to_string_lossy().into_owned(),
+                    value.map(|value| value.to_string_lossy().into_owned()),
+                )
+            })
+            .collect();
+        assert!(envs.contains(&("NSG_FLAKE_PATH".to_string(), Some("/repo".to_string()))));
+        assert!(envs.contains(&("NSG_SYSTEM".to_string(), Some("x86_64-linux".to_string()))));
+    }
+
+    #[test]
+    fn host_system_is_a_nix_triple() {
+        let system = host_system();
+        assert!(system.contains('-'), "{system}");
+    }
+
+    #[test]
+    #[ignore = "needs a sibling ojuny-template checkout and Nix evaluation"]
+    fn loads_registry_from_sibling_template() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../ojuny-template");
+        if !path.join("flake.nix").exists() {
+            return;
+        }
+        let plugins =
+            dms_plugins(&path.to_string_lossy()).expect("the template registry should load");
+        assert!(
+            plugins.len() > 100,
+            "registry had {} plugins",
+            plugins.len()
+        );
+    }
 
     #[test]
     fn parses_targets() {

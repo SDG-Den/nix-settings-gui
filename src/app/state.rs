@@ -23,7 +23,10 @@ pub(super) enum Msg {
     SnippetInserted(Result<(), String>),
     Infos(String, Vec<(String, OptionInfo)>),
     Suggestions(Vec<String>),
-    PluginRegistry(Result<Vec<crate::metadata::RegistryPlugin>, String>),
+    PluginRegistry {
+        epoch: u64,
+        result: Result<Vec<crate::metadata::RegistryPlugin>, String>,
+    },
     Invalid(Vec<String>),
     GitPulled(Result<bool, String>),
     GitSynced(Result<String, String>),
@@ -143,8 +146,29 @@ impl PackageService {
 /// `pending` holds picker callbacks waiting on an in-flight fetch.
 pub(super) struct PluginRegistryState {
     pub(super) cache: RefCell<Option<Vec<crate::metadata::RegistryPlugin>>>,
-    pub(super) pending: RefCell<Vec<Box<dyn FnOnce(Vec<crate::metadata::RegistryPlugin>)>>>,
+    pub(super) pending:
+        RefCell<Vec<Box<dyn FnOnce(Result<Vec<crate::metadata::RegistryPlugin>, String>)>>>,
     pub(super) loading: Cell<bool>,
+    pub(super) epoch: Cell<u64>,
+}
+
+impl PluginRegistryState {
+    pub(super) fn new() -> Self {
+        Self {
+            cache: RefCell::new(None),
+            pending: RefCell::new(Vec::new()),
+            loading: Cell::new(false),
+            epoch: Cell::new(0),
+        }
+    }
+
+    /// Drop cached data and ignore any in-flight fetch from the previous flake.
+    pub(super) fn reset(&self) {
+        self.epoch.set(self.epoch.get() + 1);
+        *self.cache.borrow_mut() = None;
+        self.pending.borrow_mut().clear();
+        self.loading.set(false);
+    }
 }
 
 pub(super) struct App {
@@ -186,4 +210,19 @@ pub(super) struct App {
     pub(super) manual_host: Cell<bool>,
     pub(super) pending_rebuild: Cell<bool>,
     pub(super) watchers: RefCell<Vec<gio::FileMonitor>>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reset_discards_cached_registry_and_bumps_epoch() {
+        let state = PluginRegistryState::new();
+        let epoch = state.epoch.get();
+        *state.cache.borrow_mut() = Some(Vec::new());
+        state.reset();
+        assert!(state.cache.borrow().is_none());
+        assert_eq!(state.epoch.get(), epoch + 1);
+    }
 }

@@ -11,6 +11,7 @@ use crate::scan;
 /// assignment and emission are unit-testable without a display.
 pub(crate) struct TileEmit {
     pub(crate) id: String,
+    pub(crate) enabled: bool,
     pub(crate) field_lines: Vec<String>,
     pub(crate) orig_order: Option<i64>,
 }
@@ -54,6 +55,7 @@ pub(crate) fn tile_emit_from_scan(row: &scan::TableRowScan) -> Option<TileEmit> 
     }
     Some(TileEmit {
         id: row.key.clone(),
+        enabled: true,
         field_lines,
         orig_order,
     })
@@ -68,14 +70,14 @@ pub(crate) fn tile_emit_from_tile(tile: &WidgetTile) -> TileEmit {
         .collect();
     TileEmit {
         id: tile.id.clone(),
+        enabled: tile.enabled.get(),
         field_lines,
         orig_order: tile.orig_order.trim().parse::<i64>().ok(),
     }
 }
 
-/// Emit the attrset form of a widget list: `{ id = { enabled = true; _order = ...; ... }; ... }`.
-/// `enabled` is always `true`; the backend requires the key and the presence model never emits
-/// `false`.
+/// Emit the attrset form of a widget list: `{ id = { enabled = ...; _order = ...; ... }; ... }`.
+/// Disabled widgets stay in the configuration so they can be re-enabled later.
 pub(crate) fn tiles_nix(entries: &[TileEmit]) -> String {
     let orders = assign_tile_orders(
         &entries
@@ -87,7 +89,11 @@ pub(crate) fn tiles_nix(entries: &[TileEmit]) -> String {
         .iter()
         .zip(orders.iter())
         .map(|(entry, order)| {
-            let mut body = format!("enabled = true; _order = {};", order);
+            let mut body = format!(
+                "enabled = {}; _order = {};",
+                if entry.enabled { "true" } else { "false" },
+                order
+            );
             for line in &entry.field_lines {
                 body.push(' ');
                 body.push_str(line);
@@ -140,6 +146,8 @@ pub(crate) fn tiles_unchanged(list: &WidgetTileList) -> bool {
             .all(|(tile, orig_id)| {
                 tile.orig_id == *orig_id
                     && tile.id == tile.orig_id
+                    && tile.orig_section == tile.section
+                    && tile.enabled.get() == tile.orig_enabled
                     && tile
                         .fields
                         .borrow()
@@ -207,6 +215,28 @@ mod tests {
     }
 
     #[test]
+    fn tiles_nix_preserves_disabled_entries() {
+        let entries = vec![
+            TileEmit {
+                id: "clock".to_string(),
+                enabled: false,
+                field_lines: vec!["compact = true;".to_string()],
+                orig_order: Some(10),
+            },
+            TileEmit {
+                id: "weather".to_string(),
+                enabled: true,
+                field_lines: Vec::new(),
+                orig_order: Some(20),
+            },
+        ];
+        assert_eq!(
+            tiles_nix(&entries),
+            "{ clock = { enabled = false; _order = 10; compact = true; }; weather = { enabled = true; _order = 20; }; }"
+        );
+    }
+
+    #[test]
     fn center_tiles_nix_round_trips_string_list() {
         let source = r#"[ "music" "clock" "weather" ]"#;
         let ids = parse_string_list(source);
@@ -230,6 +260,7 @@ mod tests {
         assert_eq!(entries.len(), 1, "enabled = false entries never load");
         entries.push(TileEmit {
             id: "myThing".to_string(),
+            enabled: true,
             field_lines: vec!["foo = \"bar\";".to_string()],
             orig_order: None,
         });

@@ -12,7 +12,9 @@ mod apply;
 mod controls;
 mod dialogs;
 mod enrich;
+mod files;
 mod git;
+mod icon;
 pub(crate) mod menu;
 mod pump;
 mod save;
@@ -263,11 +265,7 @@ fn build_ui(app: &adw::Application, tx: &Tx) -> Rc<App> {
         apply_spinner,
         progress,
         package_service: PackageService::new(),
-        plugin_registry: Rc::new(PluginRegistryState {
-            cache: RefCell::new(None),
-            pending: RefCell::new(Vec::new()),
-            loading: Cell::new(false),
-        }),
+        plugin_registry: Rc::new(PluginRegistryState::new()),
         apply_state: ApplyState::new(),
         tx: tx.clone(),
         config: RefCell::new(AppConfig::load()),

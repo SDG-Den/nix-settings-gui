@@ -176,13 +176,24 @@ pub(super) fn handle_msg(app: &Rc<App>, tx: &Tx, msg: Msg) {
         }
         Msg::Infos(file, infos) => apply_infos(app, &file, &infos),
         Msg::Suggestions(suggestions) => fill_suggestions(app, suggestions),
-        Msg::PluginRegistry(result) => {
-            let plugins = result.unwrap_or_default();
-            *app.plugin_registry.cache.borrow_mut() = Some(plugins.clone());
+        Msg::PluginRegistry { epoch, result } => {
+            if epoch != app.plugin_registry.epoch.get() {
+                return;
+            }
             app.plugin_registry.loading.set(false);
             let pending: Vec<_> = app.plugin_registry.pending.borrow_mut().drain(..).collect();
-            for callback in pending {
-                callback(plugins.clone());
+            match result {
+                Ok(plugins) => {
+                    *app.plugin_registry.cache.borrow_mut() = Some(plugins.clone());
+                    for callback in pending {
+                        callback(Ok(plugins.clone()));
+                    }
+                }
+                Err(error) => {
+                    for callback in pending {
+                        callback(Err(error.clone()));
+                    }
+                }
             }
         }
         Msg::GitPulled(Ok(true)) => commit_message_dialog(app, tx),
