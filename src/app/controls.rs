@@ -12,9 +12,10 @@ use crate::widgets::{self, Editor};
 use super::state::{App, ControlRow, MenuPage, Msg};
 /// Bolt shown beside an option's label when its applyCommand runs on change.
 fn live_marker(record: &Record) -> gtk::Image {
-    let marker = gtk::Image::from_icon_name("thunderbolt");
+    let marker = gtk::Image::from_icon_name("bolt-symbolic");
     marker.set_pixel_size(16);
     marker.set_valign(gtk::Align::Center);
+    marker.add_css_class("accent");
     if let Some(command) = record.spec.apply_command.as_deref() {
         marker.set_tooltip_text(Some(&format!("Applies immediately: {command}")));
     }
@@ -170,7 +171,6 @@ pub(super) fn build_control_row(
     let name = gtk::Label::builder()
         .label(label_text)
         .xalign(0.0)
-        .hexpand(true)
         .wrap(true)
         .build();
     let live = live_marker(record);
@@ -186,6 +186,9 @@ pub(super) fn build_control_row(
     title.set_hexpand(true);
     title.append(&name);
     title.append(&live);
+    let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    spacer.set_hexpand(true);
+    title.append(&spacer);
     labels.append(&title);
 
     let desc = gtk::Label::builder()

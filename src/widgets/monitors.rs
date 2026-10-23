@@ -249,6 +249,14 @@ fn set_color(cr: &gtk::cairo::Context, color: &gtk::gdk::RGBA, alpha: f64) {
     );
 }
 
+fn monitor_flag(row: &MonitorRow, name: &str) -> bool {
+    row.extras
+        .iter()
+        .find(|field| field.name == name)
+        .map(|field| field.editor.to_nix() == "true")
+        .unwrap_or(false)
+}
+
 fn draw_monitor_label(
     cr: &gtk::cairo::Context,
     label: &str,
@@ -257,6 +265,7 @@ fn draw_monitor_label(
     pw: f64,
     ph: f64,
     color: &gtk::gdk::RGBA,
+    alpha: f64,
 ) {
     if label.is_empty() || pw <= 1.0 || ph <= 1.0 {
         return;
@@ -264,7 +273,7 @@ fn draw_monitor_label(
     cr.save().ok();
     cr.rectangle(px, py, pw, ph);
     cr.clip();
-    set_color(cr, color, 1.0);
+    set_color(cr, color, alpha);
     let font_size = 14.0;
     cr.set_font_size(font_size);
     if let Ok(extents) = cr.text_extents(label) {
@@ -483,8 +492,14 @@ impl MonitorCanvas {
 pub(crate) fn attach_monitor_row(
     form: &gtk::Box,
     rows: &Rc<RefCell<Vec<MonitorRow>>>,
+    mc: &MonitorCanvas,
     row: MonitorRow,
 ) -> usize {
+    let redraw: Rc<dyn Fn()> = {
+        let mc = mc.clone();
+        Rc::new(move || mc.redraw())
+    };
+    connect_monitor_row(&row, &redraw);
     form.append(&row.form_box);
     let index = rows.borrow().len();
     rows.borrow_mut().push(row);
@@ -542,7 +557,16 @@ pub(crate) fn build_monitors(record: &Record) -> Editor {
                 let (x, y, w, h, label, sized) = row_footprint(row);
                 let (px, py, pw, ph) = v.rect_on_screen(x, y, w, h);
                 let is_selected = index == selected.get();
-                if is_selected {
+                let disabled = monitor_flag(row, "disable");
+                let primary = monitor_flag(row, "primary");
+                let label = if primary { format!("* {label}") } else { label };
+                if disabled {
+                    if is_selected {
+                        set_color(cr, &palette.selected, 0.35);
+                    } else {
+                        set_color(cr, &palette.monitor, 0.35);
+                    }
+                } else if is_selected {
                     set_color(cr, &palette.selected, 1.0);
                 } else {
                     set_color(cr, &palette.monitor, 1.0);
@@ -550,21 +574,23 @@ pub(crate) fn build_monitors(record: &Record) -> Editor {
                 cr.rectangle(px, py, pw, ph);
                 cr.fill_preserve().ok();
                 if sized {
-                    set_color(cr, &palette.outline, 0.6);
+                    set_color(cr, &palette.outline, if disabled { 0.3 } else { 0.6 });
                     cr.set_line_width(1.0);
                 } else {
-                    set_color(cr, &palette.dashed, 1.0);
+                    set_color(cr, &palette.dashed, if disabled { 0.35 } else { 1.0 });
                     cr.set_line_width(2.0);
                     cr.set_dash(&[4.0, 4.0], 0.0);
                 }
                 cr.stroke().ok();
                 cr.set_dash(&[], 0.0);
-                let text_color = if is_selected {
-                    &palette.selected_text
+                let (text_color, text_alpha) = if disabled {
+                    (&palette.text, 0.45)
+                } else if is_selected {
+                    (&palette.selected_text, 1.0)
                 } else {
-                    &palette.text
+                    (&palette.text, 1.0)
                 };
-                draw_monitor_label(cr, &label, px, py, pw, ph, text_color);
+                draw_monitor_label(cr, &label, px, py, pw, ph, text_color, text_alpha);
             }
         }
     });
@@ -669,7 +695,7 @@ pub(crate) fn build_monitors(record: &Record) -> Editor {
     {
         let row = make_monitor_row(&scan_row, &ctx);
         row.form_box.set_visible(index == 0);
-        attach_monitor_row(&form, &rows, row);
+        attach_monitor_row(&form, &rows, &mc, row);
     }
 
     {
@@ -878,7 +904,7 @@ pub(crate) fn build_monitors(record: &Record) -> Editor {
             open_monitor_picker(&anchor, existing_names, rx, move |picked| {
                 let scan_row = monitor_scaffold(&rows.borrow(), picked.as_ref());
                 let row = make_monitor_row(&scan_row, &ctx);
-                let index = attach_monitor_row(&form, &rows, row);
+                let index = attach_monitor_row(&form, &rows, &mc, row);
                 selected.set(index);
                 for (position, item) in rows.borrow().iter().enumerate() {
                     item.form_box.set_visible(position == index);
