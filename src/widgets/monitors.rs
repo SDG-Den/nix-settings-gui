@@ -31,7 +31,6 @@ pub(crate) struct MonitorRow {
     pub(crate) extras: Vec<AttrsetField>,
     pub(crate) orig: Vec<(String, String)>,
     pub(crate) form_box: gtk::Box,
-    pub(crate) remove: gtk::Button,
 }
 pub(crate) const MONITOR_TRANSFORMS: &[(&str, &str)] = &[
     ("0", "No transform"),
@@ -185,9 +184,9 @@ pub(crate) fn attach_cell(
     grid.attach(widget, col + 1, row, 1, 1);
 }
 
-/// One monitor rule: core geometry on a grid, a read-only "Applies to
-/// (match)" block when make/model/serial are set, the remaining effect
-/// fields behind an "Extra rules" expander, and a remove button.
+/// One monitor rule: core geometry and the disable/primary toggles on a grid,
+/// a read-only "Applies to (match)" block when make/model/serial are set, and
+/// the remaining effect fields behind an "Advanced options" expander.
 pub(crate) fn make_monitor_row(scan_row: &scan::TableRowScan, ctx: &BuildContext) -> MonitorRow {
     let get = |name: &str| field(&scan_row.fields, name).unwrap_or("");
     let number_spin = |value: &str, default: f64, min: f64, max: f64, step: f64| {
@@ -228,6 +227,50 @@ pub(crate) fn make_monitor_row(scan_row: &scan::TableRowScan, ctx: &BuildContext
     attach_cell(&grid, 2, 2, "Y", &y);
     attach_cell(&grid, 3, 0, "Scale", &scale);
     attach_cell(&grid, 3, 2, "Transform", &rr.root());
+
+    let mut extras = Vec::new();
+    let expander = gtk::Expander::new(Some("Advanced options"));
+    let extra_grid = gtk::Grid::new();
+    extra_grid.set_column_spacing(12);
+    extra_grid.set_row_spacing(6);
+    let mut advanced_index = 0i32;
+    for (field_name, is_bool) in MONITOR_EXTRAS.iter().copied() {
+        let raw = get(field_name);
+        let source = if raw.is_empty() || raw == "null" {
+            if is_bool {
+                "false"
+            } else {
+                "0"
+            }
+        } else {
+            raw
+        };
+        let editor = build_field_cell(source, ctx);
+        let present = !raw.is_empty() && raw != "null";
+        if field_name == "disable" || field_name == "primary" {
+            let (column, caption) = if field_name == "disable" {
+                (0, "Disable")
+            } else {
+                (2, "Primary")
+            };
+            attach_cell(&grid, 4, column, caption, &editor.root());
+        } else {
+            let caption = gtk::Label::builder()
+                .xalign(1.0)
+                .label(field_name)
+                .css_classes(["dim-label", "caption"])
+                .build();
+            extra_grid.attach(&caption, 0, advanced_index, 1, 1);
+            extra_grid.attach(&editor.root(), 1, advanced_index, 1, 1);
+            advanced_index += 1;
+        }
+        extras.push(AttrsetField {
+            name: field_name.to_string(),
+            editor,
+            orig_value: source.to_string(),
+            orig_present: present,
+        });
+    }
     form_box.append(&grid);
 
     let mut match_rows = Vec::new();
@@ -259,46 +302,8 @@ pub(crate) fn make_monitor_row(scan_row: &scan::TableRowScan, ctx: &BuildContext
         form_box.append(&match_grid);
     }
 
-    let mut extras = Vec::new();
-    let expander = gtk::Expander::new(Some("Extra rules"));
-    let extra_grid = gtk::Grid::new();
-    extra_grid.set_column_spacing(12);
-    extra_grid.set_row_spacing(6);
-    for (index, (field_name, is_bool)) in MONITOR_EXTRAS.iter().enumerate() {
-        let raw = get(field_name);
-        let source = if raw.is_empty() || raw == "null" {
-            if *is_bool {
-                "false"
-            } else {
-                "0"
-            }
-        } else {
-            raw
-        };
-        let editor = build_field_cell(source, ctx);
-        let present = !raw.is_empty() && raw != "null";
-        let caption = gtk::Label::builder()
-            .xalign(1.0)
-            .label(*field_name)
-            .css_classes(["dim-label", "caption"])
-            .build();
-        let row_index = index as i32;
-        extra_grid.attach(&caption, 0, row_index, 1, 1);
-        extra_grid.attach(&editor.root(), 1, row_index, 1, 1);
-        extras.push(AttrsetField {
-            name: (*field_name).to_string(),
-            editor,
-            orig_value: source.to_string(),
-            orig_present: present,
-        });
-    }
     expander.set_child(Some(&extra_grid));
     form_box.append(&expander);
-
-    let remove = gtk::Button::with_label("Remove monitor");
-    remove.add_css_class("destructive-action");
-    remove.set_halign(gtk::Align::Start);
-    form_box.append(&remove);
 
     let orig = scan_row
         .fields
@@ -326,7 +331,6 @@ pub(crate) fn make_monitor_row(scan_row: &scan::TableRowScan, ctx: &BuildContext
         extras,
         orig,
         form_box,
-        remove,
     }
 }
 #[derive(Clone, Copy)]
@@ -376,25 +380,8 @@ impl MonitorCanvas {
 pub(crate) fn attach_monitor_row(
     form: &gtk::Box,
     rows: &Rc<RefCell<Vec<MonitorRow>>>,
-    on_change: &ChangeHook,
-    mc: &MonitorCanvas,
     row: MonitorRow,
 ) -> usize {
-    let row_box = row.form_box.clone();
-    {
-        let form = form.clone();
-        let rows = rows.clone();
-        let on_change = on_change.clone();
-        let mc = mc.clone();
-        row.remove.connect_clicked(move |_| {
-            form.remove(&row_box);
-            rows.borrow_mut().retain(|r| r.form_box != row_box);
-            if let Some(cb) = on_change.borrow().as_ref() {
-                cb();
-            }
-            mc.refit(&rows.borrow());
-        });
-    }
     form.append(&row.form_box);
     let index = rows.borrow().len();
     rows.borrow_mut().push(row);
@@ -525,14 +512,52 @@ pub(crate) fn build_monitors(record: &Record) -> Editor {
         canvas.add_controller(scroll);
     }
 
+    let actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    actions.set_halign(gtk::Align::Start);
     let recenter = gtk::Button::with_label("Re-center view");
-    recenter.set_halign(gtk::Align::Start);
-    root.append(&recenter);
+    let recenter_monitor = gtk::Button::with_label("Re-center monitor");
+    let remove = gtk::Button::with_label("Remove monitor");
+    remove.add_css_class("destructive-action");
+    let add = gtk::Button::with_label("Add monitor");
+    actions.append(&recenter);
+    actions.append(&recenter_monitor);
+    actions.append(&remove);
+    actions.append(&add);
+    root.append(&actions);
     {
         let mc_recenter = mc.clone();
         let rows = rows.clone();
         recenter.connect_clicked(move |_| {
             mc_recenter.refit(&rows.borrow());
+        });
+    }
+    {
+        let rows = rows.clone();
+        let selected = selected.clone();
+        let on_change = on_change.clone();
+        let mc = mc.clone();
+        recenter_monitor.connect_clicked(move |_| {
+            let rows = rows.borrow();
+            let Some(row) = rows.get(selected.get()) else {
+                return;
+            };
+            let (_, _, w, h, _, _) = row_footprint(row);
+            let others: Vec<(f64, f64, f64, f64)> = rows
+                .iter()
+                .filter(|other| !std::ptr::eq(*other, row))
+                .map(|other| {
+                    let (ox, oy, ow, oh, _, _) = row_footprint(other);
+                    (ox, oy, ow, oh)
+                })
+                .collect();
+            let (nx, ny) = resolve_release(0.0, 0.0, w, h, &others, SNAP_TOLERANCE);
+            row.x.set_value(nx.round());
+            row.y.set_value(ny.round());
+            drop(rows);
+            mc.redraw();
+            if let Some(cb) = on_change.borrow().as_ref() {
+                cb();
+            }
         });
     }
 
@@ -546,7 +571,7 @@ pub(crate) fn build_monitors(record: &Record) -> Editor {
     {
         let row = make_monitor_row(&scan_row, &ctx);
         row.form_box.set_visible(index == 0);
-        attach_monitor_row(&form, &rows, &on_change, &mc, row);
+        attach_monitor_row(&form, &rows, row);
     }
 
     {
@@ -703,8 +728,34 @@ pub(crate) fn build_monitors(record: &Record) -> Editor {
         canvas.add_controller(drag);
     }
 
-    let add = gtk::Button::with_label("Add monitor");
-    add.set_halign(gtk::Align::Start);
+    {
+        let form = form.clone();
+        let rows = rows.clone();
+        let selected = selected.clone();
+        let on_change = on_change.clone();
+        let mc = mc.clone();
+        remove.connect_clicked(move |_| {
+            let index = selected.get();
+            let removed = {
+                let mut rows = rows.borrow_mut();
+                if index >= rows.len() {
+                    return;
+                }
+                rows.remove(index)
+            };
+            form.remove(&removed.form_box);
+            let count = rows.borrow().len();
+            let next = if count == 0 { 0 } else { index.min(count - 1) };
+            selected.set(next);
+            for (position, item) in rows.borrow().iter().enumerate() {
+                item.form_box.set_visible(position == next);
+            }
+            mc.refit(&rows.borrow());
+            if let Some(cb) = on_change.borrow().as_ref() {
+                cb();
+            }
+        });
+    }
     {
         let form = form.clone();
         let rows = rows.clone();
@@ -732,7 +783,7 @@ pub(crate) fn build_monitors(record: &Record) -> Editor {
             open_monitor_picker(&anchor, existing_names, rx, move |picked| {
                 let scan_row = monitor_scaffold(&rows.borrow(), picked.as_ref());
                 let row = make_monitor_row(&scan_row, &ctx);
-                let index = attach_monitor_row(&form, &rows, &on_change, &mc, row);
+                let index = attach_monitor_row(&form, &rows, row);
                 selected.set(index);
                 for (position, item) in rows.borrow().iter().enumerate() {
                     item.form_box.set_visible(position == index);
@@ -744,7 +795,6 @@ pub(crate) fn build_monitors(record: &Record) -> Editor {
             });
         });
     }
-    root.append(&add);
 
     Editor::Monitors {
         root,

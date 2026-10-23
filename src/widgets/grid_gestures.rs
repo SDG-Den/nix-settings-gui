@@ -204,7 +204,10 @@ pub(crate) fn wire_grid_resize(
                 }
             }
             grid_repack(&st, Some(index), false);
-            grid_set_status(&st, "No room to grow here — the grid is full at the bottom.");
+            grid_set_status(
+                &st,
+                "No room to grow here — the grid is full at the bottom.",
+            );
         } else {
             grid_set_status(&st, "");
         }

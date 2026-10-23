@@ -314,7 +314,10 @@ mod tests {
 
     #[test]
     fn menu_provider_initial_picks_expected_choice() {
-        assert_eq!(menu_provider_initial("", "https://x", ""), "Open Application");
+        assert_eq!(
+            menu_provider_initial("", "https://x", ""),
+            "Open Application"
+        );
         assert_eq!(menu_provider_initial("", "", "echo hi"), "Run Command");
         assert_eq!(menu_provider_initial("apps", "", ""), "Apps List");
         assert_eq!(menu_provider_initial("future", "", ""), "future");

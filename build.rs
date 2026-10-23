@@ -15,7 +15,9 @@ fn main() {
     schemes.sort_by(|a, b| a.0.cmp(&b.0));
     schemes.dedup_by(|a, b| a.0 == b.0);
     match (&schemes_dir, schemes.is_empty()) {
-        (None, _) => println!("cargo:warning=TINTED_SCHEMES_DIR unset; theme page will be a text field"),
+        (None, _) => {
+            println!("cargo:warning=TINTED_SCHEMES_DIR unset; theme page will be a text field")
+        }
         (Some(d), true) => println!("cargo:warning={d} yielded no base16 schemes; check layout"),
         _ => {}
     }

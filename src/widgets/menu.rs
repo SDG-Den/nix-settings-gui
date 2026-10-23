@@ -141,10 +141,7 @@ pub(crate) fn menu_popup_fields(fields: &[AttrsetField], on_resize: Rc<dyn Fn()>
         advanced.connect_expanded_notify(move |_| on_resize());
     }
     vbox.append(&advanced);
-    PopoutLayout {
-        root: vbox,
-        blocks,
-    }
+    PopoutLayout { root: vbox, blocks }
 }
 
 /// The provider dropdown's currently selected label, or None when the field
@@ -154,9 +151,7 @@ fn provider_selected_label(fields: &[AttrsetField]) -> Option<String> {
         .iter()
         .find(|field| field.name == "provider")
         .and_then(|field| match &field.editor {
-            Editor::Dropdown { combo, choices } => {
-                choices.get(combo.selected() as usize).cloned()
-            }
+            Editor::Dropdown { combo, choices } => choices.get(combo.selected() as usize).cloned(),
             _ => None,
         })
 }
@@ -455,17 +450,13 @@ pub(crate) fn menu_rows_unchanged(rows: &Rc<RefCell<Vec<MenuRow>>>) -> bool {
         full == row.orig_key
             && row.label.text() == row.orig_label
             && row.aliases.text() == row.orig_aliases
-            && row
-                .popup_fields
-                .borrow()
-                .iter()
-                .all(|f| {
-                    if f.name == "provider" {
-                        provider_field_unchanged(f)
-                    } else {
-                        f.editor.unchanged(&f.orig_value)
-                    }
-                })
+            && row.popup_fields.borrow().iter().all(|f| {
+                if f.name == "provider" {
+                    provider_field_unchanged(f)
+                } else {
+                    f.editor.unchanged(&f.orig_value)
+                }
+            })
     })
 }
 
@@ -691,7 +682,11 @@ pub(crate) fn build_menu(record: &Record, ctx: &BuildContext) -> Editor {
             if id.is_empty() || id.contains('.') || id.contains('"') {
                 return;
             }
-            if rows.borrow().iter().any(|r| r.orig_key == id && r.key.text().is_empty()) {
+            if rows
+                .borrow()
+                .iter()
+                .any(|r| r.orig_key == id && r.key.text().is_empty())
+            {
                 return;
             }
             let existing = sections
@@ -732,15 +727,7 @@ pub(crate) fn build_menu(record: &Record, ctx: &BuildContext) -> Editor {
                 ("label".to_string(), string_literal(&label_text)),
                 ("icon".to_string(), String::new()),
             ];
-            let row = make_menu_row(
-                &id,
-                "",
-                &fields,
-                &ctx,
-                &popup,
-                &popup_content,
-                &active,
-            );
+            let row = make_menu_row(&id, "", &fields, &ctx, &popup, &popup_content, &active);
             let hook: Rc<dyn Fn()> = {
                 let on_change = on_change.clone();
                 Rc::new(move || {

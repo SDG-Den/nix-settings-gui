@@ -81,11 +81,7 @@ struct ThemeListRows {
     header_rows: Vec<(gtk::ListBoxRow, String)>,
 }
 
-fn build_theme_list(
-    list: &gtk::ListBox,
-    metas: &[SchemeMeta],
-    current: &str,
-) -> Rc<ThemeListRows> {
+fn build_theme_list(list: &gtk::ListBox, metas: &[SchemeMeta], current: &str) -> Rc<ThemeListRows> {
     let mut scheme_rows = Vec::with_capacity(metas.len());
     let mut header_rows = Vec::new();
     let mut last_category: Option<&str> = None;
@@ -217,6 +213,7 @@ pub(crate) fn build_theme(value_text: &str) -> Editor {
     let scrolled = gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)
         .min_content_height(160)
+        .vexpand(true)
         .child(&list)
         .build();
 
@@ -254,7 +251,9 @@ pub(crate) fn build_theme(value_text: &str) -> Editor {
             if name.is_empty() {
                 return;
             }
-            let Some(index) = schemes::SCHEMES.iter().position(|(scheme, _)| *scheme == name)
+            let Some(index) = schemes::SCHEMES
+                .iter()
+                .position(|(scheme, _)| *scheme == name)
             else {
                 return;
             };
@@ -284,10 +283,24 @@ const SAMPLE_CODE: &[&[(&str, usize)]] = &[
     &[("  stylix = {", 5)],
     &[("    enable = ", 5), ("true", 9), (";", 5)],
     &[("    opacity = ", 5), ("0.95", 9), (";", 5)],
-    &[("    base16Scheme = ", 5), ("\"catppuccin-mocha\"", 11), (";", 5)],
-    &[("    autoEnable = ", 5), ("mkForce", 13), (" ", 5), ("false", 9), (";", 5)],
+    &[
+        ("    base16Scheme = ", 5),
+        ("\"catppuccin-mocha\"", 11),
+        (";", 5),
+    ],
+    &[
+        ("    autoEnable = ", 5),
+        ("mkForce", 13),
+        (" ", 5),
+        ("false", 9),
+        (";", 5),
+    ],
     &[("  };", 5)],
-    &[("  home.packages = ", 5), ("with", 14), (" pkgs; [ vim git ];", 5)],
+    &[
+        ("  home.packages = ", 5),
+        ("with", 14),
+        (" pkgs; [ vim git ];", 5),
+    ],
     &[("}", 5)],
 ];
 
@@ -488,7 +501,9 @@ fn scheme_css(index: usize, palette: &[&str; 16]) -> String {
     let (c00, c01, c02, c03, c04, c05) = (
         palette[0], palette[1], palette[2], palette[3], palette[4], palette[5],
     );
-    css.push_str(&format!(".theme-raw.s{index} {{ background-color: {c01}; border: 1px solid {c02}; }}\n"));
+    css.push_str(&format!(
+        ".theme-raw.s{index} {{ background-color: {c01}; border: 1px solid {c02}; }}\n"
+    ));
     css.push_str(&format!(".theme-ui.s{index} {{ background-color: {c00}; color: {c05}; border: 1px solid {c02}; }}\n"));
     css.push_str(&format!(
         ".theme-ui.s{index} button {{ background-color: {c02}; background-image: none; box-shadow: none; color: {c05}; border-color: {c03}; }}\n"
@@ -508,14 +523,18 @@ fn scheme_css(index: usize, palette: &[&str; 16]) -> String {
     css.push_str(&format!(
         ".theme-ui.s{index} switch slider {{ background-color: {c05}; box-shadow: none; }}\n"
     ));
-    css.push_str(&format!(".theme-ui.s{index} list {{ background-color: {c01}; }}\n"));
+    css.push_str(&format!(
+        ".theme-ui.s{index} list {{ background-color: {c01}; }}\n"
+    ));
     css.push_str(&format!(
         ".theme-ui.s{index} list row {{ background-color: {c01}; color: {c05}; }}\n"
     ));
     css.push_str(&format!(
         ".theme-ui.s{index} list row:selected {{ background-color: {c02}; color: {c05}; }}\n"
     ));
-    css.push_str(&format!(".theme-ui.s{index} label.theme-ui-dim {{ color: {c04}; }}\n"));
+    css.push_str(&format!(
+        ".theme-ui.s{index} label.theme-ui-dim {{ color: {c04}; }}\n"
+    ));
     css.push_str(&format!(".theme-code.s{index} {{ background-color: {c00}; color: {c05}; border: 1px solid {c02}; }}\n"));
     css
 }
@@ -577,7 +596,10 @@ mod tests {
             split_variant("github-dark-high-contrast", &all),
             (Some("github-dark"), "high-contrast")
         );
-        assert_eq!(split_variant("github-light", &all), (Some("github"), "light"));
+        assert_eq!(
+            split_variant("github-light", &all),
+            (Some("github"), "light")
+        );
     }
 
     #[test]
@@ -597,8 +619,7 @@ mod tests {
         for meta in &metas {
             if let Some(category) = &meta.category {
                 assert!(
-                    meta.name == *category
-                        || meta.name.starts_with(&format!("{category}-")),
+                    meta.name == *category || meta.name.starts_with(&format!("{category}-")),
                     "{:?} is not inside its category {:?}",
                     meta.name,
                     category

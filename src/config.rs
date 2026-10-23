@@ -114,10 +114,7 @@ mod tests {
         assert_eq!(back.flake_path, config.flake_path);
         assert_eq!(back.terminal_command, config.terminal_command);
         assert_eq!(back.live_apply, config.live_apply);
-        assert_eq!(
-            back.reload_mango_on_rebuild,
-            config.reload_mango_on_rebuild
-        );
+        assert_eq!(back.reload_mango_on_rebuild, config.reload_mango_on_rebuild);
         assert_eq!(back.reload_dms_on_rebuild, config.reload_dms_on_rebuild);
     }
 }

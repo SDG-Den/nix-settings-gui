@@ -5,7 +5,10 @@ use rnix::ast::{Attr, AttrSet, AttrpathValue, Expr, HasEntry, InterpolPart, List
 use rnix::{NodeOrToken, SyntaxKind, SyntaxNode};
 use rowan::ast::AstNode;
 
-use crate::dsl::{self, InsertSpec, MarkerKind, MenuSpec, OptionSpec, PresetFieldSpec, SnippetSpec, WidgetPresetSpec};
+use crate::dsl::{
+    self, InsertSpec, MarkerKind, MenuSpec, OptionSpec, PresetFieldSpec, SnippetSpec,
+    WidgetPresetSpec,
+};
 use crate::model::{InsertMarker, MenuModel, Record};
 
 /// Everything the scanner learns from one file.
@@ -438,7 +441,8 @@ pub fn find_widget_presets(
             }
             continue;
         }
-        if let Some((MarkerKind::WidgetPresetField, directives)) = dsl::parse_comment(token.text()) {
+        if let Some((MarkerKind::WidgetPresetField, directives)) = dsl::parse_comment(token.text())
+        {
             let spec = PresetFieldSpec::from_directives(&directives);
             if !spec.preset.is_empty() && !spec.name.is_empty() {
                 fields.push(spec);

@@ -554,7 +554,10 @@ fn option_spec_to_comment(spec: &OptionSpec) -> String {
         parts.push("hidden = true;".to_string());
     }
     if let Some(visibility) = &spec.visible_when {
-        parts.push(format!("visibleWhen.path = {};", string_literal(&visibility.path)));
+        parts.push(format!(
+            "visibleWhen.path = {};",
+            string_literal(&visibility.path)
+        ));
         if let Some(equals) = &visibility.equals {
             parts.push(format!("visibleWhen.equals = {equals};"));
         }

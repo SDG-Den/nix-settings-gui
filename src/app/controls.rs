@@ -14,9 +14,7 @@ use super::state::{App, ControlRow, MenuPage, Msg};
 /// Bolt shown beside an option's label when its applyCommand runs on change.
 fn live_marker(record: &Record) -> gtk::Image {
     let icon = match gtk::gdk::Display::default() {
-        Some(display)
-            if gtk::IconTheme::for_display(&display).has_icon("flash-symbolic") =>
-        {
+        Some(display) if gtk::IconTheme::for_display(&display).has_icon("flash-symbolic") => {
             "flash-symbolic"
         }
         _ => "emblem-important-symbolic",
@@ -40,9 +38,9 @@ pub(super) fn refresh_live_markers(app: &Rc<App>) {
                 &*control.editor.borrow(),
                 Editor::Submodule { .. } | Editor::HorizontalSubmodule { .. }
             );
-            control.live.set_visible(
-                enabled && !container && control.record.spec.apply_command.is_some(),
-            );
+            control
+                .live
+                .set_visible(enabled && !container && control.record.spec.apply_command.is_some());
         }
     }
 }
@@ -188,7 +186,10 @@ pub(super) fn build_control_row(
     live.set_visible(
         app.config.borrow().live_apply
             && record.spec.apply_command.is_some()
-            && !matches!(&editor, Editor::Submodule { .. } | Editor::HorizontalSubmodule { .. }),
+            && !matches!(
+                &editor,
+                Editor::Submodule { .. } | Editor::HorizontalSubmodule { .. }
+            ),
     );
     let title = gtk::Box::new(gtk::Orientation::Horizontal, 4);
     title.set_hexpand(true);

@@ -78,7 +78,11 @@ const PLUGIN_REGISTRY_A: &[PluginSpec] = &[
     pspec(
         "dankKDEConnect",
         "KDE Connect",
-        &[pfield("settings.scanSubdirectories", "Scan subdirectories", Bool)],
+        &[pfield(
+            "settings.scanSubdirectories",
+            "Scan subdirectories",
+            Bool,
+        )],
     ),
     pspec(
         "nixMonitor",
@@ -179,11 +183,7 @@ fn plugin_field_help(path: &str) -> Option<&'static str> {
 }
 
 /// Every registry table, so lookup and iteration share one source of truth.
-const PLUGIN_TABLES: [&[PluginSpec]; 3] = [
-    PLUGIN_REGISTRY_A,
-    PLUGIN_REGISTRY_B,
-    PLUGIN_REGISTRY_C,
-];
+const PLUGIN_TABLES: [&[PluginSpec]; 3] = [PLUGIN_REGISTRY_A, PLUGIN_REGISTRY_B, PLUGIN_REGISTRY_C];
 
 /// The registry entry for a plugin id, if it is known.
 fn plugin_spec(id: &str) -> Option<&'static PluginSpec> {
@@ -194,8 +194,7 @@ fn plugin_spec(id: &str) -> Option<&'static PluginSpec> {
 
 /// The registry entry for one dotted setting path under a plugin.
 fn plugin_field(id: &str, path: &str) -> Option<&'static PluginFieldSpec> {
-    plugin_spec(id)
-        .and_then(|spec| spec.fields.iter().find(|field| field.path == path))
+    plugin_spec(id).and_then(|spec| spec.fields.iter().find(|field| field.path == path))
 }
 
 /// A heading from an identifier: split camel-case boundaries, turn snake case
@@ -276,13 +275,9 @@ impl Picker {
             .collect();
         let available = available_ids(&self.source.borrow(), &taken);
         let names = self.names.borrow();
-        let labels: Vec<String> = available
-            .iter()
-            .map(|id| label_for(&names, id))
-            .collect();
+        let labels: Vec<String> = available.iter().map(|id| label_for(&names, id)).collect();
         let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
-        self.dropdown
-            .set_model(Some(&gtk::StringList::new(&refs)));
+        self.dropdown.set_model(Some(&gtk::StringList::new(&refs)));
         self.add.set_sensitive(!available.is_empty());
         *self.available.borrow_mut() = available;
     }
@@ -378,7 +373,9 @@ pub fn build(record: &Record, ctx: &BuildContext) -> Editor {
 fn plugin_groups(record: &Record, ctx: &BuildContext) -> Vec<(String, Vec<Record>, bool)> {
     let mut groups: Vec<(String, Vec<Record>, bool)> = Vec::new();
     for child in scan_children(record, true) {
-        let Some(id) = child.segments.first().cloned() else { continue };
+        let Some(id) = child.segments.first().cloned() else {
+            continue;
+        };
         let visible = ctx.advanced || !child.spec.hidden;
         let leaves = if child.segments.len() > 1 {
             let mut leaf = child;
@@ -390,7 +387,10 @@ fn plugin_groups(record: &Record, ctx: &BuildContext) -> Vec<(String, Vec<Record
             Vec::new()
         };
         match groups.iter_mut().find(|(gid, _, _)| *gid == id) {
-            Some((_, existing, shown)) => { existing.extend(leaves); *shown &= visible; }
+            Some((_, existing, shown)) => {
+                existing.extend(leaves);
+                *shown &= visible;
+            }
             None => groups.push((id, leaves, visible)),
         }
     }
@@ -421,9 +421,17 @@ fn plugins_nix(rows: &[PluginRow]) -> String {
                 fields.push(format!("enable = {};", row.enable.to_nix()));
             }
             for (record, editor) in &row.children {
-                fields.push(format!("{} = {};", plugin_path_nix(record), editor.to_nix()));
+                fields.push(format!(
+                    "{} = {};",
+                    plugin_path_nix(record),
+                    editor.to_nix()
+                ));
             }
-            format!("{} = {{ {} }};", attr_key(&row.key.text()), fields.join(" "))
+            format!(
+                "{} = {{ {} }};",
+                attr_key(&row.key.text()),
+                fields.join(" ")
+            )
         })
         .collect();
     format!("{{ {} }}", parts.join(" "))
@@ -442,9 +450,15 @@ fn connect_plugin_row(row: &PluginRow, update: &Rc<dyn Fn()>) {
 /// (a registry default when the binding is absent), and whether the binding
 /// exists in configuration.
 fn plugin_enable(id: &str, leaves: &[Record]) -> (Editor, String, bool) {
-    let record = leaves.iter().find(|field| field.segments.as_slice() == ["enable"]);
+    let record = leaves
+        .iter()
+        .find(|field| field.segments.as_slice() == ["enable"]);
     let present = record.is_some();
-    let fallback = if plugin_spec(id).is_some() { "true" } else { "false" };
+    let fallback = if plugin_spec(id).is_some() {
+        "true"
+    } else {
+        "false"
+    };
     let original = record
         .map(|field| field.value.clone())
         .unwrap_or_else(|| fallback.to_string());
@@ -477,7 +491,11 @@ fn build_plugin_child(id: &str, record: &Record, ctx: &BuildContext) -> Editor {
 /// the registry label, and the leaf name is the last resort.
 fn setting_label(record: &Record, id: &str) -> String {
     let path = record.segments.join(".");
-    let leaf = record.segments.last().cloned().unwrap_or_else(|| path.clone());
+    let leaf = record
+        .segments
+        .last()
+        .cloned()
+        .unwrap_or_else(|| path.clone());
     record
         .spec
         .label
@@ -808,10 +826,7 @@ mod tests {
 
     #[test]
     fn apply_registry_source_replaces_ids() {
-        let mut source: Vec<String> = vec![
-            "dankMenu".to_string(),
-            "webSearch".to_string(),
-        ];
+        let mut source: Vec<String> = vec!["dankMenu".to_string(), "webSearch".to_string()];
         let mut names = HashMap::new();
         names.insert("dankMenu".to_string(), "Stale".to_string());
         let plugins = vec![
@@ -874,10 +889,7 @@ mod tests {
             "commandRunner",
             "webSearch",
         ] {
-            assert!(
-                groups.iter().any(|(gid, _, _)| gid == id),
-                "missing {id}"
-            );
+            assert!(groups.iter().any(|(gid, _, _)| gid == id), "missing {id}");
         }
         let (_, leaves, shown) = groups
             .iter()
@@ -887,7 +899,10 @@ mod tests {
         let paths: Vec<String> = leaves.iter().map(|leaf| leaf.segments.join(".")).collect();
         assert!(paths.contains(&"enable".to_string()));
         assert_eq!(
-            paths.iter().filter(|path| path.starts_with("settings.")).count(),
+            paths
+                .iter()
+                .filter(|path| path.starts_with("settings."))
+                .count(),
             5
         );
         assert!(

@@ -134,10 +134,14 @@ pub fn detect() -> Option<Vec<DetectedMonitor>> {
 mod tests {
     use super::*;
 
-    const JSON_FIXTURE: &str =
-        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/wlr-randr/json.json"));
-    const TEXT_FIXTURE: &str =
-        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/wlr-randr/text.txt"));
+    const JSON_FIXTURE: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/wlr-randr/json.json"
+    ));
+    const TEXT_FIXTURE: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/wlr-randr/text.txt"
+    ));
 
     #[test]
     fn parses_json_heads_and_modes() {

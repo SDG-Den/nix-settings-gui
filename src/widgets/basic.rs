@@ -101,12 +101,7 @@ fn attach_focus_gated_scroll(scale: &gtk::Scale) {
 /// Deliver a stopped tick to the first ScrolledWindow ancestor. With no
 /// ScrolledWindow ancestor (e.g. a slider in a non-scrollable popover) the
 /// tick is dropped and the value stays untouched.
-fn forward_scroll(
-    scale: &gtk::Scale,
-    controller: &gtk::EventControllerScroll,
-    dx: f64,
-    dy: f64,
-) {
+fn forward_scroll(scale: &gtk::Scale, controller: &gtk::EventControllerScroll, dx: f64, dy: f64) {
     let mut current = scale.parent();
     while let Some(ancestor) = current {
         if let Ok(scrolled) = ancestor.clone().downcast::<gtk::ScrolledWindow>() {

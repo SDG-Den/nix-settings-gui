@@ -232,11 +232,7 @@ fn table_grid_locked_row_without_label_shows_key_heading() {
         eprintln!("skipping table grid runtime check: no display");
         return;
     }
-    let record = table_record(
-        "{ photo = { enable = true; }; }",
-        &["enable"],
-        &["bool"],
-    );
+    let record = table_record("{ photo = { enable = true; }; }", &["enable"], &["bool"]);
     let (_editor, grid) = table_grid(&record);
     let heading = grid_child(&grid, 0, 1)
         .unwrap()

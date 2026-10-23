@@ -37,8 +37,7 @@ pub type PackageSearch = Rc<dyn Fn(String, Box<dyn FnOnce(Vec<String>)>)>;
 
 /// Fetches the DMS plugin registry and hands the id list back on the main
 /// thread. Supplied by the app so the widget stays free of nix plumbing.
-pub type PluginRegistryHook =
-    Rc<dyn Fn(Box<dyn FnOnce(Vec<crate::metadata::RegistryPlugin>)>)>;
+pub type PluginRegistryHook = Rc<dyn Fn(Box<dyn FnOnce(Vec<crate::metadata::RegistryPlugin>)>)>;
 
 /// Runs the apply command of an option the user changed. Supplied by the app
 /// so the widgets stay free of process handling.

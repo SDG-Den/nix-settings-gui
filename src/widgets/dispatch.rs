@@ -126,10 +126,7 @@ pub(crate) fn choose_widget(record: &Record, type_str: Option<&str>) -> WidgetKi
     let spec = &record.spec;
     let value_text = &record.value;
     if let Some(widget) = spec.widget {
-        if widget == WidgetKind::Spin
-            && spec.min.is_some()
-            && spec.max.is_some()
-            && spec.horizontal
+        if widget == WidgetKind::Spin && spec.min.is_some() && spec.max.is_some() && spec.horizontal
         {
             return WidgetKind::Slider;
         }

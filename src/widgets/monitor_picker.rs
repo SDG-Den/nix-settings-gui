@@ -106,6 +106,7 @@ fn build_heads_stage(
     let heads = gtk::Box::new(gtk::Orientation::Vertical, 6);
     let list = gtk::ListBox::new();
     list.set_selection_mode(gtk::SelectionMode::Single);
+    list.set_activate_on_single_click(false);
     for monitor in detected {
         let configured = existing_names.iter().any(|name| name == &monitor.name);
         let mut text = monitor.name.clone();
@@ -145,7 +146,7 @@ fn build_heads_stage(
     }
     heads.append(&list);
     let hint = gtk::Label::builder()
-        .label("Select a display and press Enter to choose its mode.")
+        .label("Double-click a display to choose its mode.")
         .xalign(0.0)
         .css_classes(["dim-label", "caption"])
         .build();
@@ -170,12 +171,6 @@ pub(crate) fn build_monitor_mode_stage(
     stack: &gtk::Stack,
 ) -> gtk::Box {
     let stage = gtk::Box::new(gtk::Orientation::Vertical, 6);
-    let caption = gtk::Label::builder()
-        .label(&monitor.name)
-        .xalign(0.0)
-        .css_classes(["dim-label", "caption"])
-        .build();
-    stage.append(&caption);
 
     let labels: Vec<String> = monitor
         .modes
@@ -212,9 +207,6 @@ pub(crate) fn build_monitor_mode_stage(
         stage.append(&note);
     }
 
-    let preview = gtk::Label::builder().xalign(0.0).build();
-    stage.append(&preview);
-
     let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     let back = gtk::Button::with_label("Back");
     let add = gtk::Button::with_label("Add");
@@ -227,25 +219,6 @@ pub(crate) fn build_monitor_mode_stage(
         let stack = stack.clone();
         back.connect_clicked(move |_| stack.set_visible_child_name("heads"));
     }
-
-    let update_preview = {
-        let combo = combo.clone();
-        let preview = preview.clone();
-        let modes = monitor.modes.clone();
-        move || {
-            if let Some(mode) = modes.get(combo.selected() as usize) {
-                preview.set_label(&format!(
-                    "{}x{} @ {:.0} Hz",
-                    mode.width, mode.height, mode.refresh
-                ));
-            }
-        }
-    };
-    update_preview();
-    combo.connect_selected_notify({
-        let update_preview = update_preview.clone();
-        move |_| update_preview()
-    });
 
     {
         let name = monitor.name.clone();

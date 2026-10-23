@@ -68,7 +68,10 @@ pub(crate) fn grid_resize_step(state: &Rc<GridLayoutState>, dw: i64, dh: i64) {
             }
         }
         grid_repack(state, Some(index), false);
-        grid_set_status(state, "No room to grow here — the grid is full at the bottom.");
+        grid_set_status(
+            state,
+            "No room to grow here — the grid is full at the bottom.",
+        );
     } else {
         grid_set_status(state, "");
     }
@@ -205,9 +208,11 @@ pub(crate) fn grid_refresh_details(state: &Rc<GridLayoutState>) {
         .build();
     state.details.append(&caption);
     if let Some(switch) = &tile.enabled {
-        state
-            .details
-            .append(&dim_line_with_help("Enabled", field_help("enabled"), switch));
+        state.details.append(&dim_line_with_help(
+            "Enabled",
+            field_help("enabled"),
+            switch,
+        ));
     }
 
     let columns = state.profile.columns;
@@ -308,13 +313,11 @@ pub(crate) fn grid_refresh_details(state: &Rc<GridLayoutState>) {
         for (record, editor) in &tile.fields {
             let name = record.segments.last().cloned().unwrap_or_default();
             let root = editor.root();
-            state
-                .details
-                .append(&dim_line_with_help(
-                    &field_caption(&name),
-                    field_help(&name),
-                    &root,
-                ));
+            state.details.append(&dim_line_with_help(
+                &field_caption(&name),
+                field_help(&name),
+                &root,
+            ));
         }
     }
 
