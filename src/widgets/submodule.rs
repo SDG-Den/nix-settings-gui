@@ -298,6 +298,19 @@ pub(crate) fn scan_children(record: &Record, advanced: bool) -> Vec<Record> {
     scanned
 }
 
+/// Scan a collection's direct entries, keeping nested attribute sets whole.
+pub(crate) fn scan_direct_children(record: &Record, advanced: bool) -> Vec<Record> {
+    let mut scanned = Vec::new();
+    for mut child in scan::scan_value_direct(&record.value) {
+        offset_record(&mut child, record.byte_start, &record.file);
+        if child.spec.hidden && !advanced {
+            continue;
+        }
+        scanned.push(child);
+    }
+    scanned
+}
+
 /// One nested control: heading, editor, and a collapsible details row, indented
 /// by `depth * 12` pixels (capped at four levels).
 pub(crate) fn build_child_row(

@@ -1,8 +1,9 @@
 use super::grid::{
-    grid_index_of, grid_reattach, grid_repack, grid_restore_pinned, grid_select, grid_set_status,
-    grid_update_size_caption, GridLayoutState, GridTile,
+    grid_hide_drop_preview, grid_index_of, grid_repack, grid_repack_drop, grid_repack_preview,
+    grid_restore_pinned, grid_schedule_refresh, grid_select, grid_set_status,
+    grid_show_drop_preview, grid_update_size_caption, GridLayoutState, GridTile,
 };
-use super::grid_details::{grid_delete, grid_refresh_details};
+use super::grid_details::grid_delete;
 use super::grid_layout::GRID_GAP;
 use super::names::widget_display_name;
 use gtk::prelude::*;
@@ -49,15 +50,6 @@ pub(crate) fn wire_grid_tile(state: &Rc<GridLayoutState>, tile: &GridTile) {
     {
         let st = state.clone();
         let button = tile.tile.clone();
-        tile.options_button.connect_clicked(move |_| {
-            if let Some(index) = grid_index_of(&st, &button) {
-                grid_select(&st, index);
-            }
-        });
-    }
-    {
-        let st = state.clone();
-        let button = tile.tile.clone();
         tile.remove_button.connect_clicked(move |_| {
             if let Some(index) = grid_index_of(&st, &button) {
                 grid_select(&st, index);
@@ -84,6 +76,8 @@ pub(crate) fn wire_grid_move(state: &Rc<GridLayoutState>, tile: &GridTile) {
         *st.drag_index.borrow_mut() = Some(index);
         *st.size_index.borrow_mut() = None;
         st.cancelled.set(false);
+        st.gesture_moved.set(false);
+        grid_hide_drop_preview(&st);
         let width = button.width().max(1) as f64;
         let height = button.height().max(1) as f64;
         {
@@ -111,39 +105,53 @@ pub(crate) fn wire_grid_move(state: &Rc<GridLayoutState>, tile: &GridTile) {
         let Some(base) = st.pinned.borrow().get(index).copied() else {
             return;
         };
+        st.gesture_moved.set(true);
         let (col_step, row_step) = st.steps.get();
         let columns = st.profile.columns;
         let col = (base.col as f64 + (dx / col_step).round())
             .clamp(0.0, (columns - base.w).max(0) as f64) as i64;
         let row = (base.row as f64 + (dy / row_step).round()).max(0.0) as i64;
-        {
+        let previous = {
             let mut tiles = st.tiles.borrow_mut();
-            if let Some(tile) = tiles.get_mut(index) {
-                tile.cell.col = col;
-                tile.cell.row = row;
-            }
-        }
-        if grid_repack(&st, Some(index), false) {
+            let Some(tile) = tiles.get_mut(index) else {
+                return;
+            };
+            let previous = tile.cell;
+            tile.cell.col = col;
+            tile.cell.row = row;
+            previous
+        };
+        if grid_repack_drop(&st, index) {
             grid_set_status(&st, "");
         } else {
+            if let Some(tile) = st.tiles.borrow_mut().get_mut(index) {
+                tile.cell = previous;
+            }
             grid_set_status(&st, "No room to move here — the grid is full.");
         }
-        grid_reattach(&st);
+        if let Some(cell) = st.tiles.borrow().get(index).map(|tile| tile.cell) {
+            grid_show_drop_preview(&st, cell);
+        }
         grid_update_size_caption(&st);
     });
     let st = state.clone();
     drag.connect_drag_end(move |_, _, _| {
-        if st.cancelled.get() {
-            grid_restore_pinned(&st);
-        } else {
-            grid_repack(&st, None, true);
-        }
-        grid_reattach(&st);
-        grid_update_size_caption(&st);
-        grid_set_status(&st, "");
-        grid_refresh_details(&st);
+        let index = *st.drag_index.borrow();
         *st.drag_index.borrow_mut() = None;
-        st.notify();
+        if !st.gesture_moved.get() {
+            return;
+        }
+        if let Some(index) = index {
+            if st.cancelled.get() {
+                grid_restore_pinned(&st);
+            } else if !grid_repack_drop(&st, index) {
+                grid_restore_pinned(&st);
+                grid_repack(&st, Some(index), true);
+            }
+        }
+        grid_set_status(&st, "");
+        grid_hide_drop_preview(&st);
+        grid_schedule_refresh(&st);
     });
 }
 
@@ -168,6 +176,8 @@ pub(crate) fn wire_grid_resize(
         *st.size_index.borrow_mut() = Some(index);
         *st.drag_index.borrow_mut() = None;
         st.cancelled.set(false);
+        st.gesture_moved.set(false);
+        grid_hide_drop_preview(&st);
         let width = button.width().max(1) as f64;
         let height = button.height().max(1) as f64;
         {
@@ -194,6 +204,7 @@ pub(crate) fn wire_grid_resize(
         let Some(base) = st.pinned.borrow().get(index).copied() else {
             return;
         };
+        st.gesture_moved.set(true);
         let (col_step, row_step) = st.steps.get();
         let columns = st.profile.columns;
         let last = match st.tiles.borrow().get(index) {
@@ -216,14 +227,14 @@ pub(crate) fn wire_grid_resize(
                 tile.cell.h = h;
             }
         }
-        if !grid_repack(&st, Some(index), false) {
+        if !grid_repack_preview(&st, index) {
             {
                 let mut tiles = st.tiles.borrow_mut();
                 if let Some(tile) = tiles.get_mut(index) {
                     tile.cell = last;
                 }
             }
-            grid_repack(&st, Some(index), false);
+            grid_repack_preview(&st, index);
             grid_set_status(
                 &st,
                 "No room to grow here — the grid is full at the bottom.",
@@ -231,20 +242,22 @@ pub(crate) fn wire_grid_resize(
         } else {
             grid_set_status(&st, "");
         }
-        grid_reattach(&st);
+        if let Some(cell) = st.tiles.borrow().get(index).map(|tile| tile.cell) {
+            grid_show_drop_preview(&st, cell);
+        }
         grid_update_size_caption(&st);
     });
     let st = state.clone();
     drag.connect_drag_end(move |_, _, _| {
         *st.size_index.borrow_mut() = None;
+        if !st.gesture_moved.get() {
+            return;
+        }
         if st.cancelled.get() {
             grid_restore_pinned(&st);
         }
-        grid_repack(&st, None, false);
-        grid_reattach(&st);
-        grid_update_size_caption(&st);
         grid_set_status(&st, "");
-        grid_refresh_details(&st);
-        st.notify();
+        grid_hide_drop_preview(&st);
+        grid_schedule_refresh(&st);
     });
 }

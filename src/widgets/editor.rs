@@ -1,8 +1,7 @@
 use super::bar::{bar_nix, dock_nix};
 use super::context::ChangeHook;
-use super::fields::csv_list;
 use super::grid::{grid_nix, GridLayoutState};
-use super::keybinds::{connect_keybind_row, keybinds_nix, KeybindRow};
+use super::keybinds::{connect_keybind_row, csv_matches_list_source, keybinds_nix, KeybindRow};
 use super::menu::{connect_menu_row, menu_rows_nix, menu_rows_unchanged, MenuRow};
 use super::monitors::{connect_monitor_row, monitor_row_unchanged, monitors_nix, MonitorRow};
 use super::nix::{
@@ -322,8 +321,8 @@ impl Editor {
             }),
             Editor::Keybinds { rows, .. } => rows.borrow().iter().all(|row| {
                 row.key.text() == row.orig_key
-                    && csv_list(&row.modifier.text()) == csv_list(&row.orig_modifier)
-                    && csv_list(&row.keys.text()) == csv_list(&row.orig_keys)
+                    && csv_matches_list_source(&row.modifier.text(), &row.orig_modifier)
+                    && csv_matches_list_source(&row.keys.text(), &row.orig_keys)
                     && row
                         .fields
                         .borrow()
@@ -367,7 +366,7 @@ impl Editor {
                             && tile
                                 .fields
                                 .iter()
-                                .all(|(record, editor)| editor.unchanged(&record.value))
+                                .all(|field| field.editor.unchanged(&field.record.value))
                     })
                     && state
                         .extras
@@ -532,8 +531,8 @@ impl Editor {
                 }
                 let tiles = state.tiles.borrow();
                 for tile in tiles.iter() {
-                    for (_, editor) in &tile.fields {
-                        editor.connect_changed(update);
+                    for field in &tile.fields {
+                        field.editor.connect_changed(update);
                     }
                 }
             }

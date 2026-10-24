@@ -216,7 +216,7 @@ pub fn scan_file(path: &Path, text: &str) -> FileScan {
         }
     }
 
-    walk_body(text, &file, "", &expr, &mut scan.records, true);
+    walk_body(text, &file, "", &expr, &mut scan.records, true, true);
     scan
 }
 
@@ -232,7 +232,22 @@ pub fn scan_value(text: &str) -> Vec<Record> {
         return Vec::new();
     };
     let mut out = Vec::new();
-    walk_body(text, "", "", &expr, &mut out, false);
+    walk_body(text, "", "", &expr, &mut out, false, true);
+    out
+}
+
+/// Scan a value literal's direct bindings without flattening nested attribute
+/// sets. A card collection needs one record per entry, not one per leaf.
+pub fn scan_value_direct(text: &str) -> Vec<Record> {
+    let parsed = rnix::Root::parse(text);
+    let Some(root) = rnix::Root::cast(parsed.syntax()) else {
+        return Vec::new();
+    };
+    let Some(expr) = root.expr() else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    walk_body(text, "", "", &expr, &mut out, false, false);
     out
 }
 
@@ -561,7 +576,7 @@ fn scan_dendritic(text: &str, set: &AttrSet, scan: &mut FileScan) {
             let Some(value) = binding.value() else {
                 continue;
             };
-            walk_body(text, &file, &origin, &value, &mut scan.records, true);
+            walk_body(text, &file, &origin, &value, &mut scan.records, true, true);
             collect_module_refs(value.syntax(), &mut scan.imports);
             continue;
         }
@@ -612,46 +627,54 @@ fn walk_body(
     expr: &Expr,
     out: &mut Vec<Record>,
     annotated_only: bool,
+    flatten: bool,
 ) {
     match expr {
         Expr::Lambda(l) => {
             if let Some(body) = l.body() {
-                walk_body(text, file, origin, &body, out, annotated_only);
+                walk_body(text, file, origin, &body, out, annotated_only, flatten);
             }
         }
         Expr::LetIn(l) => {
-            collect_container(text, file, origin, l.syntax(), &[], out, true);
+            collect_container(text, file, origin, l.syntax(), &[], out, true, flatten);
             if let Some(body) = l.body() {
-                walk_body(text, file, origin, &body, out, annotated_only);
+                walk_body(text, file, origin, &body, out, annotated_only, flatten);
             }
         }
         Expr::With(w) => {
             if let Some(body) = w.body() {
-                walk_body(text, file, origin, &body, out, annotated_only);
+                walk_body(text, file, origin, &body, out, annotated_only, flatten);
             }
         }
         Expr::Paren(p) => {
             if let Some(inner) = p.expr() {
-                walk_body(text, file, origin, &inner, out, annotated_only);
+                walk_body(text, file, origin, &inner, out, annotated_only, flatten);
             }
         }
-        Expr::AttrSet(set) => {
-            collect_container(text, file, origin, set.syntax(), &[], out, annotated_only)
-        }
+        Expr::AttrSet(set) => collect_container(
+            text,
+            file,
+            origin,
+            set.syntax(),
+            &[],
+            out,
+            annotated_only,
+            flatten,
+        ),
         Expr::BinOp(op) => {
             if let Some(lhs) = op.lhs() {
-                walk_body(text, file, origin, &lhs, out, annotated_only);
+                walk_body(text, file, origin, &lhs, out, annotated_only, flatten);
             }
             if let Some(rhs) = op.rhs() {
-                walk_body(text, file, origin, &rhs, out, annotated_only);
+                walk_body(text, file, origin, &rhs, out, annotated_only, flatten);
             }
         }
         Expr::IfElse(cond) => {
             if let Some(body) = cond.body() {
-                walk_body(text, file, origin, &body, out, annotated_only);
+                walk_body(text, file, origin, &body, out, annotated_only, flatten);
             }
             if let Some(else_body) = cond.else_body() {
-                walk_body(text, file, origin, &else_body, out, annotated_only);
+                walk_body(text, file, origin, &else_body, out, annotated_only, flatten);
             }
         }
         _ => {}
@@ -660,6 +683,7 @@ fn walk_body(
 
 /// Walk the direct children of a container (an attribute set or a `let` block),
 /// tracking the most recent comment so it can bind to the next assignment.
+#[allow(clippy::too_many_arguments)]
 fn collect_container(
     text: &str,
     file: &str,
@@ -668,6 +692,7 @@ fn collect_container(
     prefix: &[String],
     out: &mut Vec<Record>,
     annotated_only: bool,
+    flatten: bool,
 ) {
     let mut pending: Option<(String, usize, usize)> = None;
     for element in container.children_with_tokens() {
@@ -701,6 +726,7 @@ fn collect_container(
                     comment,
                     out,
                     annotated_only,
+                    flatten,
                 );
             }
         }
@@ -717,6 +743,7 @@ fn collect_binding(
     comment: Option<(String, usize, usize)>,
     out: &mut Vec<Record>,
     annotated_only: bool,
+    flatten: bool,
 ) {
     let Some(path) = binding.attrpath() else {
         return;
@@ -767,7 +794,7 @@ fn collect_binding(
     };
 
     if let Expr::AttrSet(nested) = &inner {
-        if !annotated {
+        if !annotated && flatten {
             collect_container(
                 text,
                 file,
@@ -776,6 +803,7 @@ fn collect_binding(
                 &segments,
                 out,
                 annotated_only,
+                flatten,
             );
             return;
         }
@@ -1396,6 +1424,15 @@ in
         let paths: Vec<String> = records.iter().map(Record::path).collect();
         assert_eq!(paths, vec!["enable", "allowedTCPPorts"]);
         assert_eq!(records[0].value, "true");
+    }
+
+    #[test]
+    fn scan_value_direct_keeps_nested_sets_whole() {
+        let records = scan_value_direct("{ user = { col = 0; }; extra = 3; }");
+        let paths: Vec<String> = records.iter().map(Record::path).collect();
+        assert_eq!(paths, vec!["user", "extra"]);
+        assert!(records[0].value.contains("col = 0"));
+        assert_eq!(records[1].value, "3");
     }
 
     #[test]

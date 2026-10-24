@@ -339,6 +339,8 @@ fn install_tile_css() {
             .dms-widget-row:hover { background-color: alpha(@window_fg_color, 0.06); }
             .dms-widget-icon { -gtk-icon-size: 22px; color: @window_fg_color; }
             list.dms-widget-list > row { border-radius: 12px; margin: 1px 0; }
+            list.dms-widget-list > row.dms-drop-before { box-shadow: inset 0 2px @accent_bg_color; }
+            list.dms-widget-list > row.dms-drop-after { box-shadow: inset 0 -2px @accent_bg_color; }
         ";
         let provider = gtk::CssProvider::new();
         provider.load_from_data(css);

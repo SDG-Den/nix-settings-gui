@@ -1,16 +1,18 @@
 use super::context::{BuildContext, ChangeHook};
-use super::dms_catalog::{widget_description, widget_icon, GridSurface};
+use super::dms_catalog::{card_defaults, widget_description, widget_icon, GridSurface};
 use super::editor::Editor;
+use super::fields::dim_line_with_help;
 use super::grid_details::{
     grid_clear_all, grid_refresh_adder, grid_refresh_details, grid_reset_layout,
 };
 use super::grid_gestures::wire_grid_tile;
 use super::grid_layout::{
-    grid_tile_fields_nix, repack, CellRect, TileInput, GRID_DEFAULT_ORDER, GRID_GAP, GRID_ROW_UNIT,
+    drop_repack, grid_tile_fields_nix, repack, CellRect, TileInput, GRID_DEFAULT_ORDER, GRID_GAP,
+    GRID_ROW_UNIT,
 };
-use super::names::widget_display_name;
+use super::names::{field_caption, field_help, widget_display_name};
 use super::nix::attr_key;
-use super::submodule::{build_bespoke_child, build_child_row, scan_children};
+use super::submodule::{build_bespoke_child, build_child_row, scan_direct_children};
 use crate::model::Record;
 use crate::scan;
 use crate::value;
@@ -19,6 +21,13 @@ use gtk::prelude::*;
 use std::cell::Cell;
 use std::cell::RefCell;
 use std::rc::Rc;
+/// One editable card setting and its editor.
+#[derive(Clone)]
+pub(crate) struct GridField {
+    pub(crate) record: Record,
+    pub(crate) editor: Editor,
+}
+
 /// A tile on the fixed-width placement grid of a `grid-configuration` control.
 #[derive(Clone)]
 pub(crate) struct GridTile {
@@ -29,7 +38,7 @@ pub(crate) struct GridTile {
     pub(crate) orig: CellRect,
     pub(crate) enabled: Option<gtk::Switch>,
     pub(crate) orig_enabled: Option<bool>,
-    pub(crate) fields: Vec<(Record, Editor)>,
+    pub(crate) fields: Vec<GridField>,
     pub(crate) tile: gtk::ToggleButton,
     pub(crate) label: gtk::Label,
     pub(crate) overlay: gtk::Overlay,
@@ -38,7 +47,6 @@ pub(crate) struct GridTile {
     pub(crate) corner_strip: gtk::Box,
     pub(crate) chrome: gtk::Box,
     pub(crate) remove_button: gtk::Button,
-    pub(crate) options_button: gtk::Button,
     pub(crate) size_badge: gtk::Label,
 }
 
@@ -166,6 +174,7 @@ pub(crate) struct GridLayoutState {
     pub(crate) extras: Vec<(Record, Editor)>,
     pub(crate) on_change: ChangeHook,
     pub(crate) canvas: gtk::Grid,
+    pub(crate) drop_preview: gtk::Box,
     pub(crate) details: gtk::Box,
     pub(crate) adder_slot: gtk::Box,
     pub(crate) footer_flow: Option<gtk::FlowBox>,
@@ -178,6 +187,7 @@ pub(crate) struct GridLayoutState {
     pub(crate) steps: Rc<Cell<(f64, f64)>>,
     pub(crate) cancelled: Rc<Cell<bool>>,
     pub(crate) programmatic: Rc<Cell<bool>>,
+    pub(crate) gesture_moved: Rc<Cell<bool>>,
 }
 pub(crate) fn build_grid_configuration(record: &Record, ctx: &BuildContext) -> Editor {
     install_grid_css();
@@ -201,6 +211,10 @@ pub(crate) fn build_grid_configuration(record: &Record, ctx: &BuildContext) -> E
     canvas.set_column_spacing(GRID_GAP as u32);
     canvas.set_row_spacing(GRID_GAP as u32);
     canvas.set_hexpand(true);
+    let drop_preview = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    drop_preview.add_css_class("dms-drop-preview");
+    drop_preview.set_can_target(false);
+    drop_preview.set_visible(false);
     let details = gtk::Box::new(gtk::Orientation::Vertical, 8);
     details.set_hexpand(true);
     let adder_slot = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -240,7 +254,7 @@ pub(crate) fn build_grid_configuration(record: &Record, ctx: &BuildContext) -> E
     let mut orig_ids = Vec::new();
     let mut extras = Vec::new();
     let mut built = Vec::new();
-    for child in scan_children(record, ctx.advanced) {
+    for child in scan_direct_children(record, ctx.advanced) {
         if value::classify(&child.value) == value::ValueKind::AttrSet {
             let id = child.segments.last().cloned().unwrap_or_default();
             orig_ids.push(id.clone());
@@ -261,11 +275,11 @@ pub(crate) fn build_grid_configuration(record: &Record, ctx: &BuildContext) -> E
             (child, editor)
         })
         .collect();
+    root.append(&adder_slot);
+    root.append(&details);
     if extras_box.first_child().is_some() {
         root.append(&extras_expander);
     }
-    root.append(&adder_slot);
-    root.append(&details);
 
     let state = Rc::new(GridLayoutState {
         profile,
@@ -275,6 +289,7 @@ pub(crate) fn build_grid_configuration(record: &Record, ctx: &BuildContext) -> E
         extras,
         on_change: on_change.clone(),
         canvas: canvas.clone(),
+        drop_preview: drop_preview.clone(),
         details: details.clone(),
         adder_slot: adder_slot.clone(),
         footer_flow,
@@ -287,6 +302,7 @@ pub(crate) fn build_grid_configuration(record: &Record, ctx: &BuildContext) -> E
         steps: Rc::new(Cell::new((1.0, 1.0))),
         cancelled: Rc::new(Cell::new(false)),
         programmatic: Rc::new(Cell::new(false)),
+        gesture_moved: Rc::new(Cell::new(false)),
     });
 
     {
@@ -360,9 +376,9 @@ impl GridLayoutState {
 }
 /// Whether a tile belongs to the footer strip rather than the canvas.
 pub(crate) fn grid_tile_is_footer(tile: &GridTile) -> bool {
-    tile.fields.iter().any(|(record, editor)| {
-        record.segments.last().map(String::as_str) == Some("footer")
-            && editor.to_nix().trim() == "true"
+    tile.fields.iter().any(|field| {
+        field.record.segments.last().map(String::as_str) == Some("footer")
+            && field.editor.to_nix().trim() == "true"
     })
 }
 
@@ -406,11 +422,15 @@ pub(crate) fn install_grid_css() {
                 font-size: 11px;
                 font-weight: 700;
             }
-            .dms-card-chrome button { border-radius: 999px; }
             .dms-card-canvas {
                 background-color: alpha(@window_fg_color, 0.03);
                 border-radius: 18px;
                 padding: 8px;
+            }
+            .dms-drop-preview {
+                background-color: alpha(@accent_bg_color, 0.15);
+                border: 2px solid alpha(@accent_bg_color, 0.8);
+                border-radius: 14px;
             }
         ";
         let provider = gtk::CssProvider::new();
@@ -461,6 +481,53 @@ pub(crate) fn grid_update_tile_visual(tile: &GridTile) {
     }
 }
 
+fn field_default(surface: GridSurface, id: &str, name: &str) -> Option<&'static str> {
+    match name {
+        "small" | "footer" | "footerEnd" | "footerFill" => Some("false"),
+        "footerW" => Some("1"),
+        _ => card_defaults(surface, id)
+            .into_iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value),
+    }
+}
+
+fn build_grid_popout(fields: &[GridField]) -> gtk::Popover {
+    let popover = gtk::Popover::new();
+    popover.set_position(gtk::PositionType::Right);
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    content.set_size_request(300, -1);
+    content.set_margin_top(12);
+    content.set_margin_bottom(12);
+    content.set_margin_start(12);
+    content.set_margin_end(12);
+    if fields.is_empty() {
+        let empty = gtk::Label::builder()
+            .xalign(0.0)
+            .label("No extra settings.")
+            .css_classes(["dim-label"])
+            .build();
+        content.append(&empty);
+    } else {
+        for field in fields {
+            let name = field.record.segments.last().cloned().unwrap_or_default();
+            content.append(&dim_line_with_help(
+                &field_caption(&name),
+                field_help(&name),
+                &field.editor.root(),
+            ));
+        }
+    }
+    let scroll = gtk::ScrolledWindow::builder()
+        .min_content_height(120)
+        .max_content_height(420)
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .child(&content)
+        .build();
+    popover.set_child(Some(&scroll));
+    popover
+}
+
 /// Build one on-canvas tile: parse the grid fields out of its value, keep every
 /// other field as a child editor, and wrap the surface in an overlay that
 /// carries the resize strips.
@@ -478,7 +545,8 @@ pub(crate) fn make_grid_tile(
     };
     let mut order = GRID_DEFAULT_ORDER;
     let mut enabled_value = true;
-    let mut fields: Vec<(Record, Editor)> = Vec::new();
+    let mut fields: Vec<GridField> = Vec::new();
+    let mut present = Vec::new();
     for child in scan::scan_value(value_text) {
         let name = child.segments.last().cloned().unwrap_or_default();
         let text = child.value.trim().to_string();
@@ -490,10 +558,26 @@ pub(crate) fn make_grid_tile(
             "_order" => order = text.parse().unwrap_or(GRID_DEFAULT_ORDER),
             "enabled" if profile.has_enabled => enabled_value = text == "true",
             _ => {
+                present.push(name);
                 let editor = build_bespoke_child(&child, ctx);
-                fields.push((child, editor));
+                fields.push(GridField {
+                    record: child,
+                    editor,
+                });
             }
         }
+    }
+    for (name, literal) in card_defaults(profile.surface, id) {
+        if present.iter().any(|field| field.eq_ignore_ascii_case(name)) {
+            continue;
+        }
+        let record = Record {
+            segments: vec![name.to_string()],
+            value: literal.to_string(),
+            ..Record::default()
+        };
+        let editor = build_bespoke_child(&record, ctx);
+        fields.push(GridField { record, editor });
     }
     cell.w = cell.w.clamp(1, profile.columns.max(1));
     cell.h = cell.h.max(1);
@@ -551,7 +635,7 @@ pub(crate) fn make_grid_tile(
     chrome.set_margin_end(6);
     let options_button = gtk::Button::from_icon_name("emblem-system-symbolic");
     options_button.add_css_class("flat");
-    options_button.set_tooltip_text(Some("Card options"));
+    options_button.set_tooltip_text(Some("Widget settings"));
     let remove_button = gtk::Button::from_icon_name("user-trash-symbolic");
     remove_button.add_css_class("flat");
     remove_button.set_tooltip_text(Some("Remove card"));
@@ -559,6 +643,10 @@ pub(crate) fn make_grid_tile(
     chrome.append(&remove_button);
     chrome.set_visible(false);
     overlay.add_overlay(&chrome);
+    let popout = build_grid_popout(&fields);
+    popout.set_parent(&options_button);
+    let for_options = popout;
+    options_button.connect_clicked(move |_| for_options.popup());
 
     let size_badge = gtk::Label::new(None);
     size_badge.add_css_class("dms-card-size");
@@ -586,13 +674,15 @@ pub(crate) fn make_grid_tile(
         corner_strip,
         chrome,
         remove_button,
-        options_button,
         size_badge,
     };
     grid_update_tile_visual(&tile);
     tile
 }
 pub(crate) fn grid_select(state: &Rc<GridLayoutState>, index: usize) {
+    if *state.selected.borrow() == Some(index) {
+        return;
+    }
     state.programmatic.set(true);
     {
         let tiles = state.tiles.borrow();
@@ -620,45 +710,84 @@ pub(crate) fn grid_cancel(state: &Rc<GridLayoutState>) {
     state.cancelled.set(true);
     grid_restore_pinned(state);
     grid_repack(state, None, false);
-    grid_reattach(state);
     grid_set_status(state, "");
+    grid_hide_drop_preview(state);
+}
+
+/// Repaint the canvas after a gesture ends. Reparenting tiles inside the
+/// gesture's own signal handler unmaps a widget GTK still considers mapped, so
+/// the commit runs from an idle callback instead.
+pub(crate) fn grid_schedule_refresh(state: &Rc<GridLayoutState>) {
+    let state = state.clone();
+    glib::idle_add_local_once(move || {
+        grid_reattach(&state);
+        grid_update_size_caption(&state);
+        grid_refresh_details(&state);
+        state.notify();
+    });
 }
 
 /// Recompute the committed cells of every non-footer tile. `interacting` is
 /// forced first in the placement order. Returns false when the layout would
 /// exceed `max_rows`, in which case no cell is changed.
+type RepackInputs = (Vec<usize>, Vec<usize>, Vec<TileInput>);
+
+fn grid_repack_inputs(
+    state: &Rc<GridLayoutState>,
+    interacting: Option<usize>,
+    pinned: bool,
+) -> RepackInputs {
+    let tiles = state.tiles.borrow();
+    let pinned_cells = pinned.then(|| state.pinned.borrow().clone());
+    let indices: Vec<usize> = (0..tiles.len())
+        .filter(|&i| !(state.profile.has_footer && grid_tile_is_footer(&tiles[i])))
+        .collect();
+    let mut order = indices.clone();
+    order.sort_by_key(|&i| (tiles[i].order, i));
+    if let Some(k) = interacting {
+        if indices.contains(&k) {
+            order.retain(|&i| i != k);
+            order.insert(0, k);
+        }
+    }
+    let inputs: Vec<TileInput> = indices
+        .iter()
+        .map(|&i| {
+            let cell = if Some(i) == interacting {
+                tiles[i].cell
+            } else {
+                pinned_cells
+                    .as_ref()
+                    .and_then(|cells| cells.get(i).copied())
+                    .unwrap_or(tiles[i].cell)
+            };
+            TileInput {
+                cell: Some(cell),
+                w: cell.w,
+                h: cell.h,
+            }
+        })
+        .collect();
+    let order_local: Vec<usize> = order
+        .iter()
+        .map(|i| indices.iter().position(|x| x == i).unwrap_or(0))
+        .collect();
+    (indices, order_local, inputs)
+}
+
+fn grid_apply_cells(state: &Rc<GridLayoutState>, indices: &[usize], cells: &[CellRect]) {
+    let mut tiles = state.tiles.borrow_mut();
+    for (position, &index) in indices.iter().enumerate() {
+        tiles[index].cell = cells[position];
+    }
+}
+
 pub(crate) fn grid_repack(
     state: &Rc<GridLayoutState>,
     interacting: Option<usize>,
     gravity: bool,
 ) -> bool {
-    let (indices, order, inputs) = {
-        let tiles = state.tiles.borrow();
-        let indices: Vec<usize> = (0..tiles.len())
-            .filter(|&i| !(state.profile.has_footer && grid_tile_is_footer(&tiles[i])))
-            .collect();
-        let mut order = indices.clone();
-        order.sort_by_key(|&i| (tiles[i].order, i));
-        if let Some(k) = interacting {
-            if indices.contains(&k) {
-                order.retain(|&i| i != k);
-                order.insert(0, k);
-            }
-        }
-        let inputs: Vec<TileInput> = indices
-            .iter()
-            .map(|&i| TileInput {
-                cell: Some(tiles[i].cell),
-                w: tiles[i].cell.w,
-                h: tiles[i].cell.h,
-            })
-            .collect();
-        let order_local: Vec<usize> = order
-            .iter()
-            .map(|i| indices.iter().position(|x| x == i).unwrap_or(0))
-            .collect();
-        (indices, order_local, inputs)
-    };
+    let (indices, order, inputs) = grid_repack_inputs(state, interacting, false);
     let Some(cells) = repack(
         &inputs,
         &order,
@@ -668,14 +797,73 @@ pub(crate) fn grid_repack(
     ) else {
         return false;
     };
-    let mut tiles = state.tiles.borrow_mut();
-    for (position, &index) in indices.iter().enumerate() {
-        tiles[index].cell = cells[position];
-    }
+    grid_apply_cells(state, &indices, &cells);
     true
 }
 
+/// Repack the preview of an interaction from the cells pinned at its start.
+pub(crate) fn grid_repack_preview(state: &Rc<GridLayoutState>, interacting: usize) -> bool {
+    let (indices, order, inputs) = grid_repack_inputs(state, Some(interacting), true);
+    let Some(cells) = repack(
+        &inputs,
+        &order,
+        state.profile.columns,
+        state.profile.max_rows,
+        true,
+    ) else {
+        return false;
+    };
+    grid_apply_cells(state, &indices, &cells);
+    true
+}
+
+/// Repack with a dragged tile kept at its drop target while the others make
+/// room, matching DMS `dropInto` instead of letting gravity teleport it.
+pub(crate) fn grid_repack_drop(state: &Rc<GridLayoutState>, index: usize) -> bool {
+    let Some(origin) = state.pinned.borrow().get(index).copied() else {
+        return grid_repack(state, Some(index), true);
+    };
+    let (indices, order, inputs) = grid_repack_inputs(state, Some(index), true);
+    let Some(dragged) = indices.iter().position(|&i| i == index) else {
+        return grid_repack(state, Some(index), true);
+    };
+    let Some(cells) = drop_repack(
+        &inputs,
+        &order,
+        state.profile.columns,
+        state.profile.max_rows,
+        dragged,
+        origin,
+    ) else {
+        return false;
+    };
+    grid_apply_cells(state, &indices, &cells);
+    true
+}
+
+pub(crate) fn grid_show_drop_preview(state: &Rc<GridLayoutState>, cell: CellRect) {
+    if state.drop_preview.parent().is_some() {
+        state.canvas.remove(&state.drop_preview);
+    }
+    state.drop_preview.set_visible(true);
+    state.canvas.attach(
+        &state.drop_preview,
+        cell.col as i32,
+        cell.row as i32,
+        cell.w as i32,
+        cell.h as i32,
+    );
+}
+
+pub(crate) fn grid_hide_drop_preview(state: &Rc<GridLayoutState>) {
+    if state.drop_preview.parent().is_some() {
+        state.canvas.remove(&state.drop_preview);
+    }
+    state.drop_preview.set_visible(false);
+}
+
 pub(crate) fn grid_reattach(state: &Rc<GridLayoutState>) {
+    grid_hide_drop_preview(state);
     while let Some(child) = state.canvas.first_child() {
         state.canvas.remove(&child);
     }
@@ -752,28 +940,33 @@ pub(crate) fn grid_update_strips(state: &Rc<GridLayoutState>) {
     let selected = *state.selected.borrow();
     let tiles = state.tiles.borrow();
     for (index, tile) in tiles.iter().enumerate() {
-        let show =
-            selected == Some(index) && !(state.profile.has_footer && grid_tile_is_footer(tile));
-        tile.right_strip.set_visible(show);
-        tile.bottom_strip.set_visible(show);
-        tile.corner_strip.set_visible(show);
-        tile.chrome.set_visible(show);
-        tile.size_badge.set_visible(show);
-        if show {
+        let selected = selected == Some(index);
+        let footer = state.profile.has_footer && grid_tile_is_footer(tile);
+        tile.right_strip.set_visible(selected && !footer);
+        tile.bottom_strip.set_visible(selected && !footer);
+        tile.corner_strip.set_visible(selected && !footer);
+        tile.chrome.set_visible(selected);
+        tile.size_badge.set_visible(selected && !footer);
+        if selected && !footer {
             tile.size_badge
                 .set_text(&format!("{} x {}", tile.cell.w, tile.cell.h));
         }
     }
 }
 pub(crate) fn grid_tile_nix(tile: &GridTile, profile: GridProfile) -> String {
+    let tile_surface = profile.surface;
     let fields: Vec<(String, String)> = tile
         .fields
         .iter()
-        .map(|(record, editor)| {
-            (
-                record.segments.last().cloned().unwrap_or_default(),
-                editor.to_nix(),
-            )
+        .filter_map(|field| {
+            let value = field.editor.to_nix();
+            let name = field.record.segments.last().cloned().unwrap_or_default();
+            if field_default(tile_surface, &tile.id, &name)
+                .is_some_and(|default| default.trim() == value.trim())
+            {
+                return None;
+            }
+            Some((name, value))
         })
         .collect();
     let enabled = if profile.has_enabled {
@@ -806,6 +999,94 @@ pub(crate) fn grid_nix(state: &GridLayoutState) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "needs a display; run with `cargo test -- --ignored`"]
+    fn grid_builds_cards_and_keeps_geometry_out_of_extras() {
+        if gtk::init().is_err() {
+            eprintln!("skipping grid runtime check: no display");
+            return;
+        }
+        let record = Record {
+            segments: vec!["controlCenterWidgets".into()],
+            value: "{ user = { enabled = true; _order = 10; col = 0; row = 0; w = 4; h = 1; }; battery = { enabled = true; _order = 20; col = 4; row = 0; w = 1; h = 1; small = true; }; columns = 8; }".into(),
+            ..Record::default()
+        };
+        let editor = build_grid_configuration(&record, &BuildContext::default());
+        let Editor::Grid { state, .. } = editor else {
+            panic!("grid control expected");
+        };
+        let tiles = state.tiles.borrow();
+        assert_eq!(tiles.len(), 2);
+        assert_eq!(tiles[0].id, "user");
+        assert_eq!(tiles[1].id, "battery");
+        assert_eq!(tiles[0].fields.len(), 6);
+        assert_eq!(tiles[1].fields.len(), 3);
+        assert_eq!(tiles[1].fields[0].record.segments, vec!["small"]);
+        assert_eq!(state.extras.len(), 1);
+        assert_eq!(state.extras[0].0.segments, vec!["columns"]);
+        drop(tiles);
+        let nix = grid_nix(&state);
+        assert!(!nix.contains("batteryStyle"));
+        assert!(!nix.contains("background"));
+        assert!(nix.contains("small = true"));
+    }
+
+    #[test]
+    #[ignore = "needs a display; run with `cargo test -- --ignored`"]
+    fn grid_reattach_mapped_tiles_does_not_abort() {
+        if gtk::init().is_err() {
+            eprintln!("skipping grid runtime check: no display");
+            return;
+        }
+        let record = Record {
+            segments: vec!["controlCenterWidgets".into()],
+            value: "{ user = { enabled = true; _order = 10; col = 0; row = 0; w = 4; h = 1; }; battery = { enabled = true; _order = 20; col = 4; row = 0; w = 1; h = 1; }; wifi = { enabled = true; _order = 30; col = 2; row = 1; w = 4; h = 1; }; }".into(),
+            ..Record::default()
+        };
+        let editor = build_grid_configuration(&record, &BuildContext::default());
+        let Editor::Grid { root, state } = editor else {
+            panic!("grid control expected");
+        };
+        let window = gtk::Window::new();
+        window.set_default_size(900, 700);
+        window.set_child(Some(&root));
+        window.present();
+        pump_main_loop(5);
+        let gesture = {
+            let tiles = state.tiles.borrow();
+            let controllers = tiles[0].tile.observe_controllers();
+            let mut found = None;
+            for index in 0..controllers.n_items() {
+                let Some(object) = controllers.item(index) else {
+                    continue;
+                };
+                if let Ok(gesture) = object.downcast::<gtk::GestureDrag>() {
+                    found = Some(gesture);
+                    break;
+                }
+            }
+            found.expect("move gesture")
+        };
+        gesture.emit_by_name::<()>("drag-begin", &[&0.0f64, &0.0f64]);
+        pump_main_loop(5);
+        for step in 0..24 {
+            gesture.emit_by_name::<()>("drag-update", &[&(step as f64), &(step as f64)]);
+            pump_main_loop(2);
+        }
+        gesture.emit_by_name::<()>("drag-end", &[&24.0f64, &24.0f64]);
+        pump_main_loop(5);
+        window.destroy();
+    }
+
+    fn pump_main_loop(iterations: usize) {
+        let context = glib::MainContext::default();
+        for _ in 0..iterations {
+            while context.pending() {
+                context.iteration(false);
+            }
+        }
+    }
 
     #[test]
     fn grid_profiles_resolve_by_path() {

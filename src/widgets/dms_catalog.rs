@@ -115,7 +115,14 @@ pub(crate) fn card_defaults(surface: GridSurface, id: &str) -> Vec<(&'static str
         }
         (GridSurface::ControlCenter, "idleInhibitor") => vec![("durationMinutes", "0")],
         (GridSurface::ControlCenter, "user") => {
-            vec![("background", "true"), ("shape", "\"circle\"")]
+            vec![
+                ("background", "false"),
+                ("shape", "\"circle\""),
+                ("hostname", "true"),
+                ("compositor", "true"),
+                ("uptime", "true"),
+                ("badge", "true"),
+            ]
         }
         (GridSurface::Dashboard, "calendar") => vec![("weekends", "false")],
         (GridSurface::Dashboard, "weather") => {

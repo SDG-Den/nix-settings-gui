@@ -7,7 +7,7 @@ use super::grid::{
 };
 use super::grid_gestures::wire_grid_tile;
 use super::grid_layout::{grid_clamp_cell, grid_first_fit, CellRect};
-use super::names::{field_caption, field_help, widget_display_name};
+use super::names::{field_help, widget_display_name};
 use super::nix::attr_key;
 use gtk::prelude::*;
 use std::rc::Rc;
@@ -479,31 +479,6 @@ pub(crate) fn grid_refresh_details(state: &Rc<GridLayoutState>) {
         }
     }
 
-    if tile.fields.is_empty() {
-        let empty = gtk::Label::builder()
-            .xalign(0.0)
-            .label("No extra settings.")
-            .css_classes(["dim-label"])
-            .build();
-        state.details.append(&empty);
-    } else {
-        let settings_heading = gtk::Label::builder()
-            .xalign(0.0)
-            .label("Widget settings")
-            .css_classes(["heading"])
-            .build();
-        state.details.append(&settings_heading);
-        for (record, editor) in &tile.fields {
-            let name = record.segments.last().cloned().unwrap_or_default();
-            let root = editor.root();
-            state.details.append(&dim_line_with_help(
-                &field_caption(&name),
-                field_help(&name),
-                &root,
-            ));
-        }
-    }
-
     let width_line = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     width_line.append(&state.size_caption);
     let shrink_w = gtk::Button::from_icon_name("list-remove-symbolic");
@@ -544,9 +519,6 @@ pub(crate) fn grid_refresh_details(state: &Rc<GridLayoutState>) {
         reset.connect_clicked(move |_| grid_reset_tile(&st, index));
     }
 
-    let delete = gtk::Button::with_label("Delete widget");
-    delete.add_css_class("destructive-action");
-    state.details.append(&delete);
     {
         let st = state.clone();
         shrink_w.connect_clicked(move |_| grid_resize_step(&st, -1, 0));
@@ -562,10 +534,6 @@ pub(crate) fn grid_refresh_details(state: &Rc<GridLayoutState>) {
     {
         let st = state.clone();
         grow_h.connect_clicked(move |_| grid_resize_step(&st, 0, 1));
-    }
-    {
-        let st = state.clone();
-        delete.connect_clicked(move |_| grid_delete(&st));
     }
     drop(tiles);
     grid_update_size_caption(state);

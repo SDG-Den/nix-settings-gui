@@ -137,11 +137,9 @@ pub(crate) fn drop_index(list: &gtk::ListBox, y: f64) -> i32 {
     index
 }
 
-/// Sweep every drop indicator out of `list`: separators the list holds
-/// directly and separator rows GTK wrapped around them. Tile rows are never
-/// matched (their child is the body box).
+/// Clear the drop marker classes from every row. The marker is a CSS border on
+/// the row itself, so it never inserts extra children into the list.
 pub(crate) fn hide_all_indicators(list: &gtk::ListBox) {
-    let mut stray: Vec<gtk::Widget> = Vec::new();
     let children = list.observe_children();
     for position in 0..children.n_items() {
         let Some(child) = children.item(position) else {
@@ -150,22 +148,28 @@ pub(crate) fn hide_all_indicators(list: &gtk::ListBox) {
         let Ok(widget) = child.downcast::<gtk::Widget>() else {
             continue;
         };
-        let wrapped_separator = widget
-            .downcast_ref::<gtk::ListBoxRow>()
-            .and_then(|row| row.child())
-            .is_some_and(|child| child.is::<gtk::Separator>());
-        if widget.is::<gtk::Separator>() || wrapped_separator {
-            stray.push(widget);
-        }
-    }
-    for widget in stray {
-        list.remove(&widget);
+        widget.remove_css_class("dms-drop-before");
+        widget.remove_css_class("dms-drop-after");
     }
 }
 
-pub(crate) fn show_indicator(list: &gtk::ListBox, indicator: &gtk::Separator, index: i32) {
+pub(crate) fn show_indicator(list: &gtk::ListBox, index: i32) {
     hide_all_indicators(list);
-    list.insert(indicator, index);
+    let children = list.observe_children();
+    if children.n_items() == 0 {
+        return;
+    }
+    let count = children.n_items() as i32;
+    let position = index.max(0);
+    if let Some(child) = children.item(position.min(count - 1) as u32) {
+        if let Ok(widget) = child.downcast::<gtk::Widget>() {
+            if position >= count {
+                widget.add_css_class("dms-drop-after");
+            } else {
+                widget.add_css_class("dms-drop-before");
+            }
+        }
+    }
 }
 
 /// Drop target on a tile list: a 2px separator tracks the pointer between
@@ -177,24 +181,18 @@ pub(crate) fn attach_tile_dnd(
     shared: Option<SharedBarSections>,
     on_change: &ChangeHook,
 ) {
-    let indicator = gtk::Separator::new(gtk::Orientation::Horizontal);
-    indicator.set_height_request(2);
     let drop = gtk::DropTarget::new(glib::Type::STRING, gtk::gdk::DragAction::MOVE);
     list.add_controller(drop.clone());
 
     let enter_list = list.clone();
-    let enter_indicator = indicator.clone();
     drop.connect_enter(move |_, _, y| {
-        hide_all_indicators(&enter_list);
-        show_indicator(&enter_list, &enter_indicator, drop_index(&enter_list, y));
+        show_indicator(&enter_list, drop_index(&enter_list, y));
         gtk::gdk::DragAction::MOVE
     });
 
     let motion_list = list.clone();
-    let motion_indicator = indicator.clone();
     drop.connect_motion(move |_, _, y| {
-        hide_all_indicators(&motion_list);
-        show_indicator(&motion_list, &motion_indicator, drop_index(&motion_list, y));
+        show_indicator(&motion_list, drop_index(&motion_list, y));
         gtk::gdk::DragAction::MOVE
     });
 
@@ -392,7 +390,11 @@ pub(crate) fn make_widget_tile(
     let grip = gtk::Image::from_icon_name("open-menu-symbolic");
     grip.add_css_class("dim-label");
     grip.set_tooltip_text(Some("Drag to reorder"));
-    body.append(&grip);
+    let grip_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    grip_box.set_size_request(24, 24);
+    grip_box.set_valign(gtk::Align::Center);
+    grip_box.append(&grip);
+    body.append(&grip_box);
 
     let icon_name = preset
         .as_ref()
@@ -426,33 +428,19 @@ pub(crate) fn make_widget_tile(
     body.append(&text);
 
     let enabled_state = Rc::new(Cell::new(enabled));
-    if !section.is_center() {
-        let toggle = gtk::Switch::new();
-        toggle.set_active(enabled);
-        toggle.set_valign(gtk::Align::Center);
-        toggle.set_tooltip_text(Some("Whether this widget is enabled."));
-        let state = enabled_state.clone();
-        let hook = on_change.clone();
-        toggle.connect_active_notify(move |toggle| {
-            state.set(toggle.is_active());
-            if let Some(cb) = hook.borrow().as_ref() {
-                cb();
-            }
-        });
-        body.append(&toggle);
-    }
 
     let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     spacer.set_hexpand(true);
     body.append(&spacer);
 
     if !section.is_center() {
-        let show_cog = match &preset {
-            Some(preset) => preset.has_settings || !fields.borrow().is_empty(),
-            None => orig_id.is_empty() || !fields.borrow().is_empty(),
-        };
+        let has_fields = !fields.borrow().is_empty();
+        let settings_declared = preset.as_ref().is_none_or(|preset| preset.has_settings);
+        let editable_unknown =
+            preset.is_none() && (ctx.advanced || known_widget_name(id).is_none());
+        let show_cog = (has_fields && settings_declared) || editable_unknown;
         if show_cog {
-            let cog = gtk::Button::from_icon_name("go-next-symbolic");
+            let cog = gtk::Button::from_icon_name("emblem-system-symbolic");
             cog.add_css_class("flat");
             cog.set_tooltip_text(Some("Widget settings"));
             body.append(&cog);
@@ -472,6 +460,23 @@ pub(crate) fn make_widget_tile(
             let for_cog = popover;
             cog.connect_clicked(move |_| for_cog.popup());
         }
+    }
+
+    if !section.is_center() {
+        let toggle = gtk::Switch::new();
+        toggle.set_active(enabled);
+        toggle.set_valign(gtk::Align::Center);
+        toggle.set_halign(gtk::Align::End);
+        toggle.set_tooltip_text(Some("Whether this widget is enabled."));
+        let state = enabled_state.clone();
+        let hook = on_change.clone();
+        toggle.connect_active_notify(move |toggle| {
+            state.set(toggle.is_active());
+            if let Some(cb) = hook.borrow().as_ref() {
+                cb();
+            }
+        });
+        body.append(&toggle);
     }
 
     for field in fields.borrow().iter() {
@@ -558,7 +563,8 @@ pub(crate) fn make_widget_tile(
 
     let drag = gtk::DragSource::new();
     drag.set_actions(gtk::gdk::DragAction::MOVE);
-    body.add_controller(drag.clone());
+    grip_box.set_cursor_from_name(Some("grab"));
+    grip_box.add_controller(drag.clone());
     let (drag_tiles, drag_row) = (tiles.clone(), row.clone());
     {
         let drag_source = drag_source.clone();

@@ -338,6 +338,13 @@ pub(crate) fn list_text(source: &str) -> String {
         .unwrap_or_default()
 }
 
+/// Whether a comma-separated entry still matches the Nix list source it was
+/// built from. The entry holds the display form, so the original must go
+/// through `list_text` before the two can be compared.
+pub(crate) fn csv_matches_list_source(text: &str, original: &str) -> bool {
+    csv_list(text) == csv_list(&list_text(original))
+}
+
 pub(crate) fn keybinds_nix(rows: &[KeybindRow]) -> String {
     let parts: Vec<String> = rows
         .iter()
@@ -492,6 +499,17 @@ mod tests {
         assert_eq!(list_text("[ \"SUPER\" \"SHIFT\" ]"), "SUPER, SHIFT");
         assert_eq!(list_text("[]"), "");
         assert_eq!(list_text("null"), "");
+    }
+
+    #[test]
+    fn compares_entries_to_list_sources() {
+        assert!(csv_matches_list_source(
+            "SUPER, SHIFT",
+            "[ \"SUPER\" \"SHIFT\" ]"
+        ));
+        assert!(csv_matches_list_source("", "[]"));
+        assert!(!csv_matches_list_source("SUPER", "[ \"SUPER\" \"SHIFT\" ]"));
+        assert!(!csv_matches_list_source("SUPER", "[]"));
     }
 
     #[test]

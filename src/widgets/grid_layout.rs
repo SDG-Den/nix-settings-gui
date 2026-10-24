@@ -16,6 +16,7 @@ pub(crate) const GRID_ROW_UNIT: i32 = 72;
 /// Placement priority used when a tile has no `_order` field.
 pub(crate) const GRID_DEFAULT_ORDER: i64 = 1000;
 /// One tile fed to `repack`: its desired cell (None = first fit) and size.
+#[derive(Clone)]
 pub(crate) struct TileInput {
     pub(crate) cell: Option<CellRect>,
     pub(crate) w: i64,
@@ -148,6 +149,60 @@ pub(crate) fn repack(
     }
     Some(cells)
 }
+
+/// Place a dragged tile at its target while the rest of the grid settles under
+/// it. Gravity normally pulls a dropped tile back toward the top, so try rows
+/// at and below the target and keep the one that lands nearest to it, matching
+/// DMS `dropInto` (GridLayout.js:200-224).
+pub(crate) fn drop_repack(
+    tiles: &[TileInput],
+    order: &[usize],
+    columns: i64,
+    max_rows: i64,
+    dragged: usize,
+    origin: CellRect,
+) -> Option<Vec<CellRect>> {
+    let target = tiles.get(dragged).and_then(|tile| tile.cell)?;
+    if cells_overlap(origin, target) {
+        return repack(tiles, order, columns, max_rows, true);
+    }
+    let limit = tiles
+        .iter()
+        .filter_map(|tile| tile.cell)
+        .map(|cell| cell.row + cell.h)
+        .max()
+        .unwrap_or(0)
+        + origin.h;
+    let mut best: Option<(i64, Vec<CellRect>)> = None;
+    let mut row = target.row;
+    while row <= limit {
+        let mut trial = tiles.to_vec();
+        trial[dragged].cell = Some(CellRect { row, ..target });
+        if let Some(cells) = repack(&trial, order, columns, max_rows, true) {
+            let landed = cells[dragged].row;
+            let distance = (landed - target.row).abs();
+            let better = match &best {
+                None => true,
+                Some((best_distance, _)) => {
+                    distance < *best_distance
+                        || (distance == *best_distance && landed >= target.row)
+                }
+            };
+            if better {
+                best = Some((distance, cells));
+            }
+            if landed >= target.row {
+                break;
+            }
+        }
+        row += 1;
+    }
+    match best {
+        Some((_, cells)) => Some(cells),
+        None => repack(tiles, order, columns, max_rows, true),
+    }
+}
+
 /// Serialize one tile's fields, placement and `_order`, keeping every field the
 /// tile had. `enabled` is written only for profiles that carry it.
 pub(crate) fn grid_tile_fields_nix(
@@ -214,6 +269,44 @@ mod tests {
         ];
         let cells = repack(&tiles, &[0, 1], 6, 64, false).unwrap();
         assert_eq!(cells[1], rect(3, 0, 1, 1));
+    }
+
+    #[test]
+    fn drop_repack_pushes_the_occupant_down() {
+        let tiles = vec![
+            TileInput {
+                cell: Some(rect(2, 0, 2, 1)),
+                w: 2,
+                h: 1,
+            },
+            TileInput {
+                cell: Some(rect(2, 0, 2, 1)),
+                w: 2,
+                h: 1,
+            },
+        ];
+        let cells = drop_repack(&tiles, &[0, 1], 4, 64, 0, rect(0, 0, 2, 1)).unwrap();
+        assert_eq!(cells[0], rect(2, 0, 2, 1));
+        assert_eq!(cells[1], rect(2, 1, 2, 1));
+    }
+
+    #[test]
+    fn drop_repack_compensates_for_gravity() {
+        let tiles = vec![
+            TileInput {
+                cell: Some(rect(0, 1, 1, 1)),
+                w: 1,
+                h: 1,
+            },
+            TileInput {
+                cell: Some(rect(0, 1, 1, 1)),
+                w: 1,
+                h: 1,
+            },
+        ];
+        let cells = drop_repack(&tiles, &[0, 1], 4, 64, 0, rect(0, 0, 1, 1)).unwrap();
+        assert_eq!(cells[0], rect(0, 1, 1, 1));
+        assert_eq!(cells[1], rect(0, 0, 1, 1));
     }
 
     #[test]
