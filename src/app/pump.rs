@@ -11,7 +11,7 @@ use super::dialogs::fill_suggestions;
 use super::enrich::apply_infos;
 use super::git::commit_message_dialog;
 use super::menu::rebuild_view;
-use super::save::{clear_busy, collect_edits, run_rebuild, set_busy};
+use super::save::{clear_busy, collect_edits, rescan, run_rebuild, scan_finished, set_busy};
 use super::state::{App, Msg, Tx};
 
 // ---------------------------------------------------------------------------
@@ -43,11 +43,7 @@ fn watch_files(app: &Rc<App>) {
         let handler_app = app.clone();
         monitor.connect_changed(move |_, _, _, _| {
             if collect_edits(&handler_app).is_empty() {
-                let base = handler_app.base.borrow().clone();
-                spawn(&handler_app.tx, move |tx| {
-                    let result = scan::scan_root(&base);
-                    let _ = tx.send_blocking(Msg::Scanned(result));
-                });
+                rescan(&handler_app, &handler_app.tx);
             } else {
                 handler_app
                     .status
@@ -117,26 +113,24 @@ pub(super) fn handle_msg(app: &Rc<App>, tx: &Tx, msg: Msg) {
             watch_files(app);
             app.status.set_text("Ready");
             rebuild_view(app);
+            scan_finished(app);
         }
         Msg::Scanned(Err(e)) => {
             app.status.set_text("Scan failed");
             show_error(&app.window, &e);
+            scan_finished(app);
         }
         Msg::SaveProgress(fraction, label) => {
             set_busy(app, &label, fraction);
         }
         Msg::Saved(Ok(count)) => {
-            clear_busy(app);
             app.status.set_text(&format!("Saved {count} file(s)"));
             let pending = app.pending_rebuild.replace(false);
-            let base = app.base.borrow().clone();
-            spawn(tx, move |tx| {
-                let result = scan::scan_root(&base);
-                let _ = tx.send_blocking(Msg::Scanned(result));
-            });
             if pending {
                 run_rebuild(app);
             }
+            rescan(app, tx);
+            clear_busy(app);
         }
         Msg::Saved(Err(e)) => {
             clear_busy(app);
@@ -152,11 +146,7 @@ pub(super) fn handle_msg(app: &Rc<App>, tx: &Tx, msg: Msg) {
         }
         Msg::Inserted(Ok(())) => {
             app.status.set_text("Option added");
-            let base = app.base.borrow().clone();
-            spawn(tx, move |tx| {
-                let result = scan::scan_root(&base);
-                let _ = tx.send_blocking(Msg::Scanned(result));
-            });
+            rescan(app, tx);
         }
         Msg::Inserted(Err(e)) => {
             app.status.set_text("Add option failed");
@@ -164,11 +154,7 @@ pub(super) fn handle_msg(app: &Rc<App>, tx: &Tx, msg: Msg) {
         }
         Msg::SnippetInserted(Ok(())) => {
             app.status.set_text("Snippet added");
-            let base = app.base.borrow().clone();
-            spawn(tx, move |tx| {
-                let result = scan::scan_root(&base);
-                let _ = tx.send_blocking(Msg::Scanned(result));
-            });
+            rescan(app, tx);
         }
         Msg::SnippetInserted(Err(e)) => {
             app.status.set_text("Add snippet failed");

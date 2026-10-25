@@ -3,12 +3,11 @@ use std::rc::Rc;
 use gtk::prelude::*;
 
 use crate::model::MenuModel;
-use crate::scan;
 
 use super::controls::{build_control_row, control_cmp, evaluate_dependencies};
 use super::dialogs::{open_add_option, open_snippet_dialog};
-use super::pump::spawn;
-use super::state::{App, ControlRow, InsertButton, MenuPage, Msg, Tx};
+use super::save::rescan;
+use super::state::{App, ControlRow, InsertButton, MenuPage, Tx};
 
 // ---------------------------------------------------------------------------
 // scan and view
@@ -19,13 +18,8 @@ pub(super) fn open_flake(app: &Rc<App>, tx: &Tx, path: &str) {
     app.plugin_registry.reset();
     app.config.borrow_mut().remember(path);
     let _ = app.config.borrow().save();
-    app.status.set_text(&format!("Scanning {path}..."));
     crate::nixd::warm(Some(path));
-    let path = path.to_string();
-    spawn(tx, move |tx| {
-        let result = scan::scan_root(&path);
-        let _ = tx.send_blocking(Msg::Scanned(result));
-    });
+    rescan(app, tx);
 }
 
 pub(super) fn rebuild_view(app: &Rc<App>) {

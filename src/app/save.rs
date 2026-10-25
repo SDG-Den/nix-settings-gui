@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use gtk::glib;
 use gtk::prelude::*;
 
 use crate::edit;
@@ -103,8 +104,39 @@ pub(super) fn save_all(app: &Rc<App>, tx: &Tx, rebuild: bool) {
     app.pending_rebuild.set(rebuild);
 }
 
+/// Show the field overlay while any save or scan is in flight.
+fn refresh_field_overlay(app: &Rc<App>) {
+    let visible = app.saving.get() || app.scans_in_flight.get() > 0;
+    app.field_scrim.set_visible(visible);
+    if visible {
+        app.field_spinner.start();
+    } else {
+        app.field_spinner.stop();
+    }
+}
+
+/// Record whether a save is in flight and refresh the field overlay.
+pub(super) fn set_saving(app: &Rc<App>, saving: bool) {
+    app.saving.set(saving);
+    refresh_field_overlay(app);
+}
+
+/// Record that a scan started and refresh the field overlay.
+fn scan_started(app: &Rc<App>) {
+    app.scans_in_flight.set(app.scans_in_flight.get() + 1);
+    refresh_field_overlay(app);
+}
+
+/// Record that a scan finished and refresh the field overlay.
+pub(super) fn scan_finished(app: &Rc<App>) {
+    app.scans_in_flight
+        .set(app.scans_in_flight.get().saturating_sub(1));
+    refresh_field_overlay(app);
+}
+
 /// Show the busy indicators (spinner and progress bar) with a status message.
 pub(super) fn set_busy(app: &Rc<App>, message: &str, fraction: f64) {
+    set_saving(app, true);
     app.spinner.set_visible(true);
     app.spinner.start();
     app.progress.set_visible(true);
@@ -114,6 +146,7 @@ pub(super) fn set_busy(app: &Rc<App>, message: &str, fraction: f64) {
 
 /// Hide the busy indicators once a long-running task finishes.
 pub(super) fn clear_busy(app: &Rc<App>) {
+    set_saving(app, false);
     app.spinner.stop();
     app.spinner.set_visible(false);
     app.progress.set_visible(false);
@@ -159,38 +192,70 @@ pub(super) fn run_changes_prompt(app: &Rc<App>, on_save: Box<dyn Fn()>) {
         .margin_start(12)
         .margin_end(12)
         .build();
-    dialog.content_area().append(&message);
+
+    let spinner = gtk::Spinner::new();
+    spinner.set_visible(false);
+    spinner.set_halign(gtk::Align::Center);
+    spinner.set_margin_bottom(12);
+
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    content.append(&message);
+    content.append(&spinner);
+    dialog.content_area().append(&content);
 
     let on_save: Rc<dyn Fn()> = Rc::from(on_save);
     let state = app.clone();
-    dialog.connect_response(move |dialog, response| {
-        match changes_action(response) {
-            ChangesAction::Save => {
-                let edits = collect_edits(&state);
-                let root = state.base.borrow().clone();
-                match edit::apply(&edits, &root) {
-                    Ok(count) => {
+    dialog.connect_response(move |dialog, response| match changes_action(response) {
+        ChangesAction::Save => {
+            dialog.set_response_sensitive(gtk::ResponseType::Yes, false);
+            dialog.set_response_sensitive(gtk::ResponseType::No, false);
+            dialog.set_response_sensitive(gtk::ResponseType::Cancel, false);
+            dialog.set_deletable(false);
+            spinner.set_visible(true);
+            spinner.start();
+            set_saving(&state, true);
+
+            let edits = collect_edits(&state);
+            let root = state.base.borrow().clone();
+            let (done_tx, done_rx) = async_channel::bounded(1);
+            spawn(&state.tx, move |_| {
+                let _ = done_tx.send_blocking(edit::apply(&edits, &root));
+            });
+
+            let dialog = dialog.clone();
+            let spinner = spinner.clone();
+            let state = state.clone();
+            let on_save = on_save.clone();
+            glib::MainContext::default().spawn_local(async move {
+                let result = done_rx.recv().await;
+                spinner.stop();
+                spinner.set_visible(false);
+                set_saving(&state, false);
+                match result {
+                    Ok(Ok(count)) => {
                         state.status.set_text(&format!("Saved {count} file(s)"));
-                        let base = state.base.borrow().clone();
-                        spawn(&state.tx, move |tx| {
-                            let result = scan::scan_root(&base);
-                            let _ = tx.send_blocking(Msg::Scanned(result));
-                        });
+                        dialog.close();
                         on_save();
                     }
-                    Err(e) => {
+                    Ok(Err(error)) => {
                         state.status.set_text("Save failed");
-                        show_error(&state.window, &e);
+                        show_error(&state.window, &error);
+                        dialog.close();
+                    }
+                    Err(_) => {
+                        state.status.set_text("Save failed");
+                        show_error(&state.window, "Save worker stopped unexpectedly");
+                        dialog.close();
                     }
                 }
-            }
-            ChangesAction::Discard => {
-                discard_changes(&state);
-                on_save();
-            }
-            ChangesAction::Cancel => {}
+            });
         }
-        dialog.close();
+        ChangesAction::Discard => {
+            discard_changes(&state);
+            on_save();
+            dialog.close();
+        }
+        ChangesAction::Cancel => dialog.close(),
     });
     dialog.present();
 }
@@ -212,9 +277,10 @@ pub(super) fn reload(app: &Rc<App>, tx: &Tx) {
 }
 
 /// Re-read every file under the current root, exactly like `open_flake`.
-fn rescan(app: &Rc<App>, tx: &Tx) {
+pub(super) fn rescan(app: &Rc<App>, tx: &Tx) {
     let base = app.base.borrow().clone();
-    app.status.set_text("Scanning...");
+    app.status.set_text("reloading from disk...");
+    scan_started(app);
     spawn(tx, move |tx| {
         let result = scan::scan_root(&base);
         let _ = tx.send_blocking(Msg::Scanned(result));

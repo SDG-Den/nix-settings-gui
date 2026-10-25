@@ -54,7 +54,9 @@ fn build_ui(app: &adw::Application, tx: &Tx) -> Rc<App> {
     let provider = gtk::CssProvider::new();
     provider.load_from_data(
         ".search-hit { outline: 2px solid @accent_color; border-radius: 6px; }\n\
-         .group-header { color: @accent_color; font-weight: 700; }",
+         .group-header { color: @accent_color; font-weight: 700; }\n\
+         .busy-scrim { background-color: rgba(0, 0, 0, 0.45); }\n\
+         .busy-spinner { color: white; }",
     );
     if let Some(display) = gtk::gdk::Display::default() {
         gtk::style_context_add_provider_for_display(
@@ -119,8 +121,28 @@ fn build_ui(app: &adw::Application, tx: &Tx) -> Rc<App> {
     let nixd_banner = adw::Banner::new("");
     nixd_banner.set_revealed(false);
 
+    let field_spinner = gtk::Spinner::new();
+    field_spinner.set_halign(gtk::Align::Center);
+    field_spinner.set_valign(gtk::Align::Center);
+    field_spinner.set_hexpand(true);
+    field_spinner.set_vexpand(true);
+    field_spinner.add_css_class("busy-spinner");
+
+    let field_scrim = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    field_scrim.set_halign(gtk::Align::Fill);
+    field_scrim.set_valign(gtk::Align::Fill);
+    field_scrim.set_hexpand(true);
+    field_scrim.set_vexpand(true);
+    field_scrim.set_visible(false);
+    field_scrim.add_css_class("busy-scrim");
+    field_scrim.append(&field_spinner);
+
+    let content_overlay = gtk::Overlay::new();
+    content_overlay.set_child(Some(&stack));
+    content_overlay.add_overlay(&field_scrim);
+
     let content_pane = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    content_pane.append(&stack);
+    content_pane.append(&content_overlay);
     content_pane.append(&nixd_banner);
 
     let paned = gtk::Paned::new(gtk::Orientation::Horizontal);
@@ -264,6 +286,10 @@ fn build_ui(app: &adw::Application, tx: &Tx) -> Rc<App> {
         spinner,
         apply_spinner,
         progress,
+        field_scrim,
+        field_spinner,
+        saving: Cell::new(false),
+        scans_in_flight: Cell::new(0),
         package_service: PackageService::new(),
         plugin_registry: Rc::new(PluginRegistryState::new()),
         apply_state: ApplyState::new(),
