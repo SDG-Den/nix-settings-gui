@@ -111,6 +111,7 @@ pub(super) fn build_context(app: &Rc<App>) -> widgets::BuildContext {
     ctx.hm_modules.sort();
     ctx.search = Some(package_search(app));
     ctx.plugin_registry = Some(plugin_registry_hook(app));
+    ctx.plugin_settings = Some(plugin_settings_hook(app));
     ctx.apply = Some(apply_hook(app));
     ctx.base = app.base.borrow().clone();
     ctx.wallpaper = Some(super::wallpaper::actions(app));
@@ -162,6 +163,48 @@ fn plugin_registry_hook(app: &Rc<App>) -> widgets::PluginRegistryHook {
             let _ = tx.send_blocking(Msg::PluginRegistry { epoch, result });
         });
     })
+}
+
+/// Plugin settings hook: serve a cached QML file, or queue one worker-thread
+/// evaluation of only the requested registry plugin.
+fn plugin_settings_hook(app: &Rc<App>) -> widgets::PluginSettingsHook {
+    let state = app.plugin_registry.clone();
+    let tx = app.tx.clone();
+    let base = app.base.borrow().clone();
+    Rc::new(
+        move |id: String, done: Box<dyn FnOnce(Result<Option<String>, String>)>| {
+            if let Some(cached) = state.settings.borrow().get(&id).cloned() {
+                done(cached);
+                return;
+            }
+            state
+                .settings_pending
+                .borrow_mut()
+                .entry(id.clone())
+                .or_default()
+                .push(done);
+            if state
+                .settings_loading
+                .borrow_mut()
+                .insert(id.clone(), ())
+                .is_some()
+            {
+                return;
+            }
+            let tx = tx.clone();
+            let base = base.clone();
+            let epoch = state.epoch.get();
+            let plugin_id = id.clone();
+            std::thread::spawn(move || {
+                let result = crate::metadata::dms_plugin_settings(&base, &plugin_id);
+                let _ = tx.send_blocking(Msg::PluginSettings {
+                    epoch,
+                    id: plugin_id,
+                    result,
+                });
+            });
+        },
+    )
 }
 
 fn push_unique(list: &mut Vec<String>, name: &str) {

@@ -74,12 +74,15 @@ the `nixd` JSON-RPC client, and the span-patch plus `nixfmt` write path.
   `FlowBox` that wraps to an equal grid, capped by `maxColumns`; each child's
   description uses the same collapsed details row.
 - `expand_details_by_default` in the config file opens every details row
-  initially. The "Expand setting details" preference toggles it at runtime.
+  initially. The "Expand setting details" preference toggles it at runtime. A
+  collapsed details row is hidden entirely, so it takes no vertical space.
 - Tables (`table-attrset`, `table-list`) render one row per set, one cell per
   `columns` entry, typed by value (switch/spin/text), with built-in add and
-  remove. An `icon` column shows a preview and an "Add icon" button that copies
-  the image into `iconDir` and stages it with git. A `@table-item` comment above
-  a row sets its `label`, `hidden`, and `visibleWhen`.
+  remove. Cells stay vertically centered, so a switch keeps its normal height
+  in a row made tall by an icon preview. An `icon` column shows a preview and an
+  "Add icon" button that copies the image into `iconDir` and stages it with git.
+  A `@table-item` comment above a row sets its `label`, `hidden`, and
+  `visibleWhen`.
 - `advanced` controls collapse into an "Advanced" section; `hidden` controls
   render only while the Advanced toggle is on, including inside submodules.
 - A control with `visibleWhen` renders only while another option in the same
@@ -163,7 +166,12 @@ can be resolved. The special name `"all"` in a `systems` list matches every host
 Bespoke controls (`keybinds`, `monitors`, `theme`, `wallpaper`, `menu`, `plugins`,
 `bar`, `dock`) render a configuration-specific UI for a single option, with
 their own add, remove, and reorder actions. Their field shapes are hard-coded in the
-application; the configuration only names the widget through `@option`.
+application; the configuration only names the widget through `@option`. The
+`plugins` control also reads a newly added plugin's settings QML from the DMS
+registry and renders its declarative `ToggleSetting`, `StringSetting`,
+`SliderSetting`, `SelectionSetting`, `ColorSetting`, and list controls.
+Defaults are shown without being written until changed; plugins with custom QML
+keep their existing configuration fields.
 
 Bar and dock editors load disabled entries and show an enable switch on each
 row. Bar sections support moving a widget between left, center, and right by

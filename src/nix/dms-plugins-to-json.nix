@@ -52,6 +52,7 @@
     description = meta.description or null;
     category = meta.category or null;
     repo = meta.repo or null;
+    settings = meta.settings or null;
   };
 in {
   plugins = builtins.map entryFor ids;

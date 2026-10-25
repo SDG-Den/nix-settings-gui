@@ -4,8 +4,9 @@ use std::rc::Rc;
 
 use gtk::prelude::*;
 
-use crate::dsl::OptionSpec;
+use crate::dsl::{OptionSpec, WidgetKind};
 use crate::model::Record;
+use crate::plugin_schema::{parse_settings, SchemaField, SchemaKind};
 use crate::value;
 use crate::widgets::{
     attr_key, build_bespoke_child, build_entry, build_spin, build_switch, hook_notify,
@@ -25,11 +26,21 @@ struct PluginRow {
     enable: Editor,
     enable_orig: String,
     enable_present: bool,
-    children: Vec<(Record, Editor)>,
+    children: Vec<PluginChild>,
+    trailing: gtk::Box,
     #[allow(dead_code)]
     settings: Option<(gtk::MenuButton, gtk::Popover)>,
     row_box: gtk::Box,
     remove: gtk::Button,
+}
+
+/// One setting of a plugin row. `present` is false for a control synthesized
+/// from the plugin's QML defaults, so an untouched default is not written.
+#[derive(Clone)]
+struct PluginChild {
+    record: Record,
+    editor: Editor,
+    present: bool,
 }
 
 /// The rows of a `plugins` editor, shared by construction and wiring.
@@ -241,7 +252,7 @@ impl PluginList {
                 && row
                     .children
                     .iter()
-                    .all(|(record, editor)| editor.unchanged(&record.value))
+                    .all(|child| child.editor.unchanged(&child.record.value))
         })
     }
 
@@ -482,11 +493,14 @@ fn plugins_nix(rows: &[PluginRow]) -> String {
             if row.enable_present || enabled {
                 fields.push(format!("enable = {};", row.enable.to_nix()));
             }
-            for (record, editor) in &row.children {
+            for child in &row.children {
+                if !child.present && child.editor.unchanged(&child.record.value) {
+                    continue;
+                }
                 fields.push(format!(
                     "{} = {};",
-                    plugin_path_nix(record),
-                    editor.to_nix()
+                    plugin_path_nix(&child.record),
+                    child.editor.to_nix()
                 ));
             }
             format!(
@@ -503,8 +517,8 @@ fn connect_plugin_row(row: &PluginRow, update: &Rc<dyn Fn()>) {
     let update_key = update.clone();
     row.key.connect_changed(move |_| update_key());
     row.enable.connect_changed(update);
-    for (_, editor) in &row.children {
-        editor.connect_changed(update);
+    for child in &row.children {
+        child.editor.connect_changed(update);
     }
 }
 
@@ -589,11 +603,90 @@ fn build_plugin_setting_row(id: &str, record: &Record, editor: &Editor) -> gtk::
     cell.upcast()
 }
 
+/// Merge the settings leaves already present in configuration with the
+/// declarative fields read from the plugin's QML. Configured values win; a
+/// QML default fills gaps and is marked absent until the user changes it.
+fn plugin_children(
+    id: &str,
+    leaves: &[Record],
+    schema: &[SchemaField],
+    ctx: &BuildContext,
+) -> Vec<PluginChild> {
+    let mut children = Vec::new();
+    let mut used = vec![false; leaves.len()];
+    for field in schema {
+        let segments = vec!["settings".to_string(), field.key.clone()];
+        if let Some(index) = leaves.iter().position(|leaf| leaf.segments == segments) {
+            used[index] = true;
+            let record = leaves[index].clone();
+            children.push(PluginChild {
+                editor: build_plugin_child(id, &record, ctx),
+                record,
+                present: true,
+            });
+        } else {
+            let record = schema_record(field);
+            children.push(PluginChild {
+                editor: build_plugin_child(id, &record, ctx),
+                record,
+                present: false,
+            });
+        }
+    }
+    for (index, leaf) in leaves.iter().enumerate() {
+        if used[index] || leaf.segments.as_slice() == ["enable"] {
+            continue;
+        }
+        children.push(PluginChild {
+            editor: build_plugin_child(id, leaf, ctx),
+            record: leaf.clone(),
+            present: true,
+        });
+    }
+    children
+}
+
+fn schema_record(field: &SchemaField) -> Record {
+    let (widget, choices) = match &field.kind {
+        SchemaKind::Bool => (WidgetKind::Switch, None),
+        SchemaKind::Int => (WidgetKind::Spin, None),
+        SchemaKind::Float => (WidgetKind::Spin, None),
+        SchemaKind::Text => (WidgetKind::Text, None),
+        SchemaKind::Dropdown(values) => (WidgetKind::Dropdown, Some(values.clone())),
+        SchemaKind::Color => (WidgetKind::Color, None),
+        SchemaKind::Raw => (WidgetKind::Raw, None),
+    };
+    let label = (!field.label.is_empty()).then(|| field.label.clone());
+    let description = (!field.description.is_empty()).then(|| field.description.clone());
+    let spec = OptionSpec {
+        widget: Some(widget),
+        label,
+        description,
+        choices,
+        min: field
+            .minimum
+            .as_deref()
+            .and_then(|value| value.parse().ok()),
+        max: field
+            .maximum
+            .as_deref()
+            .and_then(|value| value.parse().ok()),
+        digits: (field.kind == SchemaKind::Float).then_some(2),
+        ..OptionSpec::default()
+    };
+    Record {
+        segments: vec!["settings".to_string(), field.key.clone()],
+        value: field.default.clone(),
+        spec,
+        ..Record::default()
+    }
+}
+
 /// The settings of one plugin behind a cog pop-out, hidden fields dropped
 /// while Advanced is off.
 fn plugin_settings_popover(
     id: &str,
-    children: &[(Record, Editor)],
+    children: &[PluginChild],
     ctx: &BuildContext,
 ) -> (gtk::MenuButton, gtk::Popover) {
     let detail = gtk::Box::new(gtk::Orientation::Vertical, 8);
@@ -619,11 +712,11 @@ fn plugin_settings_popover(
     detail.append(&caption);
     detail.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
 
-    for (record, editor) in children {
-        if record.spec.hidden && !ctx.advanced {
+    for child in children {
+        if child.record.spec.hidden && !ctx.advanced {
             continue;
         }
-        detail.append(&build_plugin_setting_row(id, record, editor));
+        detail.append(&build_plugin_setting_row(id, &child.record, &child.editor));
     }
 
     let popover = gtk::Popover::builder().child(&detail).build();
@@ -641,11 +734,7 @@ fn plugin_settings_popover(
 /// and the structural handles.
 fn make_plugin_row(id: &str, leaves: &[Record], ctx: &BuildContext) -> PluginRow {
     let (enable, enable_orig, enable_present) = plugin_enable(id, leaves);
-    let children: Vec<(Record, Editor)> = leaves
-        .iter()
-        .filter(|field| field.segments.as_slice() != ["enable"])
-        .map(|field| (field.clone(), build_plugin_child(id, field, ctx)))
-        .collect();
+    let children = plugin_children(id, leaves, &[], ctx);
 
     let row_box = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     row_box.set_hexpand(true);
@@ -697,9 +786,25 @@ fn make_plugin_row(id: &str, leaves: &[Record], ctx: &BuildContext) -> PluginRow
         enable_orig,
         enable_present,
         children,
+        trailing,
         settings,
         row_box,
         remove,
+    }
+}
+
+impl PluginRow {
+    /// Rebuild the settings popover after schema fields arrive asynchronously.
+    fn refresh_settings(&mut self, id: &str, ctx: &BuildContext) {
+        if let Some((cog, _)) = self.settings.take() {
+            self.trailing.remove(&cog);
+        }
+        if self.children.is_empty() {
+            return;
+        }
+        let (cog, popover) = plugin_settings_popover(id, &self.children, ctx);
+        self.trailing.prepend(&cog);
+        self.settings = Some((cog, popover));
     }
 }
 
@@ -763,6 +868,45 @@ fn scaffold_plugin_row(
     if let Some(cb) = on_change.borrow().as_ref() {
         cb();
     }
+    let Some(fetch) = ctx.plugin_settings.clone() else {
+        return;
+    };
+    let id = id.to_string();
+    let rows = rows.clone();
+    let ctx = ctx.clone();
+    let picker = picker.clone();
+    let on_change = on_change.clone();
+    fetch(
+        id.clone(),
+        Box::new(move |result| {
+            let Ok(Some(qml)) = result else {
+                return;
+            };
+            let schema = parse_settings(&qml);
+            if schema.is_empty() {
+                return;
+            }
+            let children = plugin_children(&id, &[], &schema, &ctx);
+            if children.is_empty() {
+                return;
+            }
+            let mut borrowed = rows.borrow_mut();
+            let Some(row) = borrowed.iter_mut().find(|row| row.key.text() == id) else {
+                return;
+            };
+            row.children = children;
+            let hook = hook_notify(&on_change);
+            for child in &row.children {
+                child.editor.connect_changed(&hook);
+            }
+            row.refresh_settings(&id, &ctx);
+            drop(borrowed);
+            picker.refresh();
+            if let Some(cb) = on_change.borrow().as_ref() {
+                cb();
+            }
+        }),
+    );
 }
 
 /// The dropdown label for an id: the fetched registry name wins, then the
@@ -934,6 +1078,7 @@ mod tests {
                 description: None,
                 category: None,
                 repo: None,
+                settings: None,
             },
             crate::metadata::RegistryPlugin {
                 id: "aPlugin".into(),
@@ -941,6 +1086,7 @@ mod tests {
                 description: None,
                 category: None,
                 repo: None,
+                settings: None,
             },
         ];
         apply_registry_source(&mut source, &mut names, &plugins);
@@ -1064,5 +1210,46 @@ mod tests {
             editor.to_nix(),
             "{ nixMonitor = { enable = true; settings.showStoreSize = true; }; }"
         );
+    }
+
+    #[test]
+    #[ignore = "needs a display; run with `cargo test -- --ignored`"]
+    fn resolved_settings_defaults_are_omitted_until_changed() {
+        if gtk::init().is_err() {
+            eprintln!("skipping resolved settings check: no display");
+            return;
+        }
+        let qml = r#"
+            PluginSettings {
+                ToggleSetting {
+                    settingKey: "showChevron"
+                    label: "Show chevron"
+                    defaultValue: true
+                }
+                StringSetting {
+                    settingKey: "label"
+                    label: "Button label"
+                    defaultValue: ""
+                }
+            }
+        "#;
+        let schema = parse_settings(qml);
+        let ctx = BuildContext::default();
+        let mut row = make_plugin_row("barDropdown", &[], &ctx);
+        row.children = plugin_children("barDropdown", &[], &schema, &ctx);
+        assert_eq!(row.children.len(), 2);
+        assert!(row.children.iter().all(|child| !child.present));
+        assert_eq!(plugins_nix(&[row.clone()]), "{ barDropdown = {  }; }");
+
+        let Editor::Switch(switch) = &row.children[0].editor else {
+            panic!("the first setting should be a switch");
+        };
+        switch.set_active(false);
+        let written = plugins_nix(&[row]);
+        assert!(
+            written.contains("settings.showChevron = false;"),
+            "{written}"
+        );
+        assert!(!written.contains("settings.label"), "{written}");
     }
 }

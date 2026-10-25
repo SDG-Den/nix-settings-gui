@@ -41,6 +41,10 @@ pub type PackageSearch = Rc<dyn Fn(String, Box<dyn FnOnce(Vec<String>)>)>;
 pub type PluginRegistryHook =
     Rc<dyn Fn(Box<dyn FnOnce(Result<Vec<crate::metadata::RegistryPlugin>, String>)>)>;
 
+/// Fetches one DMS plugin's declarative settings QML and hands it back on the
+/// main thread. `None` means the plugin ships no settings file.
+pub type PluginSettingsHook = Rc<dyn Fn(String, Box<dyn FnOnce(Result<Option<String>, String>)>)>;
+
 /// Runs the apply command of an option the user changed. Supplied by the app
 /// so the widgets stay free of process handling.
 pub type ApplyHook = Rc<dyn Fn(ApplyRequest)>;
@@ -87,6 +91,8 @@ pub struct BuildContext {
     pub search: Option<PackageSearch>,
     /// Fetches the DMS plugin registry ids for the plugins picker.
     pub plugin_registry: Option<PluginRegistryHook>,
+    /// Fetches one plugin's declarative settings QML.
+    pub plugin_settings: Option<PluginSettingsHook>,
     /// Runs the apply command of an option that carries one.
     pub apply: Option<ApplyHook>,
     /// The flake root, used by widgets that resolve repository paths.

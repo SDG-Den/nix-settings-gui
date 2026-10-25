@@ -196,6 +196,28 @@ pub(super) fn handle_msg(app: &Rc<App>, tx: &Tx, msg: Msg) {
                 }
             }
         }
+        Msg::PluginSettings { epoch, id, result } => {
+            if epoch != app.plugin_registry.epoch.get() {
+                return;
+            }
+            app.plugin_registry
+                .settings_loading
+                .borrow_mut()
+                .remove(&id);
+            app.plugin_registry
+                .settings
+                .borrow_mut()
+                .insert(id.clone(), result.clone());
+            let pending = app
+                .plugin_registry
+                .settings_pending
+                .borrow_mut()
+                .remove(&id)
+                .unwrap_or_default();
+            for callback in pending {
+                callback(result.clone());
+            }
+        }
         Msg::GitPulled(Ok(true)) => commit_message_dialog(app, tx),
         Msg::GitPulled(Ok(false)) => app.status.set_text("Git: already up to date"),
         Msg::GitPulled(Err(e)) => {

@@ -74,6 +74,9 @@ fn table_grid_aligns_columns_and_reindexes_on_remove() {
             &["bool", "str"],
         );
     let (editor, grid) = table_grid(&record);
+    let root = editor.root().downcast::<gtk::Box>().unwrap();
+    assert_eq!(root.halign(), gtk::Align::Fill);
+    assert_eq!(grid.halign(), gtk::Align::Fill);
 
     // Header captions sit on the same grid columns as every row's cells.
     let cells = grid_cells(&grid);
@@ -104,6 +107,11 @@ fn table_grid_aligns_columns_and_reindexes_on_remove() {
         .unwrap();
     assert!(enabled.is_active());
     assert!(!enabled.hexpands());
+    assert_eq!(
+        enabled.valign(),
+        gtk::Align::Center,
+        "switches keep their normal height in a row sized by the icon"
+    );
     let disabled = grid_child(&grid, 1, 2)
         .unwrap()
         .downcast::<gtk::Switch>()
@@ -186,6 +194,34 @@ fn table_grid_aligns_columns_and_reindexes_on_remove() {
         .unwrap()
         .downcast::<gtk::Switch>()
         .is_ok());
+}
+
+#[test]
+#[ignore = "needs a display; run with `cargo test -- --ignored`"]
+fn table_grid_fills_the_available_width() {
+    if gtk::init().is_err() {
+        eprintln!("skipping table width check: no display");
+        return;
+    }
+    let record = table_record(
+        "{ youtube = { enable = true; name = \"YouTube\"; url = \"https://www.youtube.com\"; icon = null; }; }",
+        &["enable", "name", "url", "icon"],
+        &["bool", "str", "str", "icon"],
+    );
+    let (editor, grid) = table_grid(&record);
+    let window = gtk::Window::new();
+    window.set_default_size(900, 240);
+    window.set_child(Some(&editor.root()));
+    window.present();
+    let context = gtk::glib::MainContext::default();
+    while context.iteration(false) {}
+    let grid_width = grid.width();
+    let root_width = editor.root().width();
+    assert!(
+        grid_width >= root_width - 20,
+        "grid {grid_width} should fill root {root_width}"
+    );
+    window.close();
 }
 
 #[test]

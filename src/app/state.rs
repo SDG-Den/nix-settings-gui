@@ -27,6 +27,11 @@ pub(super) enum Msg {
         epoch: u64,
         result: Result<Vec<crate::metadata::RegistryPlugin>, String>,
     },
+    PluginSettings {
+        epoch: u64,
+        id: String,
+        result: Result<Option<String>, String>,
+    },
     Invalid(Vec<String>),
     GitPulled(Result<bool, String>),
     GitSynced(Result<String, String>),
@@ -142,13 +147,18 @@ impl PackageService {
     }
 }
 
+type RegistryCallback = Box<dyn FnOnce(Result<Vec<crate::metadata::RegistryPlugin>, String>)>;
+type PluginSettingsCallback = Box<dyn FnOnce(Result<Option<String>, String>)>;
+
 /// The DMS plugin registry id list, fetched at most once per flake open.
 /// `pending` holds picker callbacks waiting on an in-flight fetch.
 pub(super) struct PluginRegistryState {
     pub(super) cache: RefCell<Option<Vec<crate::metadata::RegistryPlugin>>>,
-    pub(super) pending:
-        RefCell<Vec<Box<dyn FnOnce(Result<Vec<crate::metadata::RegistryPlugin>, String>)>>>,
+    pub(super) pending: RefCell<Vec<RegistryCallback>>,
     pub(super) loading: Cell<bool>,
+    pub(super) settings: RefCell<HashMap<String, Result<Option<String>, String>>>,
+    pub(super) settings_pending: RefCell<HashMap<String, Vec<PluginSettingsCallback>>>,
+    pub(super) settings_loading: RefCell<HashMap<String, ()>>,
     pub(super) epoch: Cell<u64>,
 }
 
@@ -158,6 +168,9 @@ impl PluginRegistryState {
             cache: RefCell::new(None),
             pending: RefCell::new(Vec::new()),
             loading: Cell::new(false),
+            settings: RefCell::new(HashMap::new()),
+            settings_pending: RefCell::new(HashMap::new()),
+            settings_loading: RefCell::new(HashMap::new()),
             epoch: Cell::new(0),
         }
     }
@@ -168,6 +181,9 @@ impl PluginRegistryState {
         *self.cache.borrow_mut() = None;
         self.pending.borrow_mut().clear();
         self.loading.set(false);
+        self.settings.borrow_mut().clear();
+        self.settings_pending.borrow_mut().clear();
+        self.settings_loading.borrow_mut().clear();
     }
 }
 

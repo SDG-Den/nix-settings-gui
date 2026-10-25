@@ -57,7 +57,7 @@ impl InfoDetails {
         content.append(&origin_label);
 
         let revealer = gtk::Revealer::new();
-        revealer.set_transition_type(gtk::RevealerTransitionType::SlideRight);
+        revealer.set_transition_type(gtk::RevealerTransitionType::SlideDown);
         revealer.set_transition_duration(150);
         revealer.set_hexpand(true);
         revealer.set_child(Some(&content));
@@ -74,8 +74,12 @@ impl InfoDetails {
         button.connect_toggled(move |button| {
             let has_details =
                 !description_for_toggle.text().is_empty() || !origin_for_toggle.text().is_empty();
-            revealer_for_toggle.set_reveal_child(has_details && button.is_active());
-            button.set_tooltip_text(Some(toggle_tooltip(button.is_active())));
+            apply_expanded(
+                &revealer_for_toggle,
+                button,
+                has_details,
+                button.is_active(),
+            );
         });
 
         let details = Self {
@@ -101,11 +105,28 @@ impl InfoDetails {
         self.description.set_visible(has_description);
         self.origin.set_visible(has_origin);
         self.root.set_visible(has_details);
-        self.revealer
-            .set_reveal_child(has_details && self.button.is_active());
-        self.button
-            .set_tooltip_text(Some(toggle_tooltip(self.button.is_active())));
+        apply_expanded(
+            &self.revealer,
+            &self.button,
+            has_details,
+            self.button.is_active(),
+        );
     }
+}
+
+/// Reveal the content only while the row is expanded. A revealer that is merely
+/// un-revealed still reports the child's size on its non-transition axis, so a
+/// hidden revealer is the only state that takes no space in both directions.
+fn apply_expanded(
+    revealer: &gtk::Revealer,
+    button: &gtk::ToggleButton,
+    has_details: bool,
+    expanded: bool,
+) {
+    let show = has_details && expanded;
+    revealer.set_visible(show);
+    revealer.set_reveal_child(show);
+    button.set_tooltip_text(Some(toggle_tooltip(expanded)));
 }
 
 fn toggle_tooltip(expanded: bool) -> &'static str {
@@ -134,10 +155,15 @@ mod tests {
         let origin_only = InfoDetails::new(None, "modules.nixos.audio", false);
         assert!(origin_only.root.is_visible());
         assert!(!origin_only.revealer.reveals_child());
+        assert!(
+            !origin_only.revealer.is_visible(),
+            "a collapsed revealer takes no space"
+        );
 
         let expanded = InfoDetails::new(Some("Use the service"), "", true);
         assert!(expanded.button.is_active());
         assert!(expanded.revealer.reveals_child());
+        assert!(expanded.revealer.is_visible());
 
         let late = InfoDetails::new(None, "", true);
         assert!(!late.root.is_visible());
@@ -147,9 +173,12 @@ mod tests {
 
         let toggled = InfoDetails::new(Some("Use the service"), "", false);
         assert!(!toggled.revealer.reveals_child());
+        assert!(!toggled.revealer.is_visible());
         toggled.button.set_active(true);
         assert!(toggled.revealer.reveals_child());
+        assert!(toggled.revealer.is_visible());
         toggled.button.set_active(false);
         assert!(!toggled.revealer.reveals_child());
+        assert!(!toggled.revealer.is_visible());
     }
 }

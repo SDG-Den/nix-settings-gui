@@ -10,11 +10,22 @@ const OPTIONS_TO_JSON: &str = include_str!("nix/options-to-json.nix");
 /// with `nix eval` and returns the registry's plugin ids as JSON.
 const DMS_PLUGINS_TO_JSON: &str = include_str!("nix/dms-plugins-to-json.nix");
 
+/// An embedded copy of the one-plugin settings extractor. It reads only the
+/// requested plugin's `plugin.json` and settings QML.
+const DMS_PLUGIN_SETTINGS_TO_JSON: &str = include_str!("nix/dms-plugin-settings-to-json.nix");
+
 /// Applies the registry extractor to its named arguments. The values arrive
 /// through the environment so no user path is interpolated into Nix source.
 const DMS_PLUGINS_APPLY: &str = r#"f: f {
   flakePath = builtins.getEnv "NSG_FLAKE_PATH";
   system = builtins.getEnv "NSG_SYSTEM";
+}"#;
+
+/// Applies the one-plugin settings extractor to its named arguments.
+const DMS_PLUGIN_SETTINGS_APPLY: &str = r#"f: f {
+  flakePath = builtins.getEnv "NSG_FLAKE_PATH";
+  system = builtins.getEnv "NSG_SYSTEM";
+  pluginId = builtins.getEnv "NSG_PLUGIN_ID";
 }"#;
 
 /// Applies the option extractor to its named arguments.
@@ -194,6 +205,9 @@ pub struct RegistryPlugin {
     pub category: Option<String>,
     #[serde(default)]
     pub repo: Option<String>,
+    /// Path to the plugin's settings QML, relative to the plugin directory.
+    #[serde(default)]
+    pub settings: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -216,6 +230,34 @@ pub fn dms_plugins(flake_path: &str) -> Result<Vec<RegistryPlugin>, String> {
     let payload: PluginsPayload =
         serde_json::from_str(&json).map_err(|e| format!("cannot parse nix output: {e}"))?;
     Ok(payload.plugins)
+}
+
+#[derive(Debug, Deserialize)]
+struct PluginSettingsPayload {
+    #[allow(dead_code)]
+    id: String,
+    #[serde(default)]
+    settings: Option<String>,
+}
+
+/// The declarative settings QML of one registry plugin, or `None` when the
+/// plugin ships no settings file. Evaluates only that plugin's package.
+pub fn dms_plugin_settings(flake_path: &str, plugin_id: &str) -> Result<Option<String>, String> {
+    let path = std::env::temp_dir().join("nix-settings-gui-dms-plugin-settings-to-json.nix");
+    let _ = std::fs::write(&path, DMS_PLUGIN_SETTINGS_TO_JSON);
+    let system = host_system();
+    let json = eval_script(
+        &path,
+        DMS_PLUGIN_SETTINGS_APPLY,
+        &[
+            ("NSG_FLAKE_PATH", flake_path),
+            ("NSG_SYSTEM", &system),
+            ("NSG_PLUGIN_ID", plugin_id),
+        ],
+    )?;
+    let payload: PluginSettingsPayload =
+        serde_json::from_str(&json).map_err(|e| format!("cannot parse nix output: {e}"))?;
+    Ok(payload.settings)
 }
 
 fn run(
@@ -340,6 +382,29 @@ mod tests {
     }
 
     #[test]
+    fn plugin_settings_command_passes_the_plugin_id() {
+        let command = eval_command(
+            std::path::Path::new("/tmp/dms-settings.nix"),
+            DMS_PLUGIN_SETTINGS_APPLY,
+            &[
+                ("NSG_FLAKE_PATH", "/repo"),
+                ("NSG_SYSTEM", "x86_64-linux"),
+                ("NSG_PLUGIN_ID", "barDropdown"),
+            ],
+        );
+        let envs: Vec<(String, Option<String>)> = command
+            .get_envs()
+            .map(|(name, value)| {
+                (
+                    name.to_string_lossy().into_owned(),
+                    value.map(|value| value.to_string_lossy().into_owned()),
+                )
+            })
+            .collect();
+        assert!(envs.contains(&("NSG_PLUGIN_ID".to_string(), Some("barDropdown".to_string()))));
+    }
+
+    #[test]
     #[ignore = "needs a sibling ojuny-template checkout and Nix evaluation"]
     fn loads_registry_from_sibling_template() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../ojuny-template");
@@ -353,6 +418,19 @@ mod tests {
             "registry had {} plugins",
             plugins.len()
         );
+    }
+
+    #[test]
+    #[ignore = "needs a sibling ojuny-template checkout and Nix evaluation"]
+    fn loads_plugin_settings_from_sibling_template() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../ojuny-template");
+        if !path.join("flake.nix").exists() {
+            return;
+        }
+        let qml = dms_plugin_settings(&path.to_string_lossy(), "barDropdown")
+            .expect("the registry plugin should load")
+            .expect("barDropdown ships settings");
+        assert!(qml.contains("settingKey"));
     }
 
     #[test]

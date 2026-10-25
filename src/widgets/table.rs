@@ -86,6 +86,7 @@ pub(crate) fn build_table(record: &Record, ctx: &BuildContext, list: bool) -> Ed
 
     let root = gtk::Box::new(gtk::Orientation::Vertical, 6);
     root.set_hexpand(true);
+    root.set_halign(gtk::Align::Fill);
     let key_editable = record.spec.key_editable;
     let first_value_editable = record.spec.first_value_editable;
 
@@ -106,6 +107,7 @@ pub(crate) fn build_table(record: &Record, ctx: &BuildContext, list: bool) -> Ed
         grid.set_column_spacing(6);
         grid.set_row_spacing(6);
         grid.set_hexpand(true);
+        grid.set_halign(gtk::Align::Fill);
         grid
     });
     // The attrset key occupies column 0 in `table-attrset`; `table-list` rows
@@ -425,6 +427,7 @@ pub(crate) fn make_table_row(
         TableParent::Grid { grid, row } => {
             for (index, slot) in slots.iter().enumerate() {
                 slot.set_hexpand(slot_widens.get(index).copied().unwrap_or(false));
+                slot.set_valign(gtk::Align::Center);
                 grid.attach(slot, index as i32, *row, 1, 1);
             }
             RowDetach::Grid {
