@@ -14,9 +14,9 @@
     then {}
     else safe {} (desktop.wallpaperPresets or {});
 in {
-  wallpapers = builtins.mapAttrsToList (name: preset: {
+  wallpapers = map (name: let preset = presets.${name}; in {
     inherit name;
     label = preset.label or name;
     path = toString preset.file;
-  }) presets;
+  }) (builtins.attrNames presets);
 }
