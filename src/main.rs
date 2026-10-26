@@ -1,9 +1,11 @@
 #![allow(deprecated)]
 
 use gtk::glib;
+use gtk::prelude::*;
 
 mod app;
 mod apply;
+mod cli;
 mod config;
 mod dsl;
 mod edit;
@@ -24,9 +26,18 @@ mod widgets;
 
 fn main() -> glib::ExitCode {
     glib::set_application_name("nix-settings-gui");
-    gtk::Window::set_default_icon_name("preferences-system");
+    let args = match cli::LaunchArgs::parse(std::env::args().skip(1)) {
+        Ok(args) => args,
+        Err(error) => {
+            eprintln!("nix-settings-gui: {error}");
+            return glib::ExitCode::from(2);
+        }
+    };
     let application = adw::Application::builder()
         .application_id(app::APP_ID)
         .build();
-    app::run(&application)
+    application.connect_startup(|_| {
+        gtk::Window::set_default_icon_name("preferences-system");
+    });
+    app::run(&application, args.page)
 }

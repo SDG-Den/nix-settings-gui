@@ -5,6 +5,7 @@ use std::rc::Rc;
 use gtk::gio;
 use gtk::glib;
 use gtk::prelude::*;
+use regex::Regex;
 
 use crate::config::AppConfig;
 
@@ -50,7 +51,7 @@ fn preference_row(label: &str, tooltip: &str, switch: &gtk::Switch) -> gtk::Box 
     row
 }
 
-fn build_ui(app: &adw::Application, tx: &Tx) -> Rc<App> {
+fn build_ui(app: &adw::Application, tx: &Tx, page_pattern: Option<Regex>) -> Rc<App> {
     let provider = gtk::CssProvider::new();
     provider.load_from_data(
         ".search-hit { outline: 2px solid @accent_color; border-radius: 6px; }\n\
@@ -311,6 +312,7 @@ fn build_ui(app: &adw::Application, tx: &Tx) -> Rc<App> {
         hosts: RefCell::new(Vec::new()),
         current_host: RefCell::new(String::new()),
         current_file: RefCell::new(String::new()),
+        page_pattern,
         flakes: RefCell::new(Vec::new()),
         pages: RefCell::new(Vec::new()),
         suggest_store: RefCell::new(None),
@@ -613,13 +615,13 @@ fn install_actions(app: &Rc<App>) {
     }
 }
 
-pub fn run(app: &adw::Application) -> glib::ExitCode {
+pub fn run(app: &adw::Application, page_pattern: Option<Regex>) -> glib::ExitCode {
     crate::nixd::init();
     let (tx, rx) = async_channel::unbounded::<Msg>();
     let rx_cell = std::cell::Cell::new(Some(rx));
 
     app.connect_activate(move |app| {
-        let ui = build_ui(app, &tx);
+        let ui = build_ui(app, &tx, page_pattern.clone());
         if let Some(rx) = rx_cell.take() {
             let ui_for_rx = ui.clone();
             let tx_for_rx = tx.clone();
@@ -638,5 +640,5 @@ pub fn run(app: &adw::Application) -> glib::ExitCode {
         ui.window.present();
     });
 
-    app.run()
+    app.run_with_args::<&str>(&[])
 }

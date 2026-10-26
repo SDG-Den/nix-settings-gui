@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::rc::Rc;
 
 use gtk::prelude::*;
@@ -24,8 +25,17 @@ pub(super) fn open_flake(app: &Rc<App>, tx: &Tx, path: &str) {
 }
 
 pub(super) fn rebuild_view(app: &Rc<App>) {
+    choose_current_page(app);
     rebuild_menu_list(app);
     rebuild_pages(app);
+}
+
+fn choose_current_page(app: &Rc<App>) {
+    let menus = sorted_menus(app);
+    let current = app.current_file.borrow().clone();
+    if let Some(file) = select_menu_file(&menus, &current, app.page_pattern.as_ref()) {
+        *app.current_file.borrow_mut() = file;
+    }
 }
 
 fn visible_menus(app: &Rc<App>) -> Vec<crate::model::MenuModel> {
@@ -45,6 +55,39 @@ fn visible_menus(app: &Rc<App>) -> Vec<crate::model::MenuModel> {
         .filter(|menu| app.advanced.get() || !menu.spec.hidden)
         .cloned()
         .collect()
+}
+
+fn menu_cmp(a: &MenuModel, b: &MenuModel) -> Ordering {
+    let ac = a.spec.category.as_deref().unwrap_or_default();
+    let bc = b.spec.category.as_deref().unwrap_or_default();
+    ac.cmp(bc)
+        .then_with(|| a.order().cmp(&b.order()))
+        .then_with(|| a.display_name().cmp(&b.display_name()))
+}
+
+fn sorted_menus(app: &Rc<App>) -> Vec<MenuModel> {
+    let mut menus = visible_menus(app);
+    menus.sort_by(menu_cmp);
+    menus
+}
+
+fn select_menu_file(
+    menus: &[MenuModel],
+    current: &str,
+    pattern: Option<&regex::Regex>,
+) -> Option<String> {
+    if menus.iter().any(|menu| menu.file == current) {
+        return Some(current.to_string());
+    }
+    if let Some(pattern) = pattern {
+        if let Some(menu) = menus
+            .iter()
+            .find(|menu| pattern.is_match(&menu.display_name()) || pattern.is_match(&menu.file))
+        {
+            return Some(menu.file.clone());
+        }
+    }
+    menus.first().map(|menu| menu.file.clone())
 }
 
 fn menu_matches(menu: &crate::model::MenuModel, query: &str) -> bool {
@@ -94,14 +137,7 @@ pub(super) fn rebuild_menu_list(app: &Rc<App>) {
         app.list.remove(&child);
     }
     let query = app.search.text().to_lowercase();
-    let mut menus = visible_menus(app);
-    menus.sort_by(|a, b| {
-        let ac = a.spec.category.clone().unwrap_or_default();
-        let bc = b.spec.category.clone().unwrap_or_default();
-        ac.cmp(&bc)
-            .then_with(|| a.order().cmp(&b.order()))
-            .then_with(|| a.display_name().cmp(&b.display_name()))
-    });
+    let menus = sorted_menus(app);
     let mut last_category: Option<String> = None;
     for menu in &menus {
         if !menu_matches(menu, &query) {
@@ -175,7 +211,7 @@ fn rebuild_pages(app: &Rc<App>) {
     }
     drop(old_pages);
 
-    let menus = visible_menus(app);
+    let menus = sorted_menus(app);
     let mut pages = Vec::new();
     for menu in &menus {
         let page = build_page(app, menu);
@@ -185,12 +221,10 @@ fn rebuild_pages(app: &Rc<App>) {
     app.pages.replace(pages);
 
     let current = app.current_file.borrow().clone();
-    if app.pages.borrow().iter().any(|p| p.file == current) {
-        app.stack.set_visible_child_name(&current);
-    } else if let Some(first) = app.pages.borrow().first() {
-        let file = first.file.clone();
+    if let Some(file) = select_menu_file(&menus, &current, None) {
         app.stack.set_visible_child_name(&file);
-        *app.current_file.borrow_mut() = file;
+        *app.current_file.borrow_mut() = file.clone();
+        select_file(app, &file);
     }
     super::controls::apply_control_filter(app);
     super::enrich::query_current_page(app, &app.tx);
@@ -442,6 +476,76 @@ fn preceding_group(menu: &MenuModel, offset: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dsl::MenuSpec;
+
+    fn menu(category: &str, order: i64, name: &str, file: &str) -> MenuModel {
+        MenuModel {
+            file: file.to_string(),
+            spec: MenuSpec {
+                category: Some(category.to_string()),
+                order: Some(order),
+                displayname: Some(name.to_string()),
+                ..MenuSpec::default()
+            },
+            ..MenuModel::default()
+        }
+    }
+
+    #[test]
+    fn sorts_menus_by_category_then_order_then_name() {
+        let mut menus = vec![
+            menu("02-Core", 10, "Bar", "bar.nix"),
+            menu("01-Users", 20, "User", "user.nix"),
+            menu("01-Users", 10, "System", "system.nix"),
+        ];
+        menus.sort_by(menu_cmp);
+        let names: Vec<_> = menus.iter().map(MenuModel::display_name).collect();
+        assert_eq!(names, ["System", "User", "Bar"]);
+    }
+
+    #[test]
+    fn selects_first_regex_match_in_sorted_order() {
+        let menus = vec![
+            menu("01-Users", 10, "User", "user.nix"),
+            menu("02-Core", 10, "Bar", "bar.nix"),
+            menu("02-Core", 20, "Dock", "dock.nix"),
+        ];
+        let pattern = regex::Regex::new("bar|dock").unwrap();
+        assert_eq!(
+            select_menu_file(&menus, "", Some(&pattern)).as_deref(),
+            Some("bar.nix")
+        );
+    }
+
+    #[test]
+    fn falls_back_to_topmost_when_no_page_matches() {
+        let menus = vec![
+            menu("01-Users", 10, "User", "user.nix"),
+            menu("02-Core", 10, "Bar", "bar.nix"),
+        ];
+        let pattern = regex::Regex::new("missing").unwrap();
+        assert_eq!(
+            select_menu_file(&menus, "", Some(&pattern)).as_deref(),
+            Some("user.nix")
+        );
+        assert_eq!(
+            select_menu_file(&menus, "", None).as_deref(),
+            Some("user.nix")
+        );
+    }
+
+    #[test]
+    fn keeps_the_current_page_when_it_is_visible() {
+        let menus = vec![
+            menu("01-Users", 10, "User", "user.nix"),
+            menu("02-Core", 10, "Bar", "bar.nix"),
+        ];
+        let pattern = regex::Regex::new("user").unwrap();
+        assert_eq!(
+            select_menu_file(&menus, "bar.nix", Some(&pattern)).as_deref(),
+            Some("bar.nix")
+        );
+    }
 
     #[test]
     fn missing_menu_icon_falls_back_to_generic() {

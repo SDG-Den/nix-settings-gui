@@ -220,6 +220,7 @@ pub(super) struct App {
     pub(super) hosts: RefCell<Vec<String>>,
     pub(super) current_host: RefCell<String>,
     pub(super) current_file: RefCell<String>,
+    pub(super) page_pattern: Option<regex::Regex>,
 
     pub(super) flakes: RefCell<Vec<PathBuf>>,
     pub(super) pages: RefCell<Vec<MenuPage>>,
