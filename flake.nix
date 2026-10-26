@@ -48,7 +48,7 @@
             root = ./.;
             fileset = lib.fileset.unions [
               (lib.fileset.fileFilter (f: f.hasExt "rs") ./.)
-              (lib.fileset.fileFilter (f: f.name == "Cargo.toml" || f.name == "Cargo.lock" || f.name == "nix-settings-gui.desktop") ./.)
+              (lib.fileset.fileFilter (f: f.name == "Cargo.toml" || f.name == "Cargo.lock" || f.name == "org.nix_settings_gui.NixSettingsGui.desktop") ./.)
               ./modules
               ./src
               ./tests
@@ -68,8 +68,8 @@
           '';
 
           postInstall = ''
-            install -Dm644 ${./nix-settings-gui.desktop} \
-              "$out/share/applications/nix-settings-gui.desktop"
+            install -Dm644 ${./org.nix_settings_gui.NixSettingsGui.desktop} \
+              "$out/share/applications/org.nix_settings_gui.NixSettingsGui.desktop"
           '';
 
           meta = with lib; {

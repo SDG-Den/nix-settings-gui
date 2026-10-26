@@ -23,6 +23,8 @@ mod value;
 mod widgets;
 
 fn main() -> glib::ExitCode {
+    glib::set_application_name("nix-settings-gui");
+    gtk::Window::set_default_icon_name("preferences-system");
     let application = adw::Application::builder()
         .application_id(app::APP_ID)
         .build();

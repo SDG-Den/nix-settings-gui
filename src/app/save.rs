@@ -104,7 +104,8 @@ pub(super) fn save_all(app: &Rc<App>, tx: &Tx, rebuild: bool) {
     app.pending_rebuild.set(rebuild);
 }
 
-/// Show the field overlay while any save or scan is in flight.
+/// Show the field overlay while any save or scan is in flight. The spinner
+/// starts and stops on the scrim's map and unmap signals.
 fn refresh_field_overlay(app: &Rc<App>) {
     let visible = app.saving.get() || app.scans_in_flight.get() > 0;
     app.field_scrim.set_visible(visible);
@@ -192,6 +193,14 @@ pub(super) fn run_changes_prompt(app: &Rc<App>, on_save: Box<dyn Fn()>) {
     spinner.set_visible(false);
     spinner.set_halign(gtk::Align::Center);
     spinner.set_margin_bottom(12);
+    {
+        let spinner = spinner.clone();
+        spinner.connect_map(move |spinner| spinner.start());
+    }
+    {
+        let spinner = spinner.clone();
+        spinner.connect_unmap(move |spinner| spinner.stop());
+    }
 
     let content = gtk::Box::new(gtk::Orientation::Vertical, 6);
     content.append(&message);
@@ -207,7 +216,6 @@ pub(super) fn run_changes_prompt(app: &Rc<App>, on_save: Box<dyn Fn()>) {
             dialog.set_response_sensitive(gtk::ResponseType::Cancel, false);
             dialog.set_deletable(false);
             spinner.set_visible(true);
-            spinner.start();
             set_saving(&state, true);
 
             let edits = collect_edits(&state);
@@ -223,7 +231,6 @@ pub(super) fn run_changes_prompt(app: &Rc<App>, on_save: Box<dyn Fn()>) {
             let on_save = on_save.clone();
             glib::MainContext::default().spawn_local(async move {
                 let result = done_rx.recv().await;
-                spinner.stop();
                 spinner.set_visible(false);
                 set_saving(&state, false);
                 match result {

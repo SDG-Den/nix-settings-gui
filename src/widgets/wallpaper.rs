@@ -737,13 +737,13 @@ mod tests {
 
     #[test]
     fn preset_names_are_not_treated_as_paths() {
-        let choice = initial_choice("catppuccin-stripes", Path::new("/repo/modules/02-core"));
+        let choice = initial_choice("stripes", Path::new("/repo/modules/02-core"));
         let WallpaperChoice::Preset(preset) = &choice else {
             panic!("expected a preset");
         };
-        assert_eq!(preset.name, "catppuccin-stripes");
-        assert_eq!(choice.nix_value(), "\"catppuccin-stripes\"");
-        assert_eq!(choice.apply_literal(), "\"catppuccin-stripes\"");
+        assert_eq!(preset.name, "stripes");
+        assert_eq!(choice.nix_value(), "\"stripes\"");
+        assert_eq!(choice.apply_literal(), "\"stripes\"");
     }
 
     #[test]

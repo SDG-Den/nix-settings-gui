@@ -9,7 +9,7 @@ use super::names::{
     menu_provider_labels_for, menu_provider_value, title_case_id, widget_display_name,
     MENU_PROVIDERS,
 };
-use super::nix::{attr_key, expr_literal, string_literal};
+use super::nix::{attr_key, quote, string_literal};
 use crate::model::Record;
 use crate::scan;
 use crate::value;
@@ -102,7 +102,7 @@ pub(crate) fn menu_aliases_nix(text: &str) -> Option<String> {
         .split(',')
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
-        .map(|s| expr_literal(&s))
+        .map(|s| quote(&s))
         .collect();
     (!items.is_empty()).then(|| format!("aliases = {};", value::serialize_list(&items)))
 }
@@ -958,6 +958,18 @@ mod tests {
                 "{name} appears in both popout lists"
             );
         }
+    }
+
+    #[test]
+    fn aliases_are_always_quoted() {
+        assert_eq!(
+            menu_aliases_nix("ff, ls -la, foo-bar, foo # bar"),
+            Some("aliases = [ \"ff\" \"ls -la\" \"foo-bar\" \"foo # bar\" ];".to_string())
+        );
+        assert_eq!(
+            menu_aliases_nix("say \"hi\""),
+            Some("aliases = [ \"say \\\"hi\\\"\" ];".to_string())
+        );
     }
 
     #[test]
