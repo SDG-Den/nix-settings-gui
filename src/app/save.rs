@@ -108,11 +108,6 @@ pub(super) fn save_all(app: &Rc<App>, tx: &Tx, rebuild: bool) {
 fn refresh_field_overlay(app: &Rc<App>) {
     let visible = app.saving.get() || app.scans_in_flight.get() > 0;
     app.field_scrim.set_visible(visible);
-    if visible {
-        app.field_spinner.start();
-    } else {
-        app.field_spinner.stop();
-    }
 }
 
 /// Record whether a save is in flight and refresh the field overlay.

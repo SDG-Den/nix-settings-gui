@@ -417,6 +417,10 @@ pub struct OptionSpec {
     /// Directory holding wallpaper images, relative to the file containing the
     /// option. Defaults to `./wallpapers`.
     pub wallpaper_dir: Option<String>,
+    /// Flake input that declares the optional wallpaper presets, e.g.
+    /// `ojuny-desktop`. When set, the wallpaper picker lists those presets in
+    /// addition to the images in `wallpaperDir`.
+    pub preset_source: Option<String>,
     /// Directory holding icons for `icon` table columns, relative to the file
     /// containing the option. Defaults to `./icons`.
     pub icon_dir: Option<String>,
@@ -459,6 +463,7 @@ impl OptionSpec {
             add_label: d.string("addLabel"),
             visible_when: parse_visibility(d),
             wallpaper_dir: d.string("wallpaperDir"),
+            preset_source: d.string("presetSource"),
             icon_dir: d.string("iconDir"),
             apply_command: d.string("applyCommand"),
         }
@@ -622,6 +627,15 @@ mod tests {
         let opt = OptionSpec::from_directives(&d);
         assert_eq!(opt.widget, Some(WidgetKind::Wallpaper));
         assert_eq!(opt.wallpaper_dir.as_deref(), Some("./wallpapers"));
+    }
+
+    #[test]
+    fn parses_preset_source() {
+        let text = "/* @option widget = \"wallpaper\"; presetSource = \"ojuny-desktop\"; */";
+        let (kind, d) = parse_comment(text).unwrap();
+        assert_eq!(kind, MarkerKind::Option);
+        let opt = OptionSpec::from_directives(&d);
+        assert_eq!(opt.preset_source.as_deref(), Some("ojuny-desktop"));
     }
 
     #[test]

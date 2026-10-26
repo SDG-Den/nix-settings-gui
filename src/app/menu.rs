@@ -16,6 +16,7 @@ use super::state::{App, ControlRow, InsertButton, MenuPage, Tx};
 pub(super) fn open_flake(app: &Rc<App>, tx: &Tx, path: &str) {
     *app.base.borrow_mut() = path.to_string();
     app.plugin_registry.reset();
+    *app.wallpaper_presets.borrow_mut() = None;
     app.config.borrow_mut().remember(path);
     let _ = app.config.borrow().save();
     crate::nixd::warm(Some(path));

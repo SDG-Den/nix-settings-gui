@@ -97,6 +97,7 @@ services.pipewire.enable = true;
 | `visibleWhen.notEquals` | literal | Value the governing option must not equal. |
 | `applyCommand` | string     | Shell command that applies the option immediately, without saving. |
 | `wallpaperDir` | string     | Directory holding wallpaper images, relative to the file containing the option. Defaults to `./wallpapers`. |
+| `presetSource` | string    | Flake input that declares wallpaper presets, e.g. `ojuny-desktop`. When set, the wallpaper picker lists those presets before the images in `wallpaperDir`. |
 | `iconDir`     | string          | Directory holding icons added by `icon` table columns, relative to the file containing the option. Defaults to `./icons`. |
 
 ### Visibility dependencies
@@ -263,7 +264,7 @@ widget; the field shape lives in the application.
 | `keybinds` | a bind mode, e.g. `binds.default` | `name -> { modifier; keys; dispatcher; args; description; group; subcat; }`. Shows a `modifier+keys` preview per row and opens a popout to edit the fields. |
 | `monitors` | `mango.rules.monitor_rule` | a list of monitor sets. Renders the configured rules on a draggable canvas; dragging writes `x`/`y` only. Unset sizes default to a 1920x1080 rectangle (marked visually). |
 | `theme` | the scheme option | a scheme name string. Shows a swatch per bundled scheme and writes the short name (`base16-ocean` becomes `ocean`). `polarity` and `wallpaper` stay separate options. |
-| `wallpaper` | the wallpaper option | `null` for auto-themed, or a path to an image. Shows a horizontal strip of previews, an auto-themed tile, and add/remove buttons. `wallpaperDir` is resolved relative to the file containing the option. Added files are copied into that directory and staged with `git add`. |
+| `wallpaper` | the wallpaper option | `null` for auto-themed, a preset name, or a path to an image. With `presetSource`, the strip starts with the bundled presets from that flake input, then the images in `wallpaperDir`. Added files are copied into `wallpaperDir` and staged with `git add`; preset tiles are not removable. |
 | `menu` | `dankMenu.menu` | an attribute set keyed by dotted id. Splits the id on `.` and renders a nestable tree; leaves are editable rows. |
 | `plugins` | `dms.plugins` | a name-keyed attribute set of `{ enable; src; settings; dir; config; }`. `settings` renders as `raw` unless annotated as a typed submodule. |
 | `bar` | `barConfigs` | a name-keyed attribute set with id-keyed `left`/`center`/`right` widget lists plus layout and appearance. |

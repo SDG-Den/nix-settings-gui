@@ -14,11 +14,20 @@ const DMS_PLUGINS_TO_JSON: &str = include_str!("nix/dms-plugins-to-json.nix");
 /// requested plugin's `plugin.json` and settings QML.
 const DMS_PLUGIN_SETTINGS_TO_JSON: &str = include_str!("nix/dms-plugin-settings-to-json.nix");
 
+/// An embedded copy of the wallpaper preset extractor. It reads the config
+/// flake's `ojuny-desktop` input and returns every bundled preset.
+const WALLPAPERS_TO_JSON: &str = include_str!("nix/wallpapers-to-json.nix");
+
 /// Applies the registry extractor to its named arguments. The values arrive
 /// through the environment so no user path is interpolated into Nix source.
 const DMS_PLUGINS_APPLY: &str = r#"f: f {
   flakePath = builtins.getEnv "NSG_FLAKE_PATH";
   system = builtins.getEnv "NSG_SYSTEM";
+}"#;
+
+/// Applies the wallpaper preset extractor to its named arguments.
+const WALLPAPERS_APPLY: &str = r#"f: f {
+  flakePath = builtins.getEnv "NSG_FLAKE_PATH";
 }"#;
 
 /// Applies the one-plugin settings extractor to its named arguments.
@@ -230,6 +239,30 @@ pub fn dms_plugins(flake_path: &str) -> Result<Vec<RegistryPlugin>, String> {
     let payload: PluginsPayload =
         serde_json::from_str(&json).map_err(|e| format!("cannot parse nix output: {e}"))?;
     Ok(payload.plugins)
+}
+
+/// One wallpaper preset bundled with ojuny-desktop.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct WallpaperPreset {
+    pub name: String,
+    pub label: String,
+    pub path: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct WallpapersPayload {
+    wallpapers: Vec<WallpaperPreset>,
+}
+
+/// The wallpaper presets bundled with the config flake's `ojuny-desktop`
+/// input. Empty when the flake has no such input.
+pub fn wallpaper_presets(flake_path: &str) -> Result<Vec<WallpaperPreset>, String> {
+    let path = std::env::temp_dir().join("nix-settings-gui-wallpapers-to-json.nix");
+    let _ = std::fs::write(&path, WALLPAPERS_TO_JSON);
+    let json = eval_script(&path, WALLPAPERS_APPLY, &[("NSG_FLAKE_PATH", flake_path)])?;
+    let payload: WallpapersPayload =
+        serde_json::from_str(&json).map_err(|e| format!("cannot parse nix output: {e}"))?;
+    Ok(payload.wallpapers)
 }
 
 #[derive(Debug, Deserialize)]

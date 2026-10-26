@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=nix-settings-gui
+Comment=Comment-driven settings GUI for Nix
+Exec=nix-settings-gui
+Icon=preferences-system
+Terminal=false
+Categories=Settings;System;
+StartupWMClass=nix-settings-gui

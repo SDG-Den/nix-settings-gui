@@ -23,8 +23,16 @@ struct WallpaperFile {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+struct WallpaperPresetChoice {
+    name: String,
+    label: String,
+    path: PathBuf,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum WallpaperChoice {
     Auto,
+    Preset(WallpaperPresetChoice),
     File(WallpaperFile),
 }
 
@@ -32,6 +40,7 @@ impl WallpaperChoice {
     fn nix_value(&self) -> String {
         match self {
             WallpaperChoice::Auto => "null".to_string(),
+            WallpaperChoice::Preset(preset) => quote(&preset.name),
             WallpaperChoice::File(file) => file.value.clone(),
         }
     }
@@ -39,6 +48,7 @@ impl WallpaperChoice {
     fn apply_literal(&self) -> String {
         match self {
             WallpaperChoice::Auto => "null".to_string(),
+            WallpaperChoice::Preset(preset) => quote(&preset.name),
             WallpaperChoice::File(file) => quote(&file.absolute.to_string_lossy()),
         }
     }
@@ -60,7 +70,7 @@ impl WallpaperUi {
 
     fn can_remove(&self, dir: &Path) -> bool {
         match &self.current {
-            WallpaperChoice::Auto => false,
+            WallpaperChoice::Auto | WallpaperChoice::Preset(_) => false,
             WallpaperChoice::File(file) => file.absolute.starts_with(dir),
         }
     }
@@ -76,11 +86,13 @@ struct WallpaperView {
     strip: gtk::Box,
     scrolled: gtk::ScrolledWindow,
     ui: Rc<RefCell<WallpaperUi>>,
+    presets: Rc<RefCell<Vec<WallpaperPresetChoice>>>,
     module_dir: PathBuf,
     dir: PathBuf,
     remove: gtk::Button,
     on_change: ChangeHook,
     actions: WallpaperActions,
+    nullable: bool,
 }
 
 pub(crate) fn build_wallpaper(record: &Record, value_text: &str, ctx: &BuildContext) -> Editor {
@@ -97,6 +109,10 @@ pub(crate) fn build_wallpaper(record: &Record, value_text: &str, ctx: &BuildCont
         current,
         tiles: Vec::new(),
     }));
+    let presets = Rc::new(RefCell::new(Vec::new()));
+    if let WallpaperChoice::Preset(preset) = &ui.borrow().current {
+        presets.borrow_mut().push(preset.clone());
+    }
 
     let strip = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     strip.add_css_class("wallpaper-strip");
@@ -122,11 +138,13 @@ pub(crate) fn build_wallpaper(record: &Record, value_text: &str, ctx: &BuildCont
         strip,
         scrolled,
         ui,
+        presets,
         module_dir,
         dir,
         remove: remove.clone(),
         on_change: on_change.clone(),
         actions,
+        nullable: record.spec.nullable,
     };
 
     {
@@ -185,6 +203,17 @@ pub(crate) fn build_wallpaper(record: &Record, value_text: &str, ctx: &BuildCont
         view.scrolled.add_controller(scroll);
     }
 
+    if record.spec.preset_source.is_some() {
+        if let Some(fetch) = ctx.wallpaper_presets.clone() {
+            let view = view.clone();
+            fetch(Box::new(move |result| {
+                if let Ok(presets) = result {
+                    view.set_presets(presets);
+                }
+            }));
+        }
+    }
+
     view.refresh();
     Editor::Wallpaper {
         root,
@@ -201,18 +230,46 @@ fn scroll_delta(delta: f64, unit: gtk::gdk::ScrollUnit, page: f64) -> f64 {
 }
 
 impl WallpaperView {
+    fn set_presets(&self, presets: Vec<crate::metadata::WallpaperPreset>) {
+        let current = self.ui.borrow().current.clone();
+        *self.presets.borrow_mut() = presets
+            .into_iter()
+            .map(|preset| WallpaperPresetChoice {
+                name: preset.name,
+                label: preset.label,
+                path: PathBuf::from(preset.path),
+            })
+            .collect();
+        if let WallpaperChoice::Preset(preset) = current {
+            let mut presets = self.presets.borrow_mut();
+            if !presets.iter().any(|entry| entry.name == preset.name) {
+                presets.push(preset);
+            }
+        }
+        self.refresh();
+    }
+
     fn refresh(&self) {
         while let Some(child) = self.strip.first_child() {
             self.strip.remove(&child);
         }
 
         let mut tiles = Vec::new();
-        let auto = self.build_tile(WallpaperChoice::Auto);
-        self.strip.append(&auto);
-        tiles.push(WallpaperTile {
-            button: auto,
-            choice: WallpaperChoice::Auto,
-        });
+        if self.nullable {
+            let auto = self.build_tile(WallpaperChoice::Auto);
+            self.strip.append(&auto);
+            tiles.push(WallpaperTile {
+                button: auto,
+                choice: WallpaperChoice::Auto,
+            });
+        }
+
+        for preset in self.presets.borrow().clone() {
+            let choice = WallpaperChoice::Preset(preset);
+            let button = self.build_tile(choice.clone());
+            self.strip.append(&button);
+            tiles.push(WallpaperTile { button, choice });
+        }
 
         for file in list_images(&self.dir, &self.module_dir) {
             let choice = WallpaperChoice::File(file);
@@ -228,6 +285,7 @@ impl WallpaperView {
     fn build_tile(&self, choice: WallpaperChoice) -> gtk::Button {
         let name = match &choice {
             WallpaperChoice::Auto => "Auto-themed",
+            WallpaperChoice::Preset(preset) => &preset.label,
             WallpaperChoice::File(file) => &file.name,
         };
         let button = gtk::Button::new();
@@ -284,21 +342,11 @@ impl WallpaperView {
                 icon.set_vexpand(true);
                 host.append(&icon);
             }
-            WallpaperChoice::File(file) => match gtk::gdk_pixbuf::Pixbuf::from_file_at_scale(
-                &file.absolute,
-                TILE_WIDTH,
-                PREVIEW_HEIGHT,
-                true,
-            ) {
-                Ok(pixbuf) => {
-                    let picture = gtk::Picture::for_pixbuf(&pixbuf);
-                    picture.set_content_fit(gtk::ContentFit::Cover);
-                    picture.set_can_shrink(true);
-                    picture.set_size_request(TILE_WIDTH, PREVIEW_HEIGHT);
-                    host.append(&picture);
-                }
-                Err(_) => host.append(&fallback()),
-            },
+            WallpaperChoice::Preset(preset) if preset.path.as_os_str().is_empty() => {
+                host.append(&fallback());
+            }
+            WallpaperChoice::Preset(preset) => append_preview(&host, &preset.path, &fallback),
+            WallpaperChoice::File(file) => append_preview(&host, &file.absolute, &fallback),
         }
         host
     }
@@ -420,6 +468,19 @@ impl WallpaperView {
         );
     }
 
+    fn fallback_choice(&self) -> WallpaperChoice {
+        if self.nullable {
+            return WallpaperChoice::Auto;
+        }
+        if let Some(preset) = self.presets.borrow().first().cloned() {
+            return WallpaperChoice::Preset(preset);
+        }
+        if let Some(file) = list_images(&self.dir, &self.module_dir).into_iter().next() {
+            return WallpaperChoice::File(file);
+        }
+        WallpaperChoice::Auto
+    }
+
     fn open_remove(&self, button: &gtk::Button) {
         let choice = self.ui.borrow().current.clone();
         let WallpaperChoice::File(file) = choice else {
@@ -446,7 +507,7 @@ impl WallpaperView {
             if response == gtk::ResponseType::Accept {
                 match (view.actions.remove)(&file.absolute) {
                     Ok(()) => {
-                        view.ui.borrow_mut().current = WallpaperChoice::Auto;
+                        view.ui.borrow_mut().current = view.fallback_choice();
                         view.refresh();
                         view.fire();
                     }
@@ -456,6 +517,19 @@ impl WallpaperView {
             dialog.close();
         });
         dialog.present();
+    }
+}
+
+fn append_preview(host: &gtk::Box, path: &Path, fallback: &impl Fn() -> gtk::Image) {
+    match gtk::gdk_pixbuf::Pixbuf::from_file_at_scale(path, TILE_WIDTH, PREVIEW_HEIGHT, true) {
+        Ok(pixbuf) => {
+            let picture = gtk::Picture::for_pixbuf(&pixbuf);
+            picture.set_content_fit(gtk::ContentFit::Cover);
+            picture.set_can_shrink(true);
+            picture.set_size_request(TILE_WIDTH, PREVIEW_HEIGHT);
+            host.append(&picture);
+        }
+        Err(_) => host.append(&fallback()),
     }
 }
 
@@ -476,11 +550,24 @@ fn show_error(parent: Option<&gtk::Window>, message: &str) {
 fn same_choice(a: &WallpaperChoice, b: &WallpaperChoice) -> bool {
     match (a, b) {
         (WallpaperChoice::Auto, WallpaperChoice::Auto) => true,
+        (WallpaperChoice::Preset(a), WallpaperChoice::Preset(b)) => a.name == b.name,
         (WallpaperChoice::File(a), WallpaperChoice::File(b)) => {
             a.value == b.value || a.absolute == b.absolute
         }
         _ => false,
     }
+}
+
+fn looks_like_preset(value: &str) -> bool {
+    !value.contains('/')
+        && !value.contains('\\')
+        && !value.starts_with('.')
+        && Path::new(value)
+            .extension()
+            .map(|extension| {
+                !IMAGE_EXTENSIONS.contains(&extension.to_string_lossy().to_lowercase().as_str())
+            })
+            .unwrap_or(true)
 }
 
 fn module_dir(record: &Record, ctx: &BuildContext) -> PathBuf {
@@ -510,6 +597,13 @@ fn initial_choice(value_text: &str, module_dir: &Path) -> WallpaperChoice {
         return WallpaperChoice::Auto;
     }
     let raw = parse_string_literal(text);
+    if looks_like_preset(&raw) {
+        return WallpaperChoice::Preset(WallpaperPresetChoice {
+            name: raw.clone(),
+            label: raw,
+            path: PathBuf::new(),
+        });
+    }
     let path = Path::new(&raw);
     let absolute = if path.is_absolute() {
         normalize_path(path)
@@ -639,6 +733,17 @@ mod tests {
         assert_eq!(choice, WallpaperChoice::Auto);
         assert_eq!(choice.nix_value(), "null");
         assert_eq!(choice.apply_literal(), "null");
+    }
+
+    #[test]
+    fn preset_names_are_not_treated_as_paths() {
+        let choice = initial_choice("catppuccin-stripes", Path::new("/repo/modules/02-core"));
+        let WallpaperChoice::Preset(preset) = &choice else {
+            panic!("expected a preset");
+        };
+        assert_eq!(preset.name, "catppuccin-stripes");
+        assert_eq!(choice.nix_value(), "\"catppuccin-stripes\"");
+        assert_eq!(choice.apply_literal(), "\"catppuccin-stripes\"");
     }
 
     #[test]

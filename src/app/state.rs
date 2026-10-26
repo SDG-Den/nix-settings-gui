@@ -203,11 +203,12 @@ pub(super) struct App {
     pub(super) apply_spinner: gtk::Spinner,
     pub(super) progress: gtk::ProgressBar,
     pub(super) field_scrim: gtk::Box,
-    pub(super) field_spinner: gtk::Spinner,
     pub(super) saving: Cell<bool>,
     pub(super) scans_in_flight: Cell<u32>,
     pub(super) package_service: Rc<PackageService>,
     pub(super) plugin_registry: Rc<PluginRegistryState>,
+    pub(super) wallpaper_presets:
+        RefCell<Option<Result<Vec<crate::metadata::WallpaperPreset>, String>>>,
     pub(super) apply_state: Rc<ApplyState>,
     pub(super) tx: Tx,
 

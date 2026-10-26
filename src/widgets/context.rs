@@ -45,6 +45,10 @@ pub type PluginRegistryHook =
 /// main thread. `None` means the plugin ships no settings file.
 pub type PluginSettingsHook = Rc<dyn Fn(String, Box<dyn FnOnce(Result<Option<String>, String>)>)>;
 
+/// Fetches the wallpaper presets declared by the flake's ojuny-desktop input.
+pub type WallpaperPresetsHook =
+    Rc<dyn Fn(Box<dyn FnOnce(Result<Vec<crate::metadata::WallpaperPreset>, String>)>)>;
+
 /// Runs the apply command of an option the user changed. Supplied by the app
 /// so the widgets stay free of process handling.
 pub type ApplyHook = Rc<dyn Fn(ApplyRequest)>;
@@ -93,6 +97,8 @@ pub struct BuildContext {
     pub plugin_registry: Option<PluginRegistryHook>,
     /// Fetches one plugin's declarative settings QML.
     pub plugin_settings: Option<PluginSettingsHook>,
+    /// Fetches the bundled wallpaper presets.
+    pub wallpaper_presets: Option<WallpaperPresetsHook>,
     /// Runs the apply command of an option that carries one.
     pub apply: Option<ApplyHook>,
     /// The flake root, used by widgets that resolve repository paths.

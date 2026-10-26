@@ -126,6 +126,7 @@ fn build_ui(app: &adw::Application, tx: &Tx) -> Rc<App> {
     field_spinner.set_valign(gtk::Align::Center);
     field_spinner.set_hexpand(true);
     field_spinner.set_vexpand(true);
+    field_spinner.set_visible(true);
     field_spinner.add_css_class("busy-spinner");
 
     let field_scrim = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -136,6 +137,14 @@ fn build_ui(app: &adw::Application, tx: &Tx) -> Rc<App> {
     field_scrim.set_visible(false);
     field_scrim.add_css_class("busy-scrim");
     field_scrim.append(&field_spinner);
+    {
+        let spinner = field_spinner.clone();
+        field_scrim.connect_map(move |_| spinner.start());
+    }
+    {
+        let spinner = field_spinner.clone();
+        field_scrim.connect_unmap(move |_| spinner.stop());
+    }
 
     let content_overlay = gtk::Overlay::new();
     content_overlay.set_child(Some(&stack));
@@ -287,11 +296,11 @@ fn build_ui(app: &adw::Application, tx: &Tx) -> Rc<App> {
         apply_spinner,
         progress,
         field_scrim,
-        field_spinner,
         saving: Cell::new(false),
         scans_in_flight: Cell::new(0),
         package_service: PackageService::new(),
         plugin_registry: Rc::new(PluginRegistryState::new()),
+        wallpaper_presets: RefCell::new(None),
         apply_state: ApplyState::new(),
         tx: tx.clone(),
         config: RefCell::new(AppConfig::load()),

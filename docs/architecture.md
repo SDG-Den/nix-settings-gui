@@ -66,7 +66,8 @@ widget factory can pick a control.
 
 `widgets.rs` maps a record and its type string to one of the `Editor` variants.
 `widgets/wallpaper.rs` renders the horizontal wallpaper strip, resolves
-`wallpaperDir` relative to the module file, and asks the app to copy or remove
+`wallpaperDir` relative to the module file, reads bundled presets through the
+`presetSource` flake input, and asks the app to copy or remove
 images and stage them with git. `widgets/icon.rs` does the same for `icon` table
 columns, resolving `iconDir` and showing a preview with an "Add icon" button.
 Each editor owns a GTK root widget, reports whether it is `unchanged`, produces
