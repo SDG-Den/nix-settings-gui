@@ -14,8 +14,8 @@ const DMS_PLUGINS_TO_JSON: &str = include_str!("nix/dms-plugins-to-json.nix");
 /// requested plugin's `plugin.json` and settings QML.
 const DMS_PLUGIN_SETTINGS_TO_JSON: &str = include_str!("nix/dms-plugin-settings-to-json.nix");
 
-/// An embedded copy of the wallpaper preset extractor. It reads the config
-/// flake's `ojuny-desktop` input and returns every bundled preset.
+/// An embedded copy of the wallpaper preset extractor. It finds the config
+/// flake input that declares wallpaper presets and returns every bundled one.
 const WALLPAPERS_TO_JSON: &str = include_str!("nix/wallpapers-to-json.nix");
 
 /// Applies the registry extractor to its named arguments. The values arrive
@@ -254,8 +254,8 @@ struct WallpapersPayload {
     wallpapers: Vec<WallpaperPreset>,
 }
 
-/// The wallpaper presets bundled with the config flake's `ojuny-desktop`
-/// input. Empty when the flake has no such input.
+/// The wallpaper presets bundled with the config flake input that declares
+/// them. Empty when no input does.
 pub fn wallpaper_presets(flake_path: &str) -> Result<Vec<WallpaperPreset>, String> {
     let path = std::env::temp_dir().join("nix-settings-gui-wallpapers-to-json.nix");
     let _ = std::fs::write(&path, WALLPAPERS_TO_JSON);

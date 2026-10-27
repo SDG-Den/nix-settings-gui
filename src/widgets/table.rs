@@ -610,6 +610,12 @@ fn option_spec_to_comment(spec: &OptionSpec) -> String {
         if let Some(equals) = &visibility.equals {
             parts.push(format!("visibleWhen.equals = {equals};"));
         }
+        if !visibility.equals_any.is_empty() {
+            parts.push(format!(
+                "visibleWhen.equals = [ {} ];",
+                visibility.equals_any.join(" ")
+            ));
+        }
         if let Some(not_equals) = &visibility.not_equals {
             parts.push(format!("visibleWhen.notEquals = {not_equals};"));
         }

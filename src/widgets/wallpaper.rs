@@ -121,7 +121,7 @@ pub(crate) fn build_wallpaper(record: &Record, value_text: &str, ctx: &BuildCont
     let scrolled = gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Automatic)
         .vscrollbar_policy(gtk::PolicyType::Never)
-        .min_content_height(PREVIEW_HEIGHT + 38)
+        .min_content_height(PREVIEW_HEIGHT + 56)
         .child(&strip)
         .build();
     scrolled.add_css_class("wallpaper-scroller");
@@ -293,7 +293,7 @@ impl WallpaperView {
         button.set_tooltip_text(Some(name));
 
         let body = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        body.set_size_request(TILE_WIDTH, PREVIEW_HEIGHT + 30);
+        body.set_size_request(TILE_WIDTH, PREVIEW_HEIGHT + 48);
         body.append(&self.preview(&choice));
 
         let label = gtk::Label::builder()
@@ -301,11 +301,28 @@ impl WallpaperView {
             .ellipsize(gtk::pango::EllipsizeMode::Middle)
             .max_width_chars(18)
             .margin_top(4)
-            .margin_bottom(4)
+            .margin_bottom(0)
             .margin_start(4)
             .margin_end(4)
             .build();
         body.append(&label);
+
+        let kind = match &choice {
+            WallpaperChoice::Auto => None,
+            WallpaperChoice::Preset(_) => Some("Bundled"),
+            WallpaperChoice::File(_) => Some("Custom"),
+        };
+        if let Some(kind) = kind {
+            let badge = gtk::Label::builder()
+                .label(kind)
+                .margin_bottom(4)
+                .margin_start(4)
+                .margin_end(4)
+                .build();
+            badge.add_css_class("dim-label");
+            badge.add_css_class("caption");
+            body.append(&badge);
+        }
         button.set_child(Some(&body));
 
         let view = self.clone();

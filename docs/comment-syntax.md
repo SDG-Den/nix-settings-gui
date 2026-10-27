@@ -93,11 +93,11 @@ services.pipewire.enable = true;
 | `itemLabel`   | string          | Label for one row of a `list`. |
 | `addLabel`    | string          | Label of the list "add" button. |
 | `visibleWhen.path` | string     | Another option in the same menu; the control shows only when its value satisfies the conditions below. |
-| `visibleWhen.equals` | literal | Value the governing option must equal. |
+| `visibleWhen.equals` | literal or list | Value the governing option must equal. A list matches any listed value. |
 | `visibleWhen.notEquals` | literal | Value the governing option must not equal. |
 | `applyCommand` | string     | Shell command that applies the option immediately, without saving. |
 | `wallpaperDir` | string     | Directory holding wallpaper images, relative to the file containing the option. Defaults to `./wallpapers`. |
-| `presetSource` | string    | Flake input that declares wallpaper presets, e.g. `ojuny-desktop`. When set, the wallpaper picker lists those presets before the images in `wallpaperDir`. |
+| `presetSource` | string | Flake input that declares wallpaper presets, e.g. `ojuny-desktop`. When set, the wallpaper picker lists those presets before the images in `wallpaperDir`. |
 | `iconDir`     | string          | Directory holding icons added by `icon` table columns, relative to the file containing the option. Defaults to `./icons`. |
 
 ### Visibility dependencies
@@ -116,8 +116,17 @@ services.pipewire.jack.serverName = "default";
 ```
 
 `visibleWhen.equals` and `visibleWhen.notEquals` take any literal (`true`,
-`"auto"`, `3`). With neither set, the control shows while the governing value is
-truthy (not `false`, `null`, or zero). When both are set, both must hold.
+`"auto"`, `3`). `visibleWhen.equals` also accepts a list, in which case the
+governing value may equal any listed item:
+
+```nix
+/* @option widget = "text"; label = "NVIDIA bus ID";
+   visibleWhen.path = "ojuny.gpu";
+   visibleWhen.equals = [ "hybrid-intel-nvidia" "hybrid-amd-nvidia" ]; */
+```
+
+With neither set, the control shows while the governing value is truthy (not
+`false`, `null`, or zero). When both are set, both must hold.
 
 The dependency is evaluated live as you edit, and is scoped to the menu. If the
 named option is not found in the menu, the control stays visible, so a stale
@@ -246,7 +255,7 @@ per-row settings and nothing else:
 | `label` | string | the row identity | Row heading. |
 | `hidden` | boolean | false | Hides the row until the Advanced toggle is on. |
 | `visibleWhen.path` | string | none | Another option in the same menu; the row shows only while it satisfies the conditions. |
-| `visibleWhen.equals` | literal | none | Value the governing option must equal. |
+| `visibleWhen.equals` | literal or list | none | Value the governing option must equal. A list matches any listed value. |
 | `visibleWhen.notEquals` | literal | none | Value the governing option must not equal. |
 
 Rows are added and removed with built-in buttons, not `@snippet`: "add" appends a

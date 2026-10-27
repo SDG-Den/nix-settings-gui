@@ -355,6 +355,9 @@ pub struct Visibility {
     pub path: String,
     /// Canonical Nix literal the governing value must equal, if any.
     pub equals: Option<String>,
+    /// Canonical Nix literals the governing value may equal, if any.
+    #[serde(default)]
+    pub equals_any: Vec<String>,
     /// Canonical Nix literal the governing value must not equal, if any.
     pub not_equals: Option<String>,
 }
@@ -367,13 +370,21 @@ impl Visibility {
             return true;
         };
         let current = current.trim();
-        if self.equals.is_none() && self.not_equals.is_none() {
+        if self.equals.is_none() && self.equals_any.is_empty() && self.not_equals.is_none() {
             return !matches!(current, "false" | "null" | "0" | "0.0");
         }
         if let Some(equals) = &self.equals {
             if current != equals.trim() {
                 return false;
             }
+        }
+        if !self.equals_any.is_empty()
+            && !self
+                .equals_any
+                .iter()
+                .any(|equals| current == equals.trim())
+        {
+            return false;
         }
         if let Some(not_equals) = &self.not_equals {
             if current == not_equals.trim() {
@@ -476,9 +487,15 @@ impl OptionSpec {
 /// is present.
 fn parse_visibility(d: &Directives) -> Option<Visibility> {
     let path = d.string("visibleWhen.path")?;
+    let (equals, equals_any) = match d.get("visibleWhen.equals") {
+        Some(Lit::List(items)) => (None, items.iter().map(Lit::to_nix).collect()),
+        Some(lit) => (Some(lit.to_nix()), Vec::new()),
+        None => (None, Vec::new()),
+    };
     Some(Visibility {
         path,
-        equals: d.get("visibleWhen.equals").map(|lit| lit.to_nix()),
+        equals,
+        equals_any,
         not_equals: d.get("visibleWhen.notEquals").map(|lit| lit.to_nix()),
     })
 }
@@ -717,6 +734,7 @@ mod tests {
         let truthy = Visibility {
             path: "a".into(),
             equals: None,
+            equals_any: Vec::new(),
             not_equals: None,
         };
         assert!(truthy.holds(Some("true")));
@@ -726,6 +744,7 @@ mod tests {
         let eq = Visibility {
             path: "a".into(),
             equals: Some("\"auto\"".into()),
+            equals_any: Vec::new(),
             not_equals: None,
         };
         assert!(eq.holds(Some("\"auto\"")));
@@ -734,6 +753,7 @@ mod tests {
         let ne = Visibility {
             path: "a".into(),
             equals: None,
+            equals_any: Vec::new(),
             not_equals: Some("false".into()),
         };
         assert!(ne.holds(Some("true")));
@@ -745,6 +765,7 @@ mod tests {
         let bool_true = Visibility {
             path: "a".into(),
             equals: Some("true".into()),
+            equals_any: Vec::new(),
             not_equals: None,
         };
         assert!(bool_true.holds(Some("true")));
@@ -753,6 +774,7 @@ mod tests {
         let bool_false = Visibility {
             path: "a".into(),
             equals: Some("false".into()),
+            equals_any: Vec::new(),
             not_equals: None,
         };
         assert!(bool_false.holds(Some("false")));
@@ -761,10 +783,29 @@ mod tests {
         let string_eq = Visibility {
             path: "a".into(),
             equals: Some("\"firefox\"".into()),
+            equals_any: Vec::new(),
             not_equals: None,
         };
         assert!(string_eq.holds(Some("\"firefox\"")));
         assert!(!string_eq.holds(Some("\"chrome\"")));
+    }
+
+    #[test]
+    fn visibility_equals_accepts_a_list() {
+        let text = "/* @option widget = \"text\"; visibleWhen.path = \"ojuny.gpu\"; visibleWhen.equals = [ \"hybrid-intel-nvidia\" \"hybrid-amd-nvidia\" ]; */";
+        let (_, d) = parse_comment(text).unwrap();
+        let vis = OptionSpec::from_directives(&d).visible_when.unwrap();
+        assert_eq!(vis.equals, None);
+        assert_eq!(
+            vis.equals_any,
+            vec![
+                "\"hybrid-intel-nvidia\"".to_string(),
+                "\"hybrid-amd-nvidia\"".to_string()
+            ]
+        );
+        assert!(vis.holds(Some("\"hybrid-intel-nvidia\"")));
+        assert!(vis.holds(Some("\"hybrid-amd-nvidia\"")));
+        assert!(!vis.holds(Some("\"intel\"")));
     }
 
     #[test]
