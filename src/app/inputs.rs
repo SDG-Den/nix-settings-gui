@@ -173,7 +173,10 @@ pub(super) fn refresh(app: &Rc<App>) {
         add_missing.add_css_class("suggested-action");
         add_missing.set_halign(gtk::Align::Start);
         let app = app.clone();
-        add_missing.connect_clicked(move |_| auto_add_missing(&app, &missing));
+        add_missing.connect_clicked(move |button| {
+            button.set_sensitive(false);
+            auto_add_missing(&app, &missing);
+        });
         content.append(&add_missing);
     }
 

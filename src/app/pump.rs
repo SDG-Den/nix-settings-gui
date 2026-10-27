@@ -112,7 +112,7 @@ pub(super) fn handle_msg(app: &Rc<App>, tx: &Tx, msg: Msg) {
             };
             *app.target.borrow_mut() = target;
 
-            app.title.set_text("Settings");
+            app.title.set_text("settings");
             *app.scan.borrow_mut() = Some(result);
             watch_files(app);
             app.status.set_text("Ready");

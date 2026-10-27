@@ -69,7 +69,7 @@ fn build_ui(app: &adw::Application, tx: &Tx, page_pattern: Option<Regex>) -> Rc<
     }
 
     let title = gtk::Label::builder()
-        .label("Settings")
+        .label("settings")
         .ellipsize(gtk::pango::EllipsizeMode::End)
         .css_classes(["title-4"])
         .build();
@@ -310,7 +310,7 @@ fn build_ui(app: &adw::Application, tx: &Tx, page_pattern: Option<Regex>) -> Rc<
 
     let window = adw::ApplicationWindow::builder()
         .application(app)
-        .title("Settings")
+        .title("settings")
         .default_width(1180)
         .default_height(760)
         .content(&toolbar_view)
