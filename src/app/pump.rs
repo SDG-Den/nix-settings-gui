@@ -237,15 +237,7 @@ pub(super) fn handle_msg(app: &Rc<App>, tx: &Tx, msg: Msg) {
 }
 
 pub(super) fn show_error(parent: &impl IsA<gtk::Window>, message: &str) {
-    let dialog = gtk::MessageDialog::builder()
-        .transient_for(parent)
-        .modal(true)
-        .message_type(gtk::MessageType::Error)
-        .buttons(gtk::ButtonsType::Close)
-        .text(message)
-        .build();
-    dialog.connect_response(|dialog, _| dialog.close());
-    dialog.present();
+    crate::error_dialog::show(Some(parent.upcast_ref()), message);
 }
 
 pub(super) fn spawn<F: FnOnce(Tx) + Send + 'static>(tx: &Tx, work: F) {

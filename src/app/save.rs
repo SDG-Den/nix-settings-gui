@@ -281,6 +281,7 @@ pub(super) fn reload(app: &Rc<App>, tx: &Tx) {
 /// Re-read every file under the current root, exactly like `open_flake`.
 pub(super) fn rescan(app: &Rc<App>, tx: &Tx) {
     let base = app.base.borrow().clone();
+    *app.wallpaper_set.borrow_mut() = None;
     app.status.set_text("reloading from disk...");
     scan_started(app);
     spawn(tx, move |tx| {

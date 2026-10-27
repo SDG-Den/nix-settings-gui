@@ -232,17 +232,7 @@ fn placeholder() -> gtk::Image {
 }
 
 fn show_error(parent: Option<&gtk::Window>, message: &str) {
-    let dialog = gtk::MessageDialog::builder()
-        .modal(true)
-        .message_type(gtk::MessageType::Error)
-        .buttons(gtk::ButtonsType::Close)
-        .text(message)
-        .build();
-    if let Some(parent) = parent {
-        dialog.set_transient_for(Some(parent));
-    }
-    dialog.connect_response(|dialog, _| dialog.close());
-    dialog.present();
+    crate::error_dialog::show(parent, message);
 }
 
 fn install_css() {

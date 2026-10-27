@@ -1,6 +1,9 @@
 use super::context::{BuildContext, ChangeHook, WallpaperActions};
 use super::editor::Editor;
-use super::nix::{nix_path_literal, normalize_path, parse_string_literal, quote, relative_path};
+use super::nix::{
+    nix_path_literal, normalize_path, parse_string_literal, quote, relative_path,
+    unwrap_modifiers,
+};
 use crate::dsl::OptionSpec;
 use crate::model::Record;
 use gtk::prelude::*;
@@ -48,7 +51,13 @@ impl WallpaperChoice {
     fn apply_literal(&self) -> String {
         match self {
             WallpaperChoice::Auto => "null".to_string(),
-            WallpaperChoice::Preset(preset) => quote(&preset.name),
+            WallpaperChoice::Preset(preset) => {
+                if preset.path.as_os_str().is_empty() {
+                    quote(&preset.name)
+                } else {
+                    quote(&preset.path.to_string_lossy())
+                }
+            }
             WallpaperChoice::File(file) => quote(&file.absolute.to_string_lossy()),
         }
     }
@@ -57,6 +66,7 @@ impl WallpaperChoice {
 pub(crate) struct WallpaperUi {
     current: WallpaperChoice,
     tiles: Vec<WallpaperTile>,
+    default_path: Option<String>,
 }
 
 impl WallpaperUi {
@@ -65,7 +75,14 @@ impl WallpaperUi {
     }
 
     pub(crate) fn apply_literal(&self) -> String {
-        self.current.apply_literal()
+        match &self.current {
+            WallpaperChoice::Auto => self
+                .default_path
+                .as_ref()
+                .map(|path| quote(path))
+                .unwrap_or_else(|| "null".to_string()),
+            _ => self.current.apply_literal(),
+        }
     }
 
     fn can_remove(&self, dir: &Path) -> bool {
@@ -108,6 +125,7 @@ pub(crate) fn build_wallpaper(record: &Record, value_text: &str, ctx: &BuildCont
     let ui = Rc::new(RefCell::new(WallpaperUi {
         current,
         tiles: Vec::new(),
+        default_path: None,
     }));
     let presets = Rc::new(RefCell::new(Vec::new()));
     if let WallpaperChoice::Preset(preset) = &ui.borrow().current {
@@ -204,11 +222,11 @@ pub(crate) fn build_wallpaper(record: &Record, value_text: &str, ctx: &BuildCont
     }
 
     if record.spec.preset_source.is_some() {
-        if let Some(fetch) = ctx.wallpaper_presets.clone() {
+        if let Some(fetch) = ctx.wallpaper_set.clone() {
             let view = view.clone();
             fetch(Box::new(move |result| {
-                if let Ok(presets) = result {
-                    view.set_presets(presets);
+                if let Ok(set) = result {
+                    view.set_presets(set);
                 }
             }));
         }
@@ -230,9 +248,10 @@ fn scroll_delta(delta: f64, unit: gtk::gdk::ScrollUnit, page: f64) -> f64 {
 }
 
 impl WallpaperView {
-    fn set_presets(&self, presets: Vec<crate::metadata::WallpaperPreset>) {
+    fn set_presets(&self, set: crate::metadata::WallpaperSet) {
         let current = self.ui.borrow().current.clone();
-        *self.presets.borrow_mut() = presets
+        *self.presets.borrow_mut() = set
+            .presets
             .into_iter()
             .map(|preset| WallpaperPresetChoice {
                 name: preset.name,
@@ -240,10 +259,25 @@ impl WallpaperView {
                 path: PathBuf::from(preset.path),
             })
             .collect();
+        self.ui.borrow_mut().default_path =
+            Some(set.default_path).filter(|path| !path.is_empty());
         if let WallpaperChoice::Preset(preset) = current {
-            let mut presets = self.presets.borrow_mut();
-            if !presets.iter().any(|entry| entry.name == preset.name) {
-                presets.push(preset);
+            let known = self
+                .presets
+                .borrow()
+                .iter()
+                .find(|entry| entry.name == preset.name)
+                .cloned();
+            if let Some(known) = known {
+                self.ui.borrow_mut().current = WallpaperChoice::Preset(known);
+            } else {
+                let file = self.dir.join(&preset.name);
+                if file.is_file() {
+                    self.ui.borrow_mut().current =
+                        WallpaperChoice::File(wallpaper_file(&self.module_dir, &file));
+                } else {
+                    self.presets.borrow_mut().push(preset);
+                }
             }
         }
         self.refresh();
@@ -352,12 +386,17 @@ impl WallpaperView {
 
         match choice {
             WallpaperChoice::Auto => {
-                let icon = gtk::Image::from_icon_name("applications-graphics-symbolic");
-                icon.set_pixel_size(40);
-                icon.set_halign(gtk::Align::Center);
-                icon.set_valign(gtk::Align::Center);
-                icon.set_vexpand(true);
-                host.append(&icon);
+                let default_path = self.ui.borrow().default_path.clone();
+                if let Some(path) = default_path.filter(|path| !path.is_empty()) {
+                    append_preview(&host, Path::new(&path), &fallback);
+                } else {
+                    let icon = gtk::Image::from_icon_name("applications-graphics-symbolic");
+                    icon.set_pixel_size(40);
+                    icon.set_halign(gtk::Align::Center);
+                    icon.set_valign(gtk::Align::Center);
+                    icon.set_vexpand(true);
+                    host.append(&icon);
+                }
             }
             WallpaperChoice::Preset(preset) if preset.path.as_os_str().is_empty() => {
                 host.append(&fallback());
@@ -551,17 +590,7 @@ fn append_preview(host: &gtk::Box, path: &Path, fallback: &impl Fn() -> gtk::Ima
 }
 
 fn show_error(parent: Option<&gtk::Window>, message: &str) {
-    let dialog = gtk::MessageDialog::builder()
-        .modal(true)
-        .message_type(gtk::MessageType::Error)
-        .buttons(gtk::ButtonsType::Close)
-        .text(message)
-        .build();
-    if let Some(parent) = parent {
-        dialog.set_transient_for(Some(parent));
-    }
-    dialog.connect_response(|dialog, _| dialog.close());
-    dialog.present();
+    crate::error_dialog::show(parent, message);
 }
 
 fn same_choice(a: &WallpaperChoice, b: &WallpaperChoice) -> bool {
@@ -608,13 +637,31 @@ pub(crate) fn wallpaper_dir(spec: &OptionSpec, module_dir: &Path) -> PathBuf {
     }
 }
 
+fn parse_path_expression(text: &str) -> Option<String> {
+    let inner = text.trim().strip_prefix('(')?.strip_suffix(')')?;
+    let (parent, name) = inner.split_once('+')?;
+    let parent = parent.trim();
+    if !(parent.starts_with("./") || parent.starts_with("../") || parent.starts_with('/')) {
+        return None;
+    }
+    let name = name.trim();
+    if !(name.starts_with('"') && name.ends_with('"')) {
+        return None;
+    }
+    Some(format!("{parent}{}", parse_string_literal(name)))
+}
+
 fn initial_choice(value_text: &str, module_dir: &Path) -> WallpaperChoice {
-    let text = value_text.trim();
+    let text = unwrap_modifiers(value_text);
+    let text = text.trim();
     if text.is_empty() || text == "null" {
         return WallpaperChoice::Auto;
     }
-    let raw = parse_string_literal(text);
-    if looks_like_preset(&raw) {
+    let expression = parse_path_expression(text);
+    let raw = expression
+        .clone()
+        .unwrap_or_else(|| parse_string_literal(text));
+    if expression.is_none() && looks_like_preset(&raw) {
         return WallpaperChoice::Preset(WallpaperPresetChoice {
             name: raw.clone(),
             label: raw,
@@ -627,7 +674,11 @@ fn initial_choice(value_text: &str, module_dir: &Path) -> WallpaperChoice {
     } else {
         normalize_path(&module_dir.join(path))
     };
-    let value = if text.starts_with('"') || text.starts_with("''") {
+    let value = if expression.is_some() {
+        text.to_string()
+    } else if (text.starts_with('"') || text.starts_with("''")) && !path.is_absolute() {
+        nix_path_literal(&raw)
+    } else if text.starts_with('"') || text.starts_with("''") {
         text.to_string()
     } else {
         nix_path_literal(text)
@@ -753,6 +804,17 @@ mod tests {
     }
 
     #[test]
+    fn default_modifiers_are_unwrapped() {
+        let auto = initial_choice("lib.mkDefault null", Path::new("/repo/modules/02-core"));
+        assert_eq!(auto, WallpaperChoice::Auto);
+        let preset = initial_choice(
+            "lib.mkDefault \"stripes\"",
+            Path::new("/repo/modules/02-core"),
+        );
+        assert_eq!(preset.nix_value(), "\"stripes\"");
+    }
+
+    #[test]
     fn preset_names_are_not_treated_as_paths() {
         let choice = initial_choice("stripes", Path::new("/repo/modules/02-core"));
         let WallpaperChoice::Preset(preset) = &choice else {
@@ -791,5 +853,66 @@ mod tests {
         );
         assert_eq!(file.name, "everforest.png");
         assert_eq!(file.value, "./wallpapers/everforest.png");
+    }
+
+    #[test]
+    fn path_expressions_resolve_back_to_the_image_path() {
+        let choice = initial_choice(
+            "(./wallpapers + \"/my paper.png\")",
+            Path::new("/repo/modules/02-core"),
+        );
+        let WallpaperChoice::File(file) = &choice else {
+            panic!("expected a file");
+        };
+        assert_eq!(
+            file.absolute,
+            PathBuf::from("/repo/modules/02-core/wallpapers/my paper.png")
+        );
+        assert_eq!(file.value, "(./wallpapers + \"/my paper.png\")");
+    }
+
+    #[test]
+    fn quoted_relative_paths_are_rewritten_as_path_expressions() {
+        let choice = initial_choice(
+            "\"./wallpapers/my paper.png\"",
+            Path::new("/repo/modules/02-core"),
+        );
+        let WallpaperChoice::File(file) = &choice else {
+            panic!("expected a file");
+        };
+        assert_eq!(file.value, "(./wallpapers + \"/my paper.png\")");
+    }
+
+    #[test]
+    fn preset_apply_literal_uses_the_themed_path() {
+        let preset = WallpaperPresetChoice {
+            name: "everforest".to_string(),
+            label: "Default".to_string(),
+            path: PathBuf::from("/nix/store/abc/user/builtin/everforest.png"),
+        };
+        let ui = WallpaperUi {
+            current: WallpaperChoice::Preset(preset),
+            tiles: Vec::new(),
+            default_path: None,
+        };
+        assert_eq!(ui.nix_value(), "\"everforest\"");
+        assert_eq!(
+            ui.apply_literal(),
+            "\"/nix/store/abc/user/builtin/everforest.png\""
+        );
+    }
+
+    #[test]
+    fn auto_apply_literal_uses_the_default_themed_path() {
+        let ui = WallpaperUi {
+            current: WallpaperChoice::Auto,
+            tiles: Vec::new(),
+            default_path: Some("/nix/store/abc/user/builtin/everforest.png".to_string()),
+        };
+        assert_eq!(ui.nix_value(), "null");
+        assert_eq!(
+            ui.apply_literal(),
+            "\"/nix/store/abc/user/builtin/everforest.png\""
+        );
     }
 }

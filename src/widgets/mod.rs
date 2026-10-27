@@ -30,7 +30,7 @@ mod wallpaper;
 pub(crate) use basic::{build_entry, build_spin, build_switch};
 pub(crate) use context::{
     ApplyHook, BuildContext, ChangeHook, IconActions, PackageSearch, PluginRegistryHook,
-    PluginSettingsHook, WallpaperActions, WallpaperPresetsHook,
+    PluginSettingsHook, WallpaperActions, WallpaperSetHook,
 };
 pub(crate) use details::InfoDetails;
 pub(crate) use dispatch::{build, is_package};

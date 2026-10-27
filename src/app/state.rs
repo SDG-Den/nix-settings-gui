@@ -212,8 +212,8 @@ pub(super) struct App {
     pub(super) scans_in_flight: Cell<u32>,
     pub(super) package_service: Rc<PackageService>,
     pub(super) plugin_registry: Rc<PluginRegistryState>,
-    pub(super) wallpaper_presets:
-        RefCell<Option<Result<Vec<crate::metadata::WallpaperPreset>, String>>>,
+    pub(super) wallpaper_set:
+        RefCell<Option<(String, Result<crate::metadata::WallpaperSet, String>)>>,
     pub(super) apply_state: Rc<ApplyState>,
     pub(super) tx: Tx,
 

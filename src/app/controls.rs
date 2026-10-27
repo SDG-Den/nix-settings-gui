@@ -112,7 +112,7 @@ pub(super) fn build_context(app: &Rc<App>) -> widgets::BuildContext {
     ctx.search = Some(package_search(app));
     ctx.plugin_registry = Some(plugin_registry_hook(app));
     ctx.plugin_settings = Some(plugin_settings_hook(app));
-    ctx.wallpaper_presets = Some(wallpaper_presets_hook(app));
+    ctx.wallpaper_set = Some(wallpaper_set_hook(app));
     ctx.apply = Some(apply_hook(app));
     ctx.base = app.base.borrow().clone();
     ctx.wallpaper = Some(super::wallpaper::actions(app));
@@ -166,18 +166,27 @@ fn plugin_registry_hook(app: &Rc<App>) -> widgets::PluginRegistryHook {
     })
 }
 
-/// Wallpaper presets hook: evaluate once per flake and cache the result.
-fn wallpaper_presets_hook(app: &Rc<App>) -> widgets::WallpaperPresetsHook {
+/// Wallpaper set hook: evaluate once per flake and target and cache the result.
+fn wallpaper_set_hook(app: &Rc<App>) -> widgets::WallpaperSetHook {
     let app = app.clone();
     Rc::new(move |done| {
-        let cached = app.wallpaper_presets.borrow().clone();
-        if let Some(cached) = cached {
-            done(cached);
-            return;
-        }
         let base = app.base.borrow().clone();
-        let result = crate::metadata::wallpaper_presets(&base);
-        *app.wallpaper_presets.borrow_mut() = Some(result.clone());
+        let target = {
+            let raw = app.target.borrow().clone();
+            match Target::parse(&raw) {
+                Some(Target::Nixos(_)) => format!("nixos:{}", app.current_host.borrow()),
+                _ => raw,
+            }
+        };
+        let key = format!("{base}\u{0}{target}");
+        if let Some((cached_key, cached)) = app.wallpaper_set.borrow().clone() {
+            if cached_key == key {
+                done(cached);
+                return;
+            }
+        }
+        let result = crate::metadata::wallpaper_set(&base, &target);
+        *app.wallpaper_set.borrow_mut() = Some((key, result.clone()));
         done(result);
     })
 }

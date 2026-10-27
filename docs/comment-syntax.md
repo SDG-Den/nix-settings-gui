@@ -97,7 +97,7 @@ services.pipewire.enable = true;
 | `visibleWhen.notEquals` | literal | Value the governing option must not equal. |
 | `applyCommand` | string     | Shell command that applies the option immediately, without saving. |
 | `wallpaperDir` | string     | Directory holding wallpaper images, relative to the file containing the option. Defaults to `./wallpapers`. |
-| `presetSource` | string | Flake input that declares wallpaper presets, e.g. `ojuny-desktop`. When set, the wallpaper picker lists those presets before the images in `wallpaperDir`. |
+| `presetSource` | string | Flake input that declares wallpaper presets, e.g. `ojuny-desktop`. When set, the wallpaper picker loads the generated themed wallpaper set for the current target and lists those presets before the images in `wallpaperDir`. |
 | `iconDir`     | string          | Directory holding icons added by `icon` table columns, relative to the file containing the option. Defaults to `./icons`. |
 
 ### Visibility dependencies
@@ -186,7 +186,7 @@ its own interface, such as a DMS or mango IPC call.
 | `keybinds` | Bind list with a modifier+keys preview and edit popout | mode -> name -> bind set |
 | `monitors` | Draggable monitor layout canvas over `monitor_rule` | list of monitor sets |
 | `theme` | Scheme picker with colour swatches | short scheme name string |
-| `wallpaper` | Horizontally scrolling wallpaper previews | `null` or a path string |
+| `wallpaper` | Horizontally scrolling wallpaper previews | `null`, a preset name, or a path string |
 | `menu` | Nestable tree of menu entries | dotted-id keyed attribute set |
 | `plugins` | Plugin list with a settings form | name-keyed attribute set |
 | `bar` | Bar widget configuration | bar-name-keyed attribute set |
@@ -273,7 +273,7 @@ widget; the field shape lives in the application.
 | `keybinds` | a bind mode, e.g. `binds.default` | `name -> { modifier; keys; dispatcher; args; description; group; subcat; }`. Shows a `modifier+keys` preview per row and opens a popout to edit the fields. |
 | `monitors` | `mango.rules.monitor_rule` | a list of monitor sets. Renders the configured rules on a draggable canvas; dragging writes `x`/`y` only. Unset sizes default to a 1920x1080 rectangle (marked visually). |
 | `theme` | the scheme option | a scheme name string. Shows a swatch per bundled scheme and writes the short name (`base16-ocean` becomes `ocean`). `polarity` and `wallpaper` stay separate options. |
-| `wallpaper` | the wallpaper option | `null` for auto-themed, a preset name, or a path to an image. With `presetSource`, the strip starts with the bundled presets from that flake input, then the images in `wallpaperDir`. Added files are copied into `wallpaperDir` and staged with `git add`; preset tiles are not removable. |
+| `wallpaper` | the wallpaper option | `null` for the default themed preset, a preset name, or a path to an image. With `presetSource`, the strip starts with the themed generated presets, then the images in `wallpaperDir`. Added files are copied into `wallpaperDir` and staged with `git add`; preset tiles are not removable. |
 | `menu` | `dankMenu.menu` | an attribute set keyed by dotted id. Splits the id on `.` and renders a nestable tree; leaves are editable rows. |
 | `plugins` | `dms.plugins` | a name-keyed attribute set of `{ enable; src; settings; dir; config; }`. `settings` renders as `raw` unless annotated as a typed submodule. |
 | `bar` | `barConfigs` | a name-keyed attribute set with id-keyed `left`/`center`/`right` widget lists plus layout and appearance. |

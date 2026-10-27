@@ -14,8 +14,9 @@ const DMS_PLUGINS_TO_JSON: &str = include_str!("nix/dms-plugins-to-json.nix");
 /// requested plugin's `plugin.json` and settings QML.
 const DMS_PLUGIN_SETTINGS_TO_JSON: &str = include_str!("nix/dms-plugin-settings-to-json.nix");
 
-/// An embedded copy of the wallpaper preset extractor. It finds the config
-/// flake input that declares wallpaper presets and returns every bundled one.
+/// An embedded copy of the wallpaper extractor. It returns the generated
+/// wallpaper directory for the selected target, or the raw presets from the
+/// config flake input when the target has no generated set.
 const WALLPAPERS_TO_JSON: &str = include_str!("nix/wallpapers-to-json.nix");
 
 /// Applies the registry extractor to its named arguments. The values arrive
@@ -25,9 +26,10 @@ const DMS_PLUGINS_APPLY: &str = r#"f: f {
   system = builtins.getEnv "NSG_SYSTEM";
 }"#;
 
-/// Applies the wallpaper preset extractor to its named arguments.
+/// Applies the wallpaper extractor to its named arguments.
 const WALLPAPERS_APPLY: &str = r#"f: f {
   flakePath = builtins.getEnv "NSG_FLAKE_PATH";
+  target = builtins.getEnv "NSG_TARGET";
 }"#;
 
 /// Applies the one-plugin settings extractor to its named arguments.
@@ -241,7 +243,7 @@ pub fn dms_plugins(flake_path: &str) -> Result<Vec<RegistryPlugin>, String> {
     Ok(payload.plugins)
 }
 
-/// One wallpaper preset bundled with ojuny-desktop.
+/// One wallpaper entry, either a bundled preset or a user image.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct WallpaperPreset {
     pub name: String,
@@ -249,20 +251,56 @@ pub struct WallpaperPreset {
     pub path: String,
 }
 
-#[derive(Debug, Deserialize)]
-struct WallpapersPayload {
-    wallpapers: Vec<WallpaperPreset>,
+/// The generated wallpaper set for one configuration target. The raw fallback
+/// returned for unsupported targets leaves the generated fields empty.
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct WallpaperSet {
+    #[serde(default)]
+    pub directory: String,
+    #[serde(default)]
+    pub selected: String,
+    #[serde(default, rename = "default")]
+    pub default_path: String,
+    #[serde(default, rename = "storePath")]
+    pub store_path: String,
+    #[serde(default, rename = "drvPath")]
+    pub drv_path: String,
+    #[serde(default)]
+    pub presets: Vec<WallpaperPreset>,
+    #[serde(default)]
+    pub user: Vec<WallpaperPreset>,
 }
 
-/// The wallpaper presets bundled with the config flake input that declares
-/// them. Empty when no input does.
-pub fn wallpaper_presets(flake_path: &str) -> Result<Vec<WallpaperPreset>, String> {
+/// Ensure the generated wallpaper directory exists in the store. A failure is
+/// non-fatal: the picker falls back to image placeholders.
+fn realize_wallpapers(out_path: &str, drv_path: &str) {
+    if out_path.is_empty() || std::path::Path::new(out_path).exists() {
+        return;
+    }
+    if drv_path.is_empty() {
+        return;
+    }
+    let _ = Command::new("nix-store")
+        .arg("--realise")
+        .arg(drv_path)
+        .output();
+}
+
+/// The generated wallpaper set for a target, or the raw presets declared by
+/// the config flake input when the target has no generated set.
+pub fn wallpaper_set(flake_path: &str, target: &str) -> Result<WallpaperSet, String> {
     let path = std::env::temp_dir().join("nix-settings-gui-wallpapers-to-json.nix");
     let _ = std::fs::write(&path, WALLPAPERS_TO_JSON);
-    let json = eval_script(&path, WALLPAPERS_APPLY, &[("NSG_FLAKE_PATH", flake_path)])?;
-    let payload: WallpapersPayload =
+    let json = eval_script(
+        &path,
+        WALLPAPERS_APPLY,
+        &[("NSG_FLAKE_PATH", flake_path), ("NSG_TARGET", target)],
+    )?;
+    let payload: WallpaperSet =
         serde_json::from_str(&json).map_err(|e| format!("cannot parse nix output: {e}"))?;
-    Ok(payload.wallpapers)
+    realize_wallpapers(&payload.store_path, &payload.drv_path);
+    Ok(payload)
 }
 
 #[derive(Debug, Deserialize)]

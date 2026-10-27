@@ -1121,9 +1121,10 @@ mod tests {
         let text = std::fs::read_to_string(path).expect("02-plugins.nix is readable");
         let record = plugins_record(&text);
         let groups = plugin_groups(&record, &BuildContext::default());
-        assert_eq!(groups.len(), 9, "plugin count");
+        assert_eq!(groups.len(), 10, "plugin count");
         for id in [
             "dankMenu",
+            "emojiLauncher",
             "dankKDEConnect",
             "nixMonitor",
             "localServices",

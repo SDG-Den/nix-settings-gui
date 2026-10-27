@@ -340,7 +340,7 @@ fn build_ui(app: &adw::Application, tx: &Tx, page_pattern: Option<Regex>) -> Rc<
         scans_in_flight: Cell::new(0),
         package_service: PackageService::new(),
         plugin_registry: Rc::new(PluginRegistryState::new()),
-        wallpaper_presets: RefCell::new(None),
+        wallpaper_set: RefCell::new(None),
         apply_state: ApplyState::new(),
         tx: tx.clone(),
         config: RefCell::new(AppConfig::load()),

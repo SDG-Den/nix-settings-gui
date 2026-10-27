@@ -272,7 +272,7 @@ pub fn literal_for_widget(widget: WidgetKind, value: &str) -> String {
             if t == "null" {
                 "null".to_string()
             } else {
-                path_literal(value)
+                nix_path_literal(value)
             }
         }
         WidgetKind::Dropdown | WidgetKind::Radio => choice_literal(value),
@@ -301,11 +301,25 @@ pub fn literal_for_widget(widget: WidgetKind, value: &str) -> String {
 }
 
 /// A path stays a bare path literal when it looks like one, else a string.
+/// A relative path containing whitespace becomes a path-expression addition,
+/// because a Nix path literal cannot contain spaces.
 pub(crate) fn nix_path_literal(value: &str) -> String {
-    if value.chars().any(char::is_whitespace) {
-        quote(value)
-    } else {
-        path_literal(value)
+    if !value.chars().any(char::is_whitespace) {
+        return path_literal(value);
+    }
+    if Path::new(value).is_absolute() {
+        return quote(value);
+    }
+    match value.rsplit_once('/') {
+        Some((parent, name)) => {
+            let parent = match parent {
+                "" | "." => "./.".to_string(),
+                ".." => "../.".to_string(),
+                other => other.to_string(),
+            };
+            format!("({parent} + {})", quote(&format!("/{name}")))
+        }
+        None => format!("(./. + {})", quote(&format!("/{value}"))),
     }
 }
 
@@ -400,6 +414,26 @@ mod tests {
     }
 
     #[test]
+    fn whitespace_paths_become_path_expressions() {
+        assert_eq!(
+            nix_path_literal("./wallpapers/my paper.png"),
+            "(./wallpapers + \"/my paper.png\")"
+        );
+        assert_eq!(
+            nix_path_literal("../assets/my paper.png"),
+            "(../assets + \"/my paper.png\")"
+        );
+        assert_eq!(
+            nix_path_literal("my paper.png"),
+            "(./. + \"/my paper.png\")"
+        );
+        assert_eq!(
+            nix_path_literal("/tmp/my paper.png"),
+            "\"/tmp/my paper.png\""
+        );
+    }
+
+    #[test]
     fn serialises_add_option_values() {
         assert_eq!(literal_for_widget(WidgetKind::Switch, "true"), "true");
         assert_eq!(literal_for_widget(WidgetKind::Spin, "8"), "8");
@@ -407,6 +441,14 @@ mod tests {
         assert_eq!(
             literal_for_widget(WidgetKind::Packages, "[ pkgs.git pkgs.vim ]"),
             "[ pkgs.git pkgs.vim ]"
+        );
+        assert_eq!(
+            literal_for_widget(WidgetKind::Wallpaper, "./wallpapers/my paper.png"),
+            "(./wallpapers + \"/my paper.png\")"
+        );
+        assert_eq!(
+            literal_for_widget(WidgetKind::Wallpaper, "everforest"),
+            "\"everforest\""
         );
     }
 
