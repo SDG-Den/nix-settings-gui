@@ -16,6 +16,7 @@ mod enrich;
 mod files;
 mod git;
 mod icon;
+mod inputs;
 pub(crate) mod menu;
 mod pump;
 mod save;
@@ -68,7 +69,7 @@ fn build_ui(app: &adw::Application, tx: &Tx, page_pattern: Option<Regex>) -> Rc<
     }
 
     let title = gtk::Label::builder()
-        .label("nix-settings-gui")
+        .label("Settings")
         .ellipsize(gtk::pango::EllipsizeMode::End)
         .css_classes(["title-4"])
         .build();
@@ -115,9 +116,43 @@ fn build_ui(app: &adw::Application, tx: &Tx, page_pattern: Option<Regex>) -> Rc<
         .vexpand(true)
         .build();
 
+    let inputs_list = gtk::ListBox::new();
+    inputs_list.set_selection_mode(gtk::SelectionMode::Single);
+    inputs_list.add_css_class("navigation-sidebar");
+    let inputs_row = gtk::ListBoxRow::new();
+    inputs_row.set_widget_name(inputs::INPUTS_PAGE);
+    let inputs_content = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    inputs_content.set_margin_top(6);
+    inputs_content.set_margin_bottom(6);
+    inputs_content.set_margin_start(6);
+    inputs_content.set_margin_end(6);
+    if let Some(icon) = inputs::flake_icon_image() {
+        inputs_content.append(&icon);
+    }
+    inputs_content.append(
+        &gtk::Label::builder()
+            .label("Flake Inputs")
+            .xalign(0.0)
+            .hexpand(true)
+            .ellipsize(gtk::pango::EllipsizeMode::End)
+            .build(),
+    );
+    let inputs_warning = gtk::Image::from_icon_name("dialog-warning-symbolic");
+    inputs_warning.set_visible(false);
+    inputs_content.append(&inputs_warning);
+    inputs_row.set_child(Some(&inputs_content));
+    inputs_list.append(&inputs_row);
+
+    let sidebar = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    sidebar.append(&list_scroll);
+    sidebar.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    sidebar.append(&inputs_list);
+
     let stack = gtk::Stack::new();
     stack.set_hexpand(true);
     stack.set_vexpand(true);
+    let inputs_page = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    stack.add_named(&inputs_page, Some(inputs::INPUTS_PAGE));
 
     let nixd_banner = adw::Banner::new("");
     nixd_banner.set_revealed(false);
@@ -156,7 +191,7 @@ fn build_ui(app: &adw::Application, tx: &Tx, page_pattern: Option<Regex>) -> Rc<
     content_pane.append(&nixd_banner);
 
     let paned = gtk::Paned::new(gtk::Orientation::Horizontal);
-    paned.set_start_child(Some(&list_scroll));
+    paned.set_start_child(Some(&sidebar));
     paned.set_end_child(Some(&content_pane));
     paned.set_position(320);
     paned.set_hexpand(true);
@@ -275,7 +310,7 @@ fn build_ui(app: &adw::Application, tx: &Tx, page_pattern: Option<Regex>) -> Rc<
 
     let window = adw::ApplicationWindow::builder()
         .application(app)
-        .title("nix-settings-gui")
+        .title("Settings")
         .default_width(1180)
         .default_height(760)
         .content(&toolbar_view)
@@ -290,6 +325,10 @@ fn build_ui(app: &adw::Application, tx: &Tx, page_pattern: Option<Regex>) -> Rc<
         system_toggle,
         advanced_toggle,
         list,
+        inputs_list,
+        inputs_page,
+        inputs_warning,
+        showing_inputs: Cell::new(false),
         stack,
         nixd_banner,
         status,
@@ -351,6 +390,22 @@ fn build_ui(app: &adw::Application, tx: &Tx, page_pattern: Option<Regex>) -> Rc<
         &mango_reload_switch,
         &dms_reload_switch,
     );
+    inputs::refresh(&app_state);
+    {
+        let app = app_state.clone();
+        app_state
+            .inputs_list
+            .clone()
+            .connect_row_selected(move |_, row| {
+                if row.is_none() {
+                    return;
+                }
+                app.showing_inputs.set(true);
+                app.list.unselect_all();
+                app.stack.set_visible_child_name(inputs::INPUTS_PAGE);
+                inputs::refresh(&app);
+            });
+    }
     install_actions(&app_state);
     {
         let app = app_state.clone();
@@ -447,6 +502,8 @@ fn wire(
             if name.is_empty() {
                 return;
             }
+            app.showing_inputs.set(false);
+            app.inputs_list.unselect_all();
             app.stack.set_visible_child_name(name.as_str());
             *app.current_file.borrow_mut() = name.to_string();
             apply_control_filter(&app);

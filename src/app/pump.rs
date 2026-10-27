@@ -10,6 +10,7 @@ use crate::scan;
 use super::dialogs::fill_suggestions;
 use super::enrich::apply_infos;
 use super::git::commit_message_dialog;
+use super::inputs;
 use super::menu::rebuild_view;
 use super::save::{clear_busy, collect_edits, rescan, run_rebuild, scan_finished, set_busy};
 use super::state::{App, Msg, Tx};
@@ -22,14 +23,22 @@ fn watch_files(app: &Rc<App>) {
     app.watchers.borrow_mut().clear();
     let mut files: Vec<String> = Vec::new();
     {
+        let base = app.base.borrow().clone();
+        if !base.is_empty() {
+            let flake = Path::new(&base).join("flake.nix");
+            if flake.is_file() {
+                files.push(flake.display().to_string());
+            }
+        }
+    }
+    {
         let scan = app.scan.borrow();
-        let Some(scan) = scan.as_ref() else {
-            return;
-        };
-        for menu in &scan.menus {
-            for record in &menu.records {
-                if !record.file.is_empty() && !files.contains(&record.file) {
-                    files.push(record.file.clone());
+        if let Some(scan) = scan.as_ref() {
+            for menu in &scan.menus {
+                for record in &menu.records {
+                    if !record.file.is_empty() && !files.contains(&record.file) {
+                        files.push(record.file.clone());
+                    }
                 }
             }
         }
@@ -103,16 +112,16 @@ pub(super) fn handle_msg(app: &Rc<App>, tx: &Tx, msg: Msg) {
             };
             *app.target.borrow_mut() = target;
 
-            let path = app.base.borrow().clone();
-            let name = Path::new(&path)
-                .file_name()
-                .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or(path);
-            app.title.set_text(&format!("nix-settings-gui - {name}"));
+            app.title.set_text("Settings");
             *app.scan.borrow_mut() = Some(result);
             watch_files(app);
             app.status.set_text("Ready");
             rebuild_view(app);
+            inputs::update_warning(app);
+            if app.showing_inputs.get() {
+                inputs::refresh(app);
+                app.stack.set_visible_child_name(inputs::INPUTS_PAGE);
+            }
             scan_finished(app);
         }
         Msg::Scanned(Err(e)) => {
@@ -213,6 +222,14 @@ pub(super) fn handle_msg(app: &Rc<App>, tx: &Tx, msg: Msg) {
         Msg::GitSynced(Ok(_)) => app.status.set_text("Git: synced"),
         Msg::GitSynced(Err(e)) => {
             app.status.set_text("Git sync failed");
+            show_error(&app.window, &e);
+        }
+        Msg::InputsSaved(Ok(())) => {
+            app.status.set_text("Flake inputs saved");
+            rescan(app, tx);
+        }
+        Msg::InputsSaved(Err(e)) => {
+            app.status.set_text("Flake input save failed");
             show_error(&app.window, &e);
         }
         Msg::ApplyFinished { path, result } => super::apply::finished(app, &path, result),

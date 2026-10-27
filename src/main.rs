@@ -9,6 +9,7 @@ mod cli;
 mod config;
 mod dsl;
 mod edit;
+mod flake_inputs;
 #[allow(dead_code)]
 mod metadata;
 #[allow(dead_code)]

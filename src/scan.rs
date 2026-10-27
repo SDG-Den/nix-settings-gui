@@ -32,6 +32,8 @@ pub struct FileScan {
     /// Per-host direct module references, keyed by target, e.g.
     /// `nixos:alpha`.
     pub target_imports: HashMap<String, Vec<String>>,
+    /// Every `@inputs` declaration found in this file.
+    pub declared_inputs: Vec<crate::flake_inputs::DeclaredInput>,
 }
 
 /// The whole scan of a config tree.
@@ -45,6 +47,9 @@ pub struct ScanResult {
     pub module_imports: HashMap<String, Vec<String>>,
     /// Target to the origins its configuration pulls in directly.
     pub target_imports: HashMap<String, Vec<String>>,
+    /// Every `@inputs` declaration found in the tree, including files that do
+    /// not become menus.
+    pub declared_inputs: Vec<crate::flake_inputs::DeclaredInput>,
 }
 
 impl ScanResult {
@@ -119,6 +124,7 @@ pub fn scan_root(root: &str) -> Result<ScanResult, String> {
         let text = std::fs::read_to_string(file)
             .map_err(|e| format!("cannot read {}: {e}", file.display()))?;
         let scan = scan_file(file, &text);
+        result.declared_inputs.extend(scan.declared_inputs.clone());
         result.targets.extend(scan.targets.clone());
         for origin in &scan.origins {
             result
@@ -194,6 +200,8 @@ pub fn scan_file(path: &Path, text: &str) -> FileScan {
     };
 
     let parsed = rnix::Root::parse(text);
+    scan.declared_inputs =
+        crate::flake_inputs::declared_inputs_from_syntax(text, &parsed.syntax(), &file);
     let Some(root) = rnix::Root::cast(parsed.syntax()) else {
         return scan;
     };

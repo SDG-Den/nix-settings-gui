@@ -185,6 +185,9 @@ pub(super) fn rebuild_menu_list(app: &Rc<App>) {
 }
 
 fn select_file(app: &Rc<App>, file: &str) {
+    if app.showing_inputs.get() {
+        return;
+    }
     let mut child = app.list.first_child();
     let mut first_selectable: Option<gtk::ListBoxRow> = None;
     while let Some(widget) = child {
@@ -220,11 +223,13 @@ fn rebuild_pages(app: &Rc<App>) {
     }
     app.pages.replace(pages);
 
-    let current = app.current_file.borrow().clone();
-    if let Some(file) = select_menu_file(&menus, &current, None) {
-        app.stack.set_visible_child_name(&file);
-        *app.current_file.borrow_mut() = file.clone();
-        select_file(app, &file);
+    if !app.showing_inputs.get() {
+        let current = app.current_file.borrow().clone();
+        if let Some(file) = select_menu_file(&menus, &current, None) {
+            app.stack.set_visible_child_name(&file);
+            *app.current_file.borrow_mut() = file.clone();
+            select_file(app, &file);
+        }
     }
     super::controls::apply_control_filter(app);
     super::enrich::query_current_page(app, &app.tx);

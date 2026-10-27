@@ -35,6 +35,7 @@ pub(super) enum Msg {
     Invalid(Vec<String>),
     GitPulled(Result<bool, String>),
     GitSynced(Result<String, String>),
+    InputsSaved(Result<(), String>),
     ApplyFinished {
         path: String,
         result: Result<(), String>,
@@ -196,6 +197,10 @@ pub(super) struct App {
     pub(super) system_toggle: gtk::ToggleButton,
     pub(super) advanced_toggle: gtk::ToggleButton,
     pub(super) list: gtk::ListBox,
+    pub(super) inputs_list: gtk::ListBox,
+    pub(super) inputs_page: gtk::Box,
+    pub(super) inputs_warning: gtk::Image,
+    pub(super) showing_inputs: Cell<bool>,
     pub(super) stack: gtk::Stack,
     pub(super) nixd_banner: adw::Banner,
     pub(super) status: gtk::Label,

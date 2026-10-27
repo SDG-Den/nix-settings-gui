@@ -209,6 +209,7 @@ pub enum MarkerKind {
     Snippet,
     Insert,
     TableItem,
+    Inputs,
     WidgetPreset,
     WidgetPresetField,
 }
@@ -241,6 +242,7 @@ fn split_marker(s: &str) -> Option<(MarkerKind, &str)> {
         ("@snippet", MarkerKind::Snippet),
         ("@insert", MarkerKind::Insert),
         ("@table-item", MarkerKind::TableItem),
+        ("@inputs", MarkerKind::Inputs),
         ("@widget-preset", MarkerKind::WidgetPreset),
         ("@widget-preset-field", MarkerKind::WidgetPresetField),
     ] {
