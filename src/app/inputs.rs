@@ -4,8 +4,8 @@ use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
 
+use adw::prelude::*;
 use gtk::glib;
-use gtk::prelude::*;
 
 use crate::edit;
 use crate::flake_inputs::{self, DeclaredInput, FlakeInput};
@@ -398,8 +398,10 @@ fn open_dialog(app: &Rc<App>, existing: Option<FlakeInput>) {
 
     let submodules = gtk::Switch::new();
     submodules.set_active(input.submodules);
+    submodules.set_halign(gtk::Align::Start);
     let lfs = gtk::Switch::new();
     lfs.set_active(input.lfs);
+    lfs.set_halign(gtk::Align::Start);
 
     grid.attach(&gtk::Label::new(Some("Name")), 0, 0, 1, 1);
     grid.attach(&name_entry, 1, 0, 1, 1);
@@ -614,22 +616,25 @@ fn save_edits(app: &Rc<App>, edits: Vec<edit::PendingEdit>) {
 }
 
 fn confirm_delete(app: &Rc<App>, name: &str) {
-    let dialog = gtk::MessageDialog::builder()
+    let dialog = adw::MessageDialog::builder()
         .transient_for(&app.window)
         .modal(true)
-        .message_type(gtk::MessageType::Question)
-        .buttons(gtk::ButtonsType::None)
-        .text(format!("Delete input \"{name}\"?"))
+        .heading("Delete input")
+        .body(format!(
+            "Delete \"{name}\" from flake.nix? This cannot be undone."
+        ))
         .build();
-    dialog.add_button("Cancel", gtk::ResponseType::Cancel);
-    let delete = dialog.add_button("Delete", gtk::ResponseType::Accept);
-    delete.add_css_class("destructive-action");
+    dialog.add_response("cancel", "Cancel");
+    dialog.add_response("delete", "Delete");
+    dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
+    dialog.set_default_response(Some("cancel"));
+    dialog.set_close_response("cancel");
 
     let app = app.clone();
     let name = name.to_string();
     let file = flake_file(&app);
-    dialog.connect_response(move |dialog, response| {
-        if response == gtk::ResponseType::Accept {
+    dialog.connect_response(None, move |dialog: &adw::MessageDialog, response: &str| {
+        if response == "delete" {
             match flake_inputs::load(&file) {
                 Ok(document) => match document.edits_for_delete(&name) {
                     Ok(edits) => save_edits(&app, edits),

@@ -1056,6 +1056,23 @@ mod tests {
     }
 
     #[test]
+    fn collects_inputs_markers_from_any_comment() {
+        let text = r#"{ ... }: {
+  # @inputs name = "nixvim"; url = "github:nix-community/nixvim";
+  value = 1;
+  /* @inputs name = "foo"; url = "https://example.com/foo"; */
+}
+"#;
+        let scan = scan(text);
+        let names: Vec<&str> = scan
+            .declared_inputs
+            .iter()
+            .map(|input| input.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["nixvim", "foo"]);
+    }
+
+    #[test]
     fn recovers_menu_and_records_from_malformed_file() {
         let text = r#"/* @menu displayname = "User"; */
 
