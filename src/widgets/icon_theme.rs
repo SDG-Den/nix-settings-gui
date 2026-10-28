@@ -4,7 +4,6 @@ use super::style_choice::{self, PackageBinding};
 use super::theme_catalog::{self, ThemeRoot};
 use crate::dsl::OptionSpec;
 use gtk::prelude::*;
-use std::collections::HashSet;
 use std::rc::Rc;
 
 const SAMPLE_ICONS: &[&str] = &[
@@ -142,14 +141,12 @@ pub(crate) fn build_icon_theme(
     package: Option<PackageBinding>,
 ) -> Editor {
     let mut items = Vec::new();
-    let mut seen = HashSet::new();
     for entry in style_catalog::icon_themes() {
         if let Some(variant) = spec.variant.as_deref() {
             if entry.variant != variant {
                 continue;
             }
         }
-        seen.insert(entry.value.to_string());
         let theme = theme_catalog::find(entry.value);
         let installed = theme.is_some();
         let label = entry.label.to_string();
@@ -165,25 +162,6 @@ pub(crate) fn build_icon_theme(
             Rc::new(move || thumbnail(thumbnail_theme.clone(), previews)),
             Rc::new(move || preview(&label, &package, theme.clone(), installed, previews)),
         ));
-    }
-    if spec.variant.is_none() {
-        for theme in theme_catalog::roots() {
-            if !seen.insert(theme.name.clone()) {
-                continue;
-            }
-            let label = theme.label.clone();
-            let thumbnail_theme = theme.clone();
-            let preview_theme = theme.clone();
-            items.push(style_choice::entry(
-                label.clone(),
-                theme.name.clone(),
-                None,
-                true,
-                "installed",
-                Rc::new(move || thumbnail(Some(thumbnail_theme.clone()), &[])),
-                Rc::new(move || preview(&label, "", Some(preview_theme.clone()), true, &[])),
-            ));
-        }
     }
     style_choice::build(
         value_text,

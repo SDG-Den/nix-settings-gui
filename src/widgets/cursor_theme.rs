@@ -5,7 +5,6 @@ use super::theme_catalog::{self, ThemeRoot};
 use super::xcursor;
 use crate::dsl::OptionSpec;
 use gtk::{gdk, glib, prelude::*};
-use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 use std::rc::Rc;
@@ -146,9 +145,7 @@ pub(crate) fn build_cursor_theme(
     package: Option<PackageBinding>,
 ) -> Editor {
     let mut items = Vec::new();
-    let mut seen = HashSet::new();
     for entry in style_catalog::cursor_themes() {
-        seen.insert(entry.value.to_string());
         let theme = theme_catalog::find_cursor(entry.value);
         let installed = theme.is_some();
         let label = entry.label.to_string();
@@ -163,23 +160,6 @@ pub(crate) fn build_cursor_theme(
             "",
             Rc::new(move || thumbnail(thumbnail_theme.clone(), previews)),
             Rc::new(move || preview(&label, &package, theme.clone(), installed, previews)),
-        ));
-    }
-    for theme in theme_catalog::roots() {
-        if !theme.has_cursors || !seen.insert(theme.name.clone()) {
-            continue;
-        }
-        let label = theme.label.clone();
-        let thumbnail_theme = theme.clone();
-        let preview_theme = theme.clone();
-        items.push(style_choice::entry(
-            label.clone(),
-            theme.name.clone(),
-            None,
-            true,
-            "installed",
-            Rc::new(move || thumbnail(Some(thumbnail_theme.clone()), &[])),
-            Rc::new(move || preview(&label, "", Some(preview_theme.clone()), true, &[])),
         ));
     }
     style_choice::build(

@@ -194,6 +194,7 @@ pub(crate) fn build(
 
     let list = gtk::ListBox::new();
     list.add_css_class("style-choice-list");
+    list.add_css_class("boxed-list");
     list.set_selection_mode(gtk::SelectionMode::Single);
 
     let mut rows: Vec<(gtk::ListBoxRow, ChoiceEntry)> = Vec::new();
@@ -242,31 +243,42 @@ pub(crate) fn build(
         .placeholder_text(search_placeholder)
         .hexpand(true)
         .build();
+    let installed_only = gtk::CheckButton::with_label("Installed only");
+    installed_only.add_css_class("pill");
+    installed_only.set_tooltip_text(Some(
+        "Hide catalog entries whose packages are not installed",
+    ));
+    let top = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    top.append(&search);
+    top.append(&installed_only);
+
     let scrolled = gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)
-        .min_content_height(260)
+        .min_content_height(300)
         .vexpand(true)
         .child(&list)
         .build();
     let left = gtk::Box::new(gtk::Orientation::Vertical, 8);
-    left.set_size_request(360, -1);
-    left.append(&search);
+    left.set_size_request(380, -1);
     left.append(&scrolled);
 
     let preview_host = gtk::Box::new(gtk::Orientation::Vertical, 0);
     preview_host.set_hexpand(true);
-    preview_host.set_valign(gtk::Align::Start);
+    preview_host.set_vexpand(true);
+    preview_host.set_valign(gtk::Align::Fill);
     preview_host.add_css_class("style-choice-preview");
     let right = gtk::Box::new(gtk::Orientation::Vertical, 0);
     right.set_hexpand(true);
+    right.set_vexpand(true);
     right.append(&preview_host);
 
     let content = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     content.set_hexpand(true);
     content.append(&left);
     content.append(&right);
-    let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    let root = gtk::Box::new(gtk::Orientation::Vertical, 8);
     root.set_hexpand(true);
+    root.append(&top);
     root.append(&content);
 
     if let Some(row) = selected {
@@ -303,12 +315,19 @@ pub(crate) fn build(
 
     {
         let rows = rows.clone();
-        search.connect_search_changed(move |entry| {
-            let query = entry.text().trim().to_lowercase();
+        let filter_search = search.clone();
+        let filter_installed = installed_only.clone();
+        let filter: Rc<dyn Fn()> = Rc::new(move || {
+            let query = filter_search.text().trim().to_lowercase();
+            let installed_only = filter_installed.is_active();
             for (row, item) in &rows {
-                row.set_visible(query.is_empty() || item.search.contains(&query));
+                let matches = query.is_empty() || item.search.contains(&query);
+                row.set_visible(matches && (!installed_only || item.installed));
             }
         });
+        let filter_for_search = filter.clone();
+        search.connect_search_changed(move |_| filter_for_search());
+        installed_only.connect_toggled(move |_| filter());
     }
 
     Editor::StyleChoice { root, choice }

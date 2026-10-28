@@ -19,9 +19,6 @@ const DMS_PLUGIN_SETTINGS_TO_JSON: &str = include_str!("nix/dms-plugin-settings-
 /// config flake input when the target has no generated set.
 const WALLPAPERS_TO_JSON: &str = include_str!("nix/wallpapers-to-json.nix");
 
-/// An embedded copy of the Nixpkgs Nerd Font catalog extractor.
-const STYLE_FONTS_TO_JSON: &str = include_str!("nix/style-fonts-to-json.nix");
-
 /// Applies the registry extractor to its named arguments. The values arrive
 /// through the environment so no user path is interpolated into Nix source.
 const DMS_PLUGINS_APPLY: &str = r#"f: f {
@@ -33,11 +30,6 @@ const DMS_PLUGINS_APPLY: &str = r#"f: f {
 const WALLPAPERS_APPLY: &str = r#"f: f {
   flakePath = builtins.getEnv "NSG_FLAKE_PATH";
   target = builtins.getEnv "NSG_TARGET";
-}"#;
-
-/// Applies the font catalog extractor to its named arguments.
-const STYLE_FONTS_APPLY: &str = r#"f: f {
-  flakePath = builtins.getEnv "NSG_FLAKE_PATH";
 }"#;
 
 /// Applies the one-plugin settings extractor to its named arguments.
@@ -309,30 +301,6 @@ pub fn wallpaper_set(flake_path: &str, target: &str) -> Result<WallpaperSet, Str
         serde_json::from_str(&json).map_err(|e| format!("cannot parse nix output: {e}"))?;
     realize_wallpapers(&payload.store_path, &payload.drv_path);
     Ok(payload)
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct StyleFont {
-    pub family: String,
-    pub label: String,
-    pub package: String,
-    #[serde(default)]
-    pub monospace: bool,
-}
-
-#[derive(Debug, Deserialize)]
-struct StyleFontsPayload {
-    #[serde(default)]
-    fonts: Vec<StyleFont>,
-}
-
-pub fn style_fonts(flake_path: &str) -> Result<Vec<StyleFont>, String> {
-    let path = std::env::temp_dir().join("nix-settings-gui-style-fonts-to-json.nix");
-    let _ = std::fs::write(&path, STYLE_FONTS_TO_JSON);
-    let json = eval_script(&path, STYLE_FONTS_APPLY, &[("NSG_FLAKE_PATH", flake_path)])?;
-    let payload: StyleFontsPayload =
-        serde_json::from_str(&json).map_err(|e| format!("cannot parse nix output: {e}"))?;
-    Ok(payload.fonts)
 }
 
 #[derive(Debug, Deserialize)]

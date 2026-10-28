@@ -71,9 +71,12 @@ mod tests {
 
     #[test]
     fn shipped_catalog_has_previews() {
-        assert!(!fonts().is_empty());
-        assert!(!icon_themes().is_empty());
-        assert!(!cursor_themes().is_empty());
+        assert!(fonts().len() >= 40);
+        assert!(icon_themes().len() >= 10);
+        assert!(cursor_themes().len() >= 3);
+        for entry in fonts() {
+            assert!(entry.preview.is_some(), "{}", entry.value);
+        }
         for entry in icon_themes().iter().chain(cursor_themes()) {
             assert!(!entry.previews.is_empty(), "{}", entry.value);
         }

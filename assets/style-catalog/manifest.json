@@ -1,6 +1,139 @@
 {
   "fonts": [
     {
+      "label": "0xProto Nerd Font",
+      "value": "0xProto Nerd Font",
+      "package": "pkgs.nerd-fonts._0xproto",
+      "preview": "previews/font-nerd-0xproto-normal.png",
+      "monospace": false
+    },
+    {
+      "label": "0xProto Nerd Font Mono",
+      "value": "0xProto Nerd Font Mono",
+      "package": "pkgs.nerd-fonts._0xproto",
+      "preview": "previews/font-nerd-0xproto-mono.png",
+      "monospace": true
+    },
+    {
+      "label": "AdwaitaMono Nerd Font",
+      "value": "AdwaitaMono Nerd Font",
+      "package": "pkgs.nerd-fonts.adwaita-mono",
+      "preview": "previews/font-nerd-adwaita-mono-normal.png",
+      "monospace": false
+    },
+    {
+      "label": "AdwaitaMono Nerd Font Mono",
+      "value": "AdwaitaMono Nerd Font Mono",
+      "package": "pkgs.nerd-fonts.adwaita-mono",
+      "preview": "previews/font-nerd-adwaita-mono-mono.png",
+      "monospace": true
+    },
+    {
+      "label": "Agave Nerd Font",
+      "value": "Agave Nerd Font",
+      "package": "pkgs.nerd-fonts.agave",
+      "preview": "previews/font-nerd-agave-normal.png",
+      "monospace": false
+    },
+    {
+      "label": "Agave Nerd Font Mono",
+      "value": "Agave Nerd Font Mono",
+      "package": "pkgs.nerd-fonts.agave",
+      "preview": "previews/font-nerd-agave-mono.png",
+      "monospace": true
+    },
+    {
+      "label": "Arimo Nerd Font",
+      "value": "Arimo Nerd Font",
+      "package": "pkgs.nerd-fonts.arimo",
+      "preview": "previews/font-nerd-arimo-normal.png",
+      "monospace": false
+    },
+    {
+      "label": "CaskaydiaCove Nerd Font",
+      "value": "CaskaydiaCove Nerd Font",
+      "package": "pkgs.nerd-fonts.caskaydia-cove",
+      "preview": "previews/font-nerd-caskaydia-cove-normal.png",
+      "monospace": false
+    },
+    {
+      "label": "CaskaydiaCove Nerd Font Mono",
+      "value": "CaskaydiaCove Nerd Font Mono",
+      "package": "pkgs.nerd-fonts.caskaydia-cove",
+      "preview": "previews/font-nerd-caskaydia-cove-mono.png",
+      "monospace": true
+    },
+    {
+      "label": "CaskaydiaMono Nerd Font",
+      "value": "CaskaydiaMono Nerd Font",
+      "package": "pkgs.nerd-fonts.caskaydia-mono",
+      "preview": "previews/font-nerd-caskaydia-mono-normal.png",
+      "monospace": false
+    },
+    {
+      "label": "CaskaydiaMono Nerd Font Mono",
+      "value": "CaskaydiaMono Nerd Font Mono",
+      "package": "pkgs.nerd-fonts.caskaydia-mono",
+      "preview": "previews/font-nerd-caskaydia-mono-mono.png",
+      "monospace": true
+    },
+    {
+      "label": "CommitMono Nerd Font",
+      "value": "CommitMono Nerd Font",
+      "package": "pkgs.nerd-fonts.commit-mono",
+      "preview": "previews/font-nerd-commit-mono-normal.png",
+      "monospace": false
+    },
+    {
+      "label": "CommitMono Nerd Font Mono",
+      "value": "CommitMono Nerd Font Mono",
+      "package": "pkgs.nerd-fonts.commit-mono",
+      "preview": "previews/font-nerd-commit-mono-mono.png",
+      "monospace": true
+    },
+    {
+      "label": "Cousine Nerd Font",
+      "value": "Cousine Nerd Font",
+      "package": "pkgs.nerd-fonts.cousine",
+      "preview": "previews/font-nerd-cousine-normal.png",
+      "monospace": false
+    },
+    {
+      "label": "Cousine Nerd Font Mono",
+      "value": "Cousine Nerd Font Mono",
+      "package": "pkgs.nerd-fonts.cousine",
+      "preview": "previews/font-nerd-cousine-mono.png",
+      "monospace": true
+    },
+    {
+      "label": "D2KodingLigature Nerd Font",
+      "value": "D2KodingLigature Nerd Font",
+      "package": "pkgs.nerd-fonts.d2coding",
+      "preview": "previews/font-nerd-d2coding-normal.png",
+      "monospace": false
+    },
+    {
+      "label": "D2KodingLigature Nerd Font Mono",
+      "value": "D2KodingLigature Nerd Font Mono",
+      "package": "pkgs.nerd-fonts.d2coding",
+      "preview": "previews/font-nerd-d2coding-mono.png",
+      "monospace": true
+    },
+    {
+      "label": "DaddyTimeMono Nerd Font",
+      "value": "DaddyTimeMono Nerd Font",
+      "package": "pkgs.nerd-fonts.daddy-time-mono",
+      "preview": "previews/font-nerd-daddy-time-mono-normal.png",
+      "monospace": false
+    },
+    {
+      "label": "DaddyTimeMono Nerd Font Mono",
+      "value": "DaddyTimeMono Nerd Font Mono",
+      "package": "pkgs.nerd-fonts.daddy-time-mono",
+      "preview": "previews/font-nerd-daddy-time-mono-mono.png",
+      "monospace": true
+    },
+    {
       "label": "DejaVu Sans",
       "value": "DejaVu Sans",
       "package": "pkgs.dejavu_fonts",
@@ -22,10 +155,80 @@
       "monospace": false
     },
     {
+      "label": "FantasqueSansM Nerd Font",
+      "value": "FantasqueSansM Nerd Font",
+      "package": "pkgs.nerd-fonts.fantasque-sans-mono",
+      "preview": "previews/font-nerd-fantasque-sans-mono-normal.png",
+      "monospace": false
+    },
+    {
+      "label": "FantasqueSansM Nerd Font Mono",
+      "value": "FantasqueSansM Nerd Font Mono",
+      "package": "pkgs.nerd-fonts.fantasque-sans-mono",
+      "preview": "previews/font-nerd-fantasque-sans-mono-mono.png",
+      "monospace": true
+    },
+    {
       "label": "Fira Code",
       "value": "Fira Code",
       "package": "pkgs.fira-code",
       "preview": "previews/font-fira-code.png",
+      "monospace": true
+    },
+    {
+      "label": "FiraCode Nerd Font",
+      "value": "FiraCode Nerd Font",
+      "package": "pkgs.nerd-fonts.fira-code",
+      "preview": "previews/font-nerd-fira-code-normal.png",
+      "monospace": false
+    },
+    {
+      "label": "FiraCode Nerd Font Mono",
+      "value": "FiraCode Nerd Font Mono",
+      "package": "pkgs.nerd-fonts.fira-code",
+      "preview": "previews/font-nerd-fira-code-mono.png",
+      "monospace": true
+    },
+    {
+      "label": "GeistMono Nerd Font",
+      "value": "GeistMono Nerd Font",
+      "package": "pkgs.nerd-fonts.geist-mono",
+      "preview": "previews/font-nerd-geist-mono-normal.png",
+      "monospace": false
+    },
+    {
+      "label": "GeistMono Nerd Font Mono",
+      "value": "GeistMono Nerd Font Mono",
+      "package": "pkgs.nerd-fonts.geist-mono",
+      "preview": "previews/font-nerd-geist-mono-mono.png",
+      "monospace": true
+    },
+    {
+      "label": "Hack Nerd Font",
+      "value": "Hack Nerd Font",
+      "package": "pkgs.nerd-fonts.hack",
+      "preview": "previews/font-nerd-hack-normal.png",
+      "monospace": false
+    },
+    {
+      "label": "Hack Nerd Font Mono",
+      "value": "Hack Nerd Font Mono",
+      "package": "pkgs.nerd-fonts.hack",
+      "preview": "previews/font-nerd-hack-mono.png",
+      "monospace": true
+    },
+    {
+      "label": "Inconsolata Nerd Font",
+      "value": "Inconsolata Nerd Font",
+      "package": "pkgs.nerd-fonts.inconsolata",
+      "preview": "previews/font-nerd-inconsolata-normal.png",
+      "monospace": false
+    },
+    {
+      "label": "Inconsolata Nerd Font Mono",
+      "value": "Inconsolata Nerd Font Mono",
+      "package": "pkgs.nerd-fonts.inconsolata",
+      "preview": "previews/font-nerd-inconsolata-mono.png",
       "monospace": true
     },
     {
@@ -36,11 +239,32 @@
       "monospace": false
     },
     {
-      "label": "Liberation Sans",
-      "value": "Liberation Sans",
-      "package": "pkgs.liberation_ttf",
-      "preview": "previews/font-liberation-sans.png",
+      "label": "Iosevka Nerd Font",
+      "value": "Iosevka Nerd Font",
+      "package": "pkgs.nerd-fonts.iosevka",
+      "preview": "previews/font-nerd-iosevka-normal.png",
       "monospace": false
+    },
+    {
+      "label": "Iosevka Nerd Font Mono",
+      "value": "Iosevka Nerd Font Mono",
+      "package": "pkgs.nerd-fonts.iosevka",
+      "preview": "previews/font-nerd-iosevka-mono.png",
+      "monospace": true
+    },
+    {
+      "label": "JetBrainsMono Nerd Font",
+      "value": "JetBrainsMono Nerd Font",
+      "package": "pkgs.nerd-fonts.jetbrains-mono",
+      "preview": "previews/font-nerd-jetbrains-mono-normal.png",
+      "monospace": false
+    },
+    {
+      "label": "JetBrainsMono Nerd Font Mono",
+      "value": "JetBrainsMono Nerd Font Mono",
+      "package": "pkgs.nerd-fonts.jetbrains-mono",
+      "preview": "previews/font-nerd-jetbrains-mono-mono.png",
+      "monospace": true
     },
     {
       "label": "Liberation Mono",
@@ -50,11 +274,60 @@
       "monospace": true
     },
     {
+      "label": "Liberation Sans",
+      "value": "Liberation Sans",
+      "package": "pkgs.liberation_ttf",
+      "preview": "previews/font-liberation-sans.png",
+      "monospace": false
+    },
+    {
       "label": "Liberation Serif",
       "value": "Liberation Serif",
       "package": "pkgs.liberation_ttf",
       "preview": "previews/font-liberation-serif.png",
       "monospace": false
+    },
+    {
+      "label": "Lilex Nerd Font",
+      "value": "Lilex Nerd Font",
+      "package": "pkgs.nerd-fonts.lilex",
+      "preview": "previews/font-nerd-lilex-normal.png",
+      "monospace": false
+    },
+    {
+      "label": "Lilex Nerd Font Mono",
+      "value": "Lilex Nerd Font Mono",
+      "package": "pkgs.nerd-fonts.lilex",
+      "preview": "previews/font-nerd-lilex-mono.png",
+      "monospace": true
+    },
+    {
+      "label": "MartianMono Nerd Font",
+      "value": "MartianMono Nerd Font",
+      "package": "pkgs.nerd-fonts.martian-mono",
+      "preview": "previews/font-nerd-martian-mono-normal.png",
+      "monospace": false
+    },
+    {
+      "label": "MartianMono Nerd Font Mono",
+      "value": "MartianMono Nerd Font Mono",
+      "package": "pkgs.nerd-fonts.martian-mono",
+      "preview": "previews/font-nerd-martian-mono-mono.png",
+      "monospace": true
+    },
+    {
+      "label": "Mononoki Nerd Font",
+      "value": "Mononoki Nerd Font",
+      "package": "pkgs.nerd-fonts.mononoki",
+      "preview": "previews/font-nerd-mononoki-normal.png",
+      "monospace": false
+    },
+    {
+      "label": "Mononoki Nerd Font Mono",
+      "value": "Mononoki Nerd Font Mono",
+      "package": "pkgs.nerd-fonts.mononoki",
+      "preview": "previews/font-nerd-mononoki-mono.png",
+      "monospace": true
     },
     {
       "label": "Noto Sans CJK JP",
@@ -78,28 +351,201 @@
       "monospace": false
     },
     {
-      "label": "CaskaydiaCove Nerd Font",
-      "value": "CaskaydiaCove Nerd Font",
-      "package": "pkgs.nerd-fonts.caskaydia-cove",
-      "preview": "previews/font-caskaydiacove-nerd-font.png",
+      "label": "ProggyClean Nerd Font",
+      "value": "ProggyClean Nerd Font",
+      "package": "pkgs.nerd-fonts.proggy-clean-tt",
+      "preview": "previews/font-nerd-proggy-clean-tt-normal.png",
       "monospace": false
     },
     {
-      "label": "CaskaydiaCove Nerd Font Mono",
-      "value": "CaskaydiaCove Nerd Font Mono",
-      "package": "pkgs.nerd-fonts.caskaydia-cove",
-      "preview": "previews/font-caskaydiacove-nerd-font-mono.png",
+      "label": "ProggyClean Nerd Font Mono",
+      "value": "ProggyClean Nerd Font Mono",
+      "package": "pkgs.nerd-fonts.proggy-clean-tt",
+      "preview": "previews/font-nerd-proggy-clean-tt-mono.png",
       "monospace": true
     },
     {
-      "label": "CaskaydiaMono Nerd Font",
-      "value": "CaskaydiaMono Nerd Font",
-      "package": "pkgs.nerd-fonts.caskaydia-mono",
-      "preview": "previews/font-caskaydiamono-nerd-font.png",
+      "label": "RobotoMono Nerd Font",
+      "value": "RobotoMono Nerd Font",
+      "package": "pkgs.nerd-fonts.roboto-mono",
+      "preview": "previews/font-nerd-roboto-mono-normal.png",
+      "monospace": false
+    },
+    {
+      "label": "RobotoMono Nerd Font Mono",
+      "value": "RobotoMono Nerd Font Mono",
+      "package": "pkgs.nerd-fonts.roboto-mono",
+      "preview": "previews/font-nerd-roboto-mono-mono.png",
+      "monospace": true
+    },
+    {
+      "label": "SauceCodePro Nerd Font",
+      "value": "SauceCodePro Nerd Font",
+      "package": "pkgs.nerd-fonts.sauce-code-pro",
+      "preview": "previews/font-nerd-sauce-code-pro-normal.png",
+      "monospace": false
+    },
+    {
+      "label": "SauceCodePro Nerd Font Mono",
+      "value": "SauceCodePro Nerd Font Mono",
+      "package": "pkgs.nerd-fonts.sauce-code-pro",
+      "preview": "previews/font-nerd-sauce-code-pro-mono.png",
+      "monospace": true
+    },
+    {
+      "label": "SpaceMono Nerd Font",
+      "value": "SpaceMono Nerd Font",
+      "package": "pkgs.nerd-fonts.space-mono",
+      "preview": "previews/font-nerd-space-mono-normal.png",
+      "monospace": false
+    },
+    {
+      "label": "SpaceMono Nerd Font Mono",
+      "value": "SpaceMono Nerd Font Mono",
+      "package": "pkgs.nerd-fonts.space-mono",
+      "preview": "previews/font-nerd-space-mono-mono.png",
+      "monospace": true
+    },
+    {
+      "label": "Ubuntu Nerd Font",
+      "value": "Ubuntu Nerd Font",
+      "package": "pkgs.nerd-fonts.ubuntu",
+      "preview": "previews/font-nerd-ubuntu-normal.png",
+      "monospace": false
+    },
+    {
+      "label": "UbuntuMono Nerd Font",
+      "value": "UbuntuMono Nerd Font",
+      "package": "pkgs.nerd-fonts.ubuntu-mono",
+      "preview": "previews/font-nerd-ubuntu-mono-normal.png",
+      "monospace": false
+    },
+    {
+      "label": "UbuntuMono Nerd Font Mono",
+      "value": "UbuntuMono Nerd Font Mono",
+      "package": "pkgs.nerd-fonts.ubuntu-mono",
+      "preview": "previews/font-nerd-ubuntu-mono-mono.png",
+      "monospace": true
+    },
+    {
+      "label": "VictorMono Nerd Font",
+      "value": "VictorMono Nerd Font",
+      "package": "pkgs.nerd-fonts.victor-mono",
+      "preview": "previews/font-nerd-victor-mono-normal.png",
+      "monospace": false
+    },
+    {
+      "label": "VictorMono Nerd Font Mono",
+      "value": "VictorMono Nerd Font Mono",
+      "package": "pkgs.nerd-fonts.victor-mono",
+      "preview": "previews/font-nerd-victor-mono-mono.png",
+      "monospace": true
+    },
+    {
+      "label": "ZedMono Nerd Font",
+      "value": "ZedMono Nerd Font",
+      "package": "pkgs.nerd-fonts.zed-mono",
+      "preview": "previews/font-nerd-zed-mono-normal.png",
+      "monospace": false
+    },
+    {
+      "label": "ZedMono Nerd Font Mono",
+      "value": "ZedMono Nerd Font Mono",
+      "package": "pkgs.nerd-fonts.zed-mono",
+      "preview": "previews/font-nerd-zed-mono-mono.png",
       "monospace": true
     }
   ],
   "icons": [
+    {
+      "label": "Adwaita",
+      "value": "Adwaita",
+      "package": "pkgs.adwaita-icon-theme",
+      "variant": "",
+      "previews": [
+        "previews/icon-adwaita-1-folder.png",
+        "previews/icon-adwaita-2-user-home.png",
+        "previews/icon-adwaita-3-computer.png",
+        "previews/icon-adwaita-4-text-x-generic.png"
+      ]
+    },
+    {
+      "label": "Arc",
+      "value": "Arc",
+      "package": "pkgs.arc-icon-theme",
+      "variant": "",
+      "previews": [
+        "previews/icon-arc-1-folder.png",
+        "previews/icon-arc-2-user-home.png",
+        "previews/icon-arc-3-applications-system.png",
+        "previews/icon-arc-4-dialog-information.png",
+        "previews/icon-arc-5-edit-copy.png",
+        "previews/icon-arc-6-view-refresh.png",
+        "previews/icon-arc-7-preferences-system.png",
+        "previews/icon-arc-8-text-x-generic.png"
+      ]
+    },
+    {
+      "label": "Fluent",
+      "value": "Fluent",
+      "package": "pkgs.fluent-icon-theme",
+      "variant": "",
+      "previews": [
+        "previews/icon-fluent-1-folder.png",
+        "previews/icon-fluent-2-user-home.png",
+        "previews/icon-fluent-3-applications-system.png",
+        "previews/icon-fluent-4-system-file-manager.png",
+        "previews/icon-fluent-5-dialog-information.png",
+        "previews/icon-fluent-6-utilities-terminal.png",
+        "previews/icon-fluent-7-internet-web-browser.png",
+        "previews/icon-fluent-8-computer.png"
+      ]
+    },
+    {
+      "label": "Nordzy",
+      "value": "Nordzy",
+      "package": "pkgs.nordzy-icon-theme",
+      "variant": "",
+      "previews": [
+        "previews/icon-nordzy-1-folder.png",
+        "previews/icon-nordzy-2-user-home.png",
+        "previews/icon-nordzy-3-applications-system.png",
+        "previews/icon-nordzy-4-dialog-information.png",
+        "previews/icon-nordzy-5-edit-copy.png",
+        "previews/icon-nordzy-6-view-refresh.png",
+        "previews/icon-nordzy-7-preferences-system.png",
+        "previews/icon-nordzy-8-text-x-generic.png"
+      ]
+    },
+    {
+      "label": "Numix",
+      "value": "Numix",
+      "package": "pkgs.numix-icon-theme",
+      "variant": "",
+      "previews": [
+        "previews/icon-numix-1-folder.png",
+        "previews/icon-numix-2-user-home.png",
+        "previews/icon-numix-3-applications-system.png",
+        "previews/icon-numix-4-dialog-information.png",
+        "previews/icon-numix-5-edit-copy.png",
+        "previews/icon-numix-6-view-refresh.png",
+        "previews/icon-numix-7-preferences-system.png",
+        "previews/icon-numix-8-text-x-generic.png"
+      ]
+    },
+    {
+      "label": "Numix-Circle",
+      "value": "Numix-Circle",
+      "package": "pkgs.numix-icon-theme-circle",
+      "variant": "",
+      "previews": [
+        "previews/icon-numix-circle-1-applications-system.png",
+        "previews/icon-numix-circle-2-system-file-manager.png",
+        "previews/icon-numix-circle-3-utilities-terminal.png",
+        "previews/icon-numix-circle-4-internet-web-browser.png",
+        "previews/icon-numix-circle-5-preferences-system.png"
+      ]
+    },
     {
       "label": "Papirus",
       "value": "Papirus",
@@ -114,6 +560,70 @@
         "previews/icon-papirus-6-computer.png",
         "previews/icon-papirus-7-utilities-terminal.png",
         "previews/icon-papirus-8-view-refresh.png"
+      ]
+    },
+    {
+      "label": "Qogir",
+      "value": "Qogir",
+      "package": "pkgs.qogir-icon-theme",
+      "variant": "",
+      "previews": [
+        "previews/icon-qogir-1-folder.png",
+        "previews/icon-qogir-2-user-home.png",
+        "previews/icon-qogir-3-applications-system.png",
+        "previews/icon-qogir-4-system-file-manager.png",
+        "previews/icon-qogir-5-dialog-information.png",
+        "previews/icon-qogir-6-utilities-terminal.png",
+        "previews/icon-qogir-7-internet-web-browser.png",
+        "previews/icon-qogir-8-computer.png"
+      ]
+    },
+    {
+      "label": "Tela",
+      "value": "Tela",
+      "package": "pkgs.tela-icon-theme",
+      "variant": "",
+      "previews": [
+        "previews/icon-tela-1-folder.png",
+        "previews/icon-tela-2-user-home.png",
+        "previews/icon-tela-3-applications-system.png",
+        "previews/icon-tela-4-system-file-manager.png",
+        "previews/icon-tela-5-dialog-information.png",
+        "previews/icon-tela-6-utilities-terminal.png",
+        "previews/icon-tela-7-internet-web-browser.png",
+        "previews/icon-tela-8-computer.png"
+      ]
+    },
+    {
+      "label": "Fluent-dark",
+      "value": "Fluent-dark",
+      "package": "pkgs.fluent-icon-theme",
+      "variant": "dark",
+      "previews": [
+        "previews/icon-fluent-dark-1-folder.png",
+        "previews/icon-fluent-dark-2-user-home.png",
+        "previews/icon-fluent-dark-3-applications-system.png",
+        "previews/icon-fluent-dark-4-system-file-manager.png",
+        "previews/icon-fluent-dark-5-dialog-information.png",
+        "previews/icon-fluent-dark-6-utilities-terminal.png",
+        "previews/icon-fluent-dark-7-internet-web-browser.png",
+        "previews/icon-fluent-dark-8-computer.png"
+      ]
+    },
+    {
+      "label": "Nordzy-dark",
+      "value": "Nordzy-dark",
+      "package": "pkgs.nordzy-icon-theme",
+      "variant": "dark",
+      "previews": [
+        "previews/icon-nordzy-dark-1-folder.png",
+        "previews/icon-nordzy-dark-2-user-home.png",
+        "previews/icon-nordzy-dark-3-applications-system.png",
+        "previews/icon-nordzy-dark-4-dialog-information.png",
+        "previews/icon-nordzy-dark-5-edit-copy.png",
+        "previews/icon-nordzy-dark-6-view-refresh.png",
+        "previews/icon-nordzy-dark-7-preferences-system.png",
+        "previews/icon-nordzy-dark-8-text-x-generic.png"
       ]
     },
     {
@@ -133,6 +643,70 @@
       ]
     },
     {
+      "label": "Qogir-Dark",
+      "value": "Qogir-Dark",
+      "package": "pkgs.qogir-icon-theme",
+      "variant": "dark",
+      "previews": [
+        "previews/icon-qogir-dark-1-folder.png",
+        "previews/icon-qogir-dark-2-user-home.png",
+        "previews/icon-qogir-dark-3-applications-system.png",
+        "previews/icon-qogir-dark-4-system-file-manager.png",
+        "previews/icon-qogir-dark-5-dialog-information.png",
+        "previews/icon-qogir-dark-6-utilities-terminal.png",
+        "previews/icon-qogir-dark-7-internet-web-browser.png",
+        "previews/icon-qogir-dark-8-computer.png"
+      ]
+    },
+    {
+      "label": "Tela-dark",
+      "value": "Tela-dark",
+      "package": "pkgs.tela-icon-theme",
+      "variant": "dark",
+      "previews": [
+        "previews/icon-tela-dark-1-folder.png",
+        "previews/icon-tela-dark-2-user-home.png",
+        "previews/icon-tela-dark-3-applications-system.png",
+        "previews/icon-tela-dark-4-system-file-manager.png",
+        "previews/icon-tela-dark-5-dialog-information.png",
+        "previews/icon-tela-dark-6-utilities-terminal.png",
+        "previews/icon-tela-dark-7-internet-web-browser.png",
+        "previews/icon-tela-dark-8-computer.png"
+      ]
+    },
+    {
+      "label": "Zafiro-icons-Dark",
+      "value": "Zafiro-icons-Dark",
+      "package": "pkgs.zafiro-icons",
+      "variant": "dark",
+      "previews": [
+        "previews/icon-zafiro-icons-dark-1-folder.png",
+        "previews/icon-zafiro-icons-dark-2-user-home.png",
+        "previews/icon-zafiro-icons-dark-3-applications-system.png",
+        "previews/icon-zafiro-icons-dark-4-dialog-information.png",
+        "previews/icon-zafiro-icons-dark-5-edit-copy.png",
+        "previews/icon-zafiro-icons-dark-6-view-refresh.png",
+        "previews/icon-zafiro-icons-dark-7-preferences-system.png",
+        "previews/icon-zafiro-icons-dark-8-text-x-generic.png"
+      ]
+    },
+    {
+      "label": "Fluent-light",
+      "value": "Fluent-light",
+      "package": "pkgs.fluent-icon-theme",
+      "variant": "light",
+      "previews": [
+        "previews/icon-fluent-light-1-folder.png",
+        "previews/icon-fluent-light-2-user-home.png",
+        "previews/icon-fluent-light-3-applications-system.png",
+        "previews/icon-fluent-light-4-system-file-manager.png",
+        "previews/icon-fluent-light-5-dialog-information.png",
+        "previews/icon-fluent-light-6-utilities-terminal.png",
+        "previews/icon-fluent-light-7-internet-web-browser.png",
+        "previews/icon-fluent-light-8-computer.png"
+      ]
+    },
+    {
       "label": "Papirus Light",
       "value": "Papirus-Light",
       "package": "pkgs.papirus-icon-theme",
@@ -147,9 +721,73 @@
         "previews/icon-papirus-7-utilities-terminal.png",
         "previews/icon-papirus-8-view-refresh.png"
       ]
+    },
+    {
+      "label": "Qogir-Light",
+      "value": "Qogir-Light",
+      "package": "pkgs.qogir-icon-theme",
+      "variant": "light",
+      "previews": [
+        "previews/icon-qogir-light-1-folder.png",
+        "previews/icon-qogir-light-2-user-home.png",
+        "previews/icon-qogir-light-3-applications-system.png",
+        "previews/icon-qogir-light-4-system-file-manager.png",
+        "previews/icon-qogir-light-5-dialog-information.png",
+        "previews/icon-qogir-light-6-utilities-terminal.png",
+        "previews/icon-qogir-light-7-internet-web-browser.png",
+        "previews/icon-qogir-light-8-computer.png"
+      ]
+    },
+    {
+      "label": "Tela-light",
+      "value": "Tela-light",
+      "package": "pkgs.tela-icon-theme",
+      "variant": "light",
+      "previews": [
+        "previews/icon-tela-light-1-folder.png",
+        "previews/icon-tela-light-2-user-home.png",
+        "previews/icon-tela-light-3-applications-system.png",
+        "previews/icon-tela-light-4-system-file-manager.png",
+        "previews/icon-tela-light-5-dialog-information.png",
+        "previews/icon-tela-light-6-utilities-terminal.png",
+        "previews/icon-tela-light-7-internet-web-browser.png",
+        "previews/icon-tela-light-8-computer.png"
+      ]
+    },
+    {
+      "label": "Zafiro-icons-Light",
+      "value": "Zafiro-icons-Light",
+      "package": "pkgs.zafiro-icons",
+      "variant": "light",
+      "previews": [
+        "previews/icon-zafiro-icons-light-1-folder.png",
+        "previews/icon-zafiro-icons-light-2-user-home.png",
+        "previews/icon-zafiro-icons-light-3-applications-system.png",
+        "previews/icon-zafiro-icons-light-4-dialog-information.png",
+        "previews/icon-zafiro-icons-light-5-edit-copy.png",
+        "previews/icon-zafiro-icons-light-6-view-refresh.png",
+        "previews/icon-zafiro-icons-light-7-preferences-system.png",
+        "previews/icon-zafiro-icons-light-8-text-x-generic.png"
+      ]
     }
   ],
   "cursors": [
+    {
+      "label": "Bibata Modern Amber",
+      "value": "Bibata-Modern-Amber",
+      "package": "pkgs.bibata-cursors",
+      "previews": [
+        "previews/cursor-bibata-modern-amber-1-default.png",
+        "previews/cursor-bibata-modern-amber-2-pointer.png",
+        "previews/cursor-bibata-modern-amber-3-text.png",
+        "previews/cursor-bibata-modern-amber-4-wait.png",
+        "previews/cursor-bibata-modern-amber-5-crosshair.png",
+        "previews/cursor-bibata-modern-amber-6-move.png",
+        "previews/cursor-bibata-modern-amber-7-not-allowed.png",
+        "previews/cursor-bibata-modern-amber-8-ew-resize.png",
+        "previews/cursor-bibata-modern-amber-9-ns-resize.png"
+      ]
+    },
     {
       "label": "Bibata Modern Classic",
       "value": "Bibata-Modern-Classic",
@@ -183,19 +821,81 @@
       ]
     },
     {
-      "label": "Bibata Modern Amber",
-      "value": "Bibata-Modern-Amber",
-      "package": "pkgs.bibata-cursors",
+      "label": "Capitaine Cursors",
+      "value": "capitaine-cursors",
+      "package": "pkgs.capitaine-cursors",
       "previews": [
-        "previews/cursor-bibata-modern-amber-1-default.png",
-        "previews/cursor-bibata-modern-amber-2-pointer.png",
-        "previews/cursor-bibata-modern-amber-3-text.png",
-        "previews/cursor-bibata-modern-amber-4-wait.png",
-        "previews/cursor-bibata-modern-amber-5-crosshair.png",
-        "previews/cursor-bibata-modern-amber-6-move.png",
-        "previews/cursor-bibata-modern-amber-7-not-allowed.png",
-        "previews/cursor-bibata-modern-amber-8-ew-resize.png",
-        "previews/cursor-bibata-modern-amber-9-ns-resize.png"
+        "previews/cursor-capitaine-cursors-1-default.png",
+        "previews/cursor-capitaine-cursors-2-pointer.png",
+        "previews/cursor-capitaine-cursors-3-text.png",
+        "previews/cursor-capitaine-cursors-4-wait.png",
+        "previews/cursor-capitaine-cursors-5-crosshair.png",
+        "previews/cursor-capitaine-cursors-6-move.png",
+        "previews/cursor-capitaine-cursors-7-not-allowed.png"
+      ]
+    },
+    {
+      "label": "Phinger Cursors Dark",
+      "value": "phinger-cursors-dark",
+      "package": "pkgs.phinger-cursors",
+      "previews": [
+        "previews/cursor-phinger-cursors-dark-1-default.png",
+        "previews/cursor-phinger-cursors-dark-2-pointer.png",
+        "previews/cursor-phinger-cursors-dark-3-text.png",
+        "previews/cursor-phinger-cursors-dark-4-wait.png",
+        "previews/cursor-phinger-cursors-dark-5-crosshair.png",
+        "previews/cursor-phinger-cursors-dark-6-move.png",
+        "previews/cursor-phinger-cursors-dark-7-not-allowed.png",
+        "previews/cursor-phinger-cursors-dark-8-ew-resize.png",
+        "previews/cursor-phinger-cursors-dark-9-ns-resize.png"
+      ]
+    },
+    {
+      "label": "Phinger Cursors Light",
+      "value": "phinger-cursors-light",
+      "package": "pkgs.phinger-cursors",
+      "previews": [
+        "previews/cursor-phinger-cursors-light-1-default.png",
+        "previews/cursor-phinger-cursors-light-2-pointer.png",
+        "previews/cursor-phinger-cursors-light-3-text.png",
+        "previews/cursor-phinger-cursors-light-4-wait.png",
+        "previews/cursor-phinger-cursors-light-5-crosshair.png",
+        "previews/cursor-phinger-cursors-light-6-move.png",
+        "previews/cursor-phinger-cursors-light-7-not-allowed.png",
+        "previews/cursor-phinger-cursors-light-8-ew-resize.png",
+        "previews/cursor-phinger-cursors-light-9-ns-resize.png"
+      ]
+    },
+    {
+      "label": "Volantes Cursors",
+      "value": "volantes_cursors",
+      "package": "pkgs.volantes-cursors",
+      "previews": [
+        "previews/cursor-volantes_cursors-1-default.png",
+        "previews/cursor-volantes_cursors-2-pointer.png",
+        "previews/cursor-volantes_cursors-3-text.png",
+        "previews/cursor-volantes_cursors-4-wait.png",
+        "previews/cursor-volantes_cursors-5-crosshair.png",
+        "previews/cursor-volantes_cursors-6-move.png",
+        "previews/cursor-volantes_cursors-7-not-allowed.png",
+        "previews/cursor-volantes_cursors-8-ew-resize.png",
+        "previews/cursor-volantes_cursors-9-ns-resize.png"
+      ]
+    },
+    {
+      "label": "Volantes Light Cursors",
+      "value": "volantes_light_cursors",
+      "package": "pkgs.volantes-cursors",
+      "previews": [
+        "previews/cursor-volantes_light_cursors-1-default.png",
+        "previews/cursor-volantes_light_cursors-2-pointer.png",
+        "previews/cursor-volantes_light_cursors-3-text.png",
+        "previews/cursor-volantes_light_cursors-4-wait.png",
+        "previews/cursor-volantes_light_cursors-5-crosshair.png",
+        "previews/cursor-volantes_light_cursors-6-move.png",
+        "previews/cursor-volantes_light_cursors-7-not-allowed.png",
+        "previews/cursor-volantes_light_cursors-8-ew-resize.png",
+        "previews/cursor-volantes_light_cursors-9-ns-resize.png"
       ]
     }
   ]
