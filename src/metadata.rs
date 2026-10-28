@@ -6,13 +6,13 @@ use serde::Deserialize;
 /// `nix eval` and returns one level of a flake's option set as JSON.
 const OPTIONS_TO_JSON: &str = include_str!("nix/options-to-json.nix");
 
-/// An embedded copy of the DMS plugin registry extractor. It is evaluated
+/// An embedded copy of the Dux Shell plugin registry extractor. It is evaluated
 /// with `nix eval` and returns the registry's plugin ids as JSON.
-const DMS_PLUGINS_TO_JSON: &str = include_str!("nix/dms-plugins-to-json.nix");
+const DUX_PLUGINS_TO_JSON: &str = include_str!("nix/dms-plugins-to-json.nix");
 
 /// An embedded copy of the one-plugin settings extractor. It reads only the
 /// requested plugin's `plugin.json` and settings QML.
-const DMS_PLUGIN_SETTINGS_TO_JSON: &str = include_str!("nix/dms-plugin-settings-to-json.nix");
+const DUX_PLUGIN_SETTINGS_TO_JSON: &str = include_str!("nix/dms-plugin-settings-to-json.nix");
 
 /// An embedded copy of the wallpaper extractor. It returns the generated
 /// wallpaper directory for the selected target, or the raw presets from the
@@ -21,7 +21,7 @@ const WALLPAPERS_TO_JSON: &str = include_str!("nix/wallpapers-to-json.nix");
 
 /// Applies the registry extractor to its named arguments. The values arrive
 /// through the environment so no user path is interpolated into Nix source.
-const DMS_PLUGINS_APPLY: &str = r#"f: f {
+const DUX_PLUGINS_APPLY: &str = r#"f: f {
   flakePath = builtins.getEnv "NSG_FLAKE_PATH";
   system = builtins.getEnv "NSG_SYSTEM";
 }"#;
@@ -33,7 +33,7 @@ const WALLPAPERS_APPLY: &str = r#"f: f {
 }"#;
 
 /// Applies the one-plugin settings extractor to its named arguments.
-const DMS_PLUGIN_SETTINGS_APPLY: &str = r#"f: f {
+const DUX_PLUGIN_SETTINGS_APPLY: &str = r#"f: f {
   flakePath = builtins.getEnv "NSG_FLAKE_PATH";
   system = builtins.getEnv "NSG_SYSTEM";
   pluginId = builtins.getEnv "NSG_PLUGIN_ID";
@@ -203,7 +203,7 @@ fn script_path() -> std::path::PathBuf {
     path
 }
 
-/// One plugin of the upstream DMS plugin registry: the id as written in
+/// One plugin of the upstream Dux Shell plugin registry: the id as written in
 /// configuration, plus the registry's display metadata when available.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct RegistryPlugin {
@@ -226,16 +226,17 @@ struct PluginsPayload {
     plugins: Vec<RegistryPlugin>,
 }
 
-/// The ids (and metadata) of the config flake's DMS plugin registry, via
-/// `nix eval` of the embedded extractor. Empty/error when the flake has no
-/// `ojuny-desktop` input.
+/// The ids (and metadata) of the config flake's Dux Shell plugin registry, via
+/// `nix eval` of the embedded extractor. Reads `dux-plugin-registry` first,
+/// then the legacy `dms-plugin-registry` and `dms-plugins` inputs. Empty/error
+/// when the flake has no desktop shell input.
 pub fn dms_plugins(flake_path: &str) -> Result<Vec<RegistryPlugin>, String> {
-    let path = std::env::temp_dir().join("nix-settings-gui-dms-plugins-to-json.nix");
-    let _ = std::fs::write(&path, DMS_PLUGINS_TO_JSON);
+    let path = std::env::temp_dir().join("nix-settings-gui-dux-plugins-to-json.nix");
+    let _ = std::fs::write(&path, DUX_PLUGINS_TO_JSON);
     let system = host_system();
     let json = eval_script(
         &path,
-        DMS_PLUGINS_APPLY,
+        DUX_PLUGINS_APPLY,
         &[("NSG_FLAKE_PATH", flake_path), ("NSG_SYSTEM", &system)],
     )?;
     let payload: PluginsPayload =
@@ -314,12 +315,12 @@ struct PluginSettingsPayload {
 /// The declarative settings QML of one registry plugin, or `None` when the
 /// plugin ships no settings file. Evaluates only that plugin's package.
 pub fn dms_plugin_settings(flake_path: &str, plugin_id: &str) -> Result<Option<String>, String> {
-    let path = std::env::temp_dir().join("nix-settings-gui-dms-plugin-settings-to-json.nix");
-    let _ = std::fs::write(&path, DMS_PLUGIN_SETTINGS_TO_JSON);
+    let path = std::env::temp_dir().join("nix-settings-gui-dux-plugin-settings-to-json.nix");
+    let _ = std::fs::write(&path, DUX_PLUGIN_SETTINGS_TO_JSON);
     let system = host_system();
     let json = eval_script(
         &path,
-        DMS_PLUGIN_SETTINGS_APPLY,
+        DUX_PLUGIN_SETTINGS_APPLY,
         &[
             ("NSG_FLAKE_PATH", flake_path),
             ("NSG_SYSTEM", &system),
@@ -422,7 +423,7 @@ mod tests {
     fn registry_command_is_impure_and_applies_the_extractor() {
         let command = eval_command(
             std::path::Path::new("/tmp/dms.nix"),
-            DMS_PLUGINS_APPLY,
+            DUX_PLUGINS_APPLY,
             &[("NSG_FLAKE_PATH", "/repo"), ("NSG_SYSTEM", "x86_64-linux")],
         );
         let args: Vec<String> = command
@@ -432,7 +433,7 @@ mod tests {
         assert!(args.iter().any(|arg| arg == "--impure"));
         assert!(args
             .windows(2)
-            .any(|pair| pair[0] == "--apply" && pair[1] == DMS_PLUGINS_APPLY));
+            .any(|pair| pair[0] == "--apply" && pair[1] == DUX_PLUGINS_APPLY));
         let envs: Vec<(String, Option<String>)> = command
             .get_envs()
             .map(|(name, value)| {
@@ -456,7 +457,7 @@ mod tests {
     fn plugin_settings_command_passes_the_plugin_id() {
         let command = eval_command(
             std::path::Path::new("/tmp/dms-settings.nix"),
-            DMS_PLUGIN_SETTINGS_APPLY,
+            DUX_PLUGIN_SETTINGS_APPLY,
             &[
                 ("NSG_FLAKE_PATH", "/repo"),
                 ("NSG_SYSTEM", "x86_64-linux"),

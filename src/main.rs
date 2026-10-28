@@ -7,6 +7,7 @@ mod app;
 mod apply;
 mod cli;
 mod config;
+mod descriptors;
 mod dsl;
 mod edit;
 mod error_dialog;
@@ -46,5 +47,5 @@ fn main() -> glib::ExitCode {
     application.connect_startup(|_| {
         gtk::Window::set_default_icon_name("preferences-system");
     });
-    app::run(&application, args.page)
+    app::run(&application, args.page, args.descriptors)
 }

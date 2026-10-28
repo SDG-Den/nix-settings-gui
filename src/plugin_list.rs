@@ -85,7 +85,7 @@ const fn pfield(path: &'static str, label: &'static str, kind: PluginFieldKind) 
 }
 
 const PLUGIN_REGISTRY_A: &[PluginSpec] = &[
-    pspec("dankMenu", "Dank Menu", &[]),
+    pspec("dankMenu", "Dux Menu", &[]),
     pspec(
         "dankKDEConnect",
         "KDE Connect",
@@ -372,13 +372,13 @@ pub fn build(record: &Record, ctx: &BuildContext) -> Editor {
                                 picker.refresh();
                             }
                             Ok(_) => {
-                                status.set_label("No DMS plugin registry found");
+                                status.set_label("No Dux Shell plugin registry found");
                                 status.set_visible(true);
                                 retry.set_visible(true);
                                 picker.refresh();
                             }
                             Err(error) => {
-                                status.set_label("Could not load the DMS plugin registry");
+                                status.set_label("Could not load the Dux Shell plugin registry");
                                 status.set_tooltip_text(Some(&error));
                                 status.set_visible(true);
                                 retry.set_visible(true);
@@ -1173,6 +1173,20 @@ mod tests {
             Some(vec!["dankTodo".to_string(), "nixMonitor".to_string()])
         );
         assert_eq!(picker_source(&record), ["dankTodo", "nixMonitor"]);
+    }
+
+    #[test]
+    fn parses_plugins_annotation_in_the_dux_namespace() {
+        let text = r#"{ ... }: {
+  flake.modules.nixos.x = { ... }: {
+    /* @option widget = "plugins"; label = "Plugins"; */
+    desktop.ojuny.dux.plugins = {
+      nixMonitor = { enable = true; };
+    };
+  };
+}"#;
+        let record = plugins_record(text);
+        assert_eq!(record.path(), "desktop.ojuny.dux.plugins");
     }
 
     #[test]

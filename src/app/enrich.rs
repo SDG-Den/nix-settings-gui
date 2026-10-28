@@ -36,7 +36,7 @@ pub(super) fn query_current_page(app: &Rc<App>, tx: &Tx) {
         .map(|page| {
             page.controls
                 .iter()
-                .map(|c| (c.record.path(), c.record.segments.clone()))
+                .map(|c| (c.record.path(), c.record.path_segments().to_vec()))
                 .collect()
         })
         .unwrap_or_default();

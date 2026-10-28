@@ -192,6 +192,31 @@ pub(crate) fn widget_icon(id: &str) -> &'static str {
     }
 }
 
+/// Captions for Dux Shell 2.0 settings keys that are rendered from freeform or
+/// generated submodules and therefore have no `@option` label of their own.
+pub(crate) const SETTINGS_KEY_LABELS: &[(&str, &str)] = &[
+    ("density", "Density"),
+    ("interfaceStyle", "Interface style"),
+    ("sectionDividerOpacity", "Section divider opacity"),
+    ("launcherEnterAction", "Launcher Enter action"),
+    ("powerMenuFirmwareSetup", "Firmware setup"),
+    ("tooltipSurfaceColor", "Tooltip surface colour"),
+    ("tooltipSurfaceCustomColor", "Custom tooltip surface colour"),
+    ("dotIcon", "Dot icon"),
+    ("dotIconColor", "Dot icon colour"),
+    ("dotIconImage", "Dot icon image"),
+    ("dotIconSymbol", "Dot icon symbol"),
+    ("dotEdgeMargin", "Dot edge margin"),
+    ("dotResetPosition", "Reset dot position"),
+];
+
+pub(crate) fn settings_label(key: &str) -> Option<&'static str> {
+    SETTINGS_KEY_LABELS
+        .iter()
+        .find(|(name, _)| *name == key)
+        .map(|(_, label)| *label)
+}
+
 pub(crate) fn widget_description(id: &str) -> &'static str {
     match id {
         "user" => "Profile and account",

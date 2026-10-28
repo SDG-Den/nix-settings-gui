@@ -11,6 +11,9 @@ pub struct Record {
     /// Option attribute path relative to the module body, e.g.
     /// `["services", "pipewire", "enable"]`.
     pub segments: Vec<String>,
+    /// Full option path supplied by a descriptor sidecar, when `segments` only
+    /// locates the assignment inside its file.
+    pub option_path: Option<Vec<String>>,
     pub file: String,
     pub line: u32,
     pub col: u32,
@@ -32,8 +35,33 @@ pub struct Record {
 
 impl Record {
     pub fn path(&self) -> String {
-        self.segments.join(".")
+        self.path_segments().join(".")
     }
+
+    /// The record's option path: the descriptor's path when one supplied it,
+    /// otherwise the assignment path found in the file.
+    pub fn path_segments(&self) -> &[String] {
+        self.option_path.as_deref().unwrap_or(&self.segments)
+    }
+}
+
+/// Normalize an option path so the legacy `desktop.ojuny.dms` namespace and the
+/// current `desktop.ojuny.dux` namespace compare equal. A leading `config.`,
+/// as used by some module bodies, is dropped.
+pub fn normalize_namespace(path: &str) -> String {
+    let path = path.trim();
+    let path = path.strip_prefix("config.").unwrap_or(path);
+    for prefix in ["desktop.ojuny.", "programs.ojuny."] {
+        if let Some(rest) = path.strip_prefix(prefix) {
+            if let Some(rest) = rest.strip_prefix("dms.") {
+                return format!("{prefix}dux.{rest}");
+            }
+            if rest == "dms" {
+                return format!("{prefix}dux");
+            }
+        }
+    }
+    path.to_string()
 }
 
 /// A node in the flattened option tree: a namespace (folder) or a key (leaf).
@@ -257,6 +285,23 @@ mod tests {
         record.spec.order = order;
         record.spec.group_order = group_order;
         record
+    }
+
+    #[test]
+    fn normalize_namespace_accepts_the_legacy_dms_name() {
+        assert_eq!(
+            normalize_namespace("desktop.ojuny.dms.settings.clockDateFormat"),
+            "desktop.ojuny.dux.settings.clockDateFormat"
+        );
+        assert_eq!(
+            normalize_namespace("config.desktop.ojuny.dux.settings"),
+            "desktop.ojuny.dux.settings"
+        );
+        assert_eq!(
+            normalize_namespace("programs.ojuny.dms.controlCenterWidgets"),
+            "programs.ojuny.dux.controlCenterWidgets"
+        );
+        assert_eq!(normalize_namespace("ojuny.gpu"), "ojuny.gpu");
     }
 
     #[test]

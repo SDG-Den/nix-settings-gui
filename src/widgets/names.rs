@@ -124,11 +124,48 @@ pub(crate) const WIDGET_FIELD_HELP: &[(&str, &str)] = &[
     ),
     ("autoHideDelay", "Milliseconds before auto hide engages."),
     ("position", "Screen edge: top or bottom."),
+    ("density", "Spacing density of the shell interface."),
+    ("interfaceStyle", "Visual style of the shell interface."),
+    (
+        "sectionDividerOpacity",
+        "Opacity of the divider lines between sections.",
+    ),
+    (
+        "launcherEnterAction",
+        "Action performed when Enter is pressed in the launcher.",
+    ),
+    (
+        "powerMenuFirmwareSetup",
+        "Show the firmware setup entry in the power menu.",
+    ),
+    (
+        "tooltipSurfaceColor",
+        "Surface colour mode used by tooltips.",
+    ),
+    (
+        "tooltipSurfaceCustomColor",
+        "Custom tooltip surface colour, when the surface mode is custom.",
+    ),
+    ("dotIcon", "Icon shown on the workspace dot indicator."),
+    ("dotIconColor", "Colour of the workspace dot icon."),
+    ("dotIconImage", "Image used for the workspace dot icon."),
+    ("dotIconSymbol", "Symbol used for the workspace dot icon."),
+    (
+        "dotEdgeMargin",
+        "Margin between the workspace dots and the bar edge.",
+    ),
+    (
+        "dotResetPosition",
+        "Reset the workspace dot position when the workspace set changes.",
+    ),
 ];
 
 pub(crate) fn field_caption(name: &str) -> String {
     if name == "_order" {
         return "Position".to_string();
+    }
+    if let Some(label) = super::dms_catalog::settings_label(name) {
+        return label.to_string();
     }
     title_case_id(name)
 }
@@ -303,6 +340,27 @@ mod tests {
                 keybind_field_help(name).is_some(),
                 "missing keybind help for {name}"
             );
+        }
+    }
+
+    #[test]
+    fn dux_shell_2_settings_have_help() {
+        for name in [
+            "density",
+            "interfaceStyle",
+            "sectionDividerOpacity",
+            "launcherEnterAction",
+            "powerMenuFirmwareSetup",
+            "tooltipSurfaceColor",
+            "tooltipSurfaceCustomColor",
+            "dotIcon",
+            "dotIconColor",
+            "dotIconImage",
+            "dotIconSymbol",
+            "dotEdgeMargin",
+            "dotResetPosition",
+        ] {
+            assert!(field_help(name).is_some(), "missing help for {name}");
         }
     }
 

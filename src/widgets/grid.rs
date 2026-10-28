@@ -119,6 +119,7 @@ pub(crate) const WEATHER_GRID_REGISTRY: &[&str] = &[
 
 impl GridProfile {
     pub(crate) fn for_path(path: &str) -> Option<Self> {
+        let path = crate::model::normalize_namespace(path);
         if path.contains("controlCenterWidgets") {
             Some(Self {
                 surface: GridSurface::ControlCenter,
@@ -1090,15 +1091,31 @@ mod tests {
 
     #[test]
     fn grid_profiles_resolve_by_path() {
-        let cc = GridProfile::for_path("programs.ojuny.dms.controlCenterWidgets").unwrap();
+        let cc = GridProfile::for_path("programs.ojuny.dux.controlCenterWidgets").unwrap();
         assert_eq!((cc.columns, cc.has_enabled, cc.has_footer), (8, true, true));
-        let dash = GridProfile::for_path("desktop.ojuny.dms.dashCards").unwrap();
+        let dash = GridProfile::for_path("desktop.ojuny.dux.dashCards").unwrap();
         assert_eq!(
             (dash.columns, dash.has_enabled, dash.has_footer),
             (6, false, false)
         );
-        let weather = GridProfile::for_path("programs.ojuny.dms.weather.widgets").unwrap();
+        let weather = GridProfile::for_path("programs.ojuny.dux.weather.widgets").unwrap();
         assert_eq!((weather.columns, weather.has_enabled), (4, false));
         assert!(GridProfile::for_path("a.b").is_none());
+    }
+
+    #[test]
+    fn grid_profiles_accept_the_legacy_dms_namespace() {
+        assert_eq!(
+            GridProfile::for_path("programs.ojuny.dms.controlCenterWidgets")
+                .unwrap()
+                .columns,
+            8
+        );
+        assert_eq!(
+            GridProfile::for_path("desktop.ojuny.dms.dashCards")
+                .unwrap()
+                .columns,
+            6
+        );
     }
 }

@@ -209,7 +209,7 @@ command runs.
 What the command does is up to the command. Applying a setting this way only
 changes the running session: the file is untouched until it is saved, and the
 change is gone after a reboot. Use it for settings that a service exposes over
-its own interface, such as a DMS or mango IPC call.
+its own interface, such as a Dux Shell or mango IPC call.
 
 ## 3. Widgets
 
@@ -378,7 +378,7 @@ dropping them. They can be re-enabled or removed from the editor. Each widget id
 appears once because the convenience options are id-keyed attrsets.
 
 Grid controls for control center widgets, dashboard cards, and weather widgets
-use the same editor. New cards use the DMS default size for their id, and the
+use the same editor. New cards use the Dux Shell default size for their id, and the
 editor supports add, remove, move, resize, enable, footer, reset sizes, reset
 selected, and clear all. `gridColumns` fixes the column count for the control;
 panel column and row counts are not stored in the card collection.
@@ -659,3 +659,26 @@ the assignments it introduces, and `nixfmt` rewrites both markers to `#` lines
 on write; the scanner reads either form.
 
 
+
+## 13. Descriptor sidecar
+
+An `@option` comment only works when a literal assignment sits below it. Values
+inside a freeform attribute set, such as `dux.settings` or `dux.barConfigs`,
+have no assignment the scanner can annotate. A descriptor sidecar describes
+those settings instead:
+
+```
+nix-settings-gui --descriptors ./dux-descriptors.json
+```
+
+or set `NSG_DESCRIPTORS` to the same path. Each entry carries a full option
+path, a widget, and any of the usual label, description, group, order, choices,
+bounds, tier, and `applyCommand` directives. See
+`docs/descriptor-schema.md` for the JSON shape, validation rules, and merge
+precedence.
+
+Prefer a descriptor when the consuming file is generated, when the value is
+freeform rather than a declared Nix option, or when one file should describe
+settings spread across several files. Prefer `@option` when you own the file
+and the assignment is a real option path: an annotation always wins over a
+descriptor.

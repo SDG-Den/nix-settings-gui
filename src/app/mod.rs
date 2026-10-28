@@ -1,6 +1,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
 use gtk::gio;
 use gtk::glib;
@@ -53,7 +54,26 @@ fn preference_row(label: &str, tooltip: &str, switch: &gtk::Switch) -> gtk::Box 
     row
 }
 
-fn build_ui(app: &adw::Application, tx: &Tx, page_pattern: Option<Regex>) -> Rc<App> {
+fn build_ui(
+    app: &adw::Application,
+    tx: &Tx,
+    page_pattern: Option<Regex>,
+    descriptors_path: Option<String>,
+) -> Rc<App> {
+    let descriptor_path = descriptors_path
+        .filter(|path| !path.trim().is_empty())
+        .or_else(|| {
+            std::env::var(crate::descriptors::ENV_VAR)
+                .ok()
+                .filter(|path| !path.trim().is_empty())
+        });
+    let (descriptors, descriptor_error) = match descriptor_path.as_deref() {
+        Some(path) => match crate::descriptors::load(path) {
+            Ok(descriptors) => (descriptors, None),
+            Err(error) => (Vec::new(), Some(error)),
+        },
+        None => (Vec::new(), None),
+    };
     let provider = gtk::CssProvider::new();
     provider.load_from_data(
         ".search-hit { outline: 2px solid @accent_color; border-radius: 6px; }\n\
@@ -344,6 +364,10 @@ fn build_ui(app: &adw::Application, tx: &Tx, page_pattern: Option<Regex>) -> Rc<
         wallpaper_set: RefCell::new(None),
         apply_state: ApplyState::new(),
         tx: tx.clone(),
+        descriptors: RefCell::new(descriptors),
+        descriptor_path,
+        descriptor_error: RefCell::new(descriptor_error),
+        descriptor_cache: Arc::new(Mutex::new(HashMap::new())),
         config: RefCell::new(AppConfig::load()),
         base: RefCell::new(String::new()),
         scan: RefCell::new(None),
@@ -673,13 +697,17 @@ fn install_actions(app: &Rc<App>) {
     }
 }
 
-pub fn run(app: &adw::Application, page_pattern: Option<Regex>) -> glib::ExitCode {
+pub fn run(
+    app: &adw::Application,
+    page_pattern: Option<Regex>,
+    descriptors_path: Option<String>,
+) -> glib::ExitCode {
     crate::nixd::init();
     let (tx, rx) = async_channel::unbounded::<Msg>();
     let rx_cell = std::cell::Cell::new(Some(rx));
 
     app.connect_activate(move |app| {
-        let ui = build_ui(app, &tx, page_pattern.clone());
+        let ui = build_ui(app, &tx, page_pattern.clone(), descriptors_path.clone());
         if let Some(rx) = rx_cell.take() {
             let ui_for_rx = ui.clone();
             let tx_for_rx = tx.clone();

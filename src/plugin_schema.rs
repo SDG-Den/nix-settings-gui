@@ -1,6 +1,6 @@
 use crate::widgets::nix::quote;
 
-/// The editor shape inferred from a DMS declarative settings control.
+/// The editor shape inferred from a Dux Shell declarative settings control.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SchemaKind {
     Bool,
@@ -35,7 +35,7 @@ const COMPONENTS: &[&str] = &[
     "ListSettingWithInput",
 ];
 
-/// Extract the declarative controls from a DMS plugin settings QML file.
+/// Extract the declarative controls from a Dux Shell plugin settings QML file.
 /// Unknown or custom QML yields no fields; the caller keeps its fallback.
 pub(crate) fn parse_settings(qml: &str) -> Vec<SchemaField> {
     let mut fields: Vec<SchemaField> = Vec::new();

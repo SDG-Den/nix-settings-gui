@@ -2,11 +2,14 @@ use regex::Regex;
 
 pub struct LaunchArgs {
     pub page: Option<Regex>,
+    /// Path to a descriptor sidecar, from `--descriptors <file>`.
+    pub descriptors: Option<String>,
 }
 
 impl LaunchArgs {
     pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Self, String> {
         let mut page = None;
+        let mut descriptors = None;
         let mut args = args.into_iter();
         while let Some(arg) = args.next() {
             if arg == "--page" {
@@ -14,6 +17,11 @@ impl LaunchArgs {
                 page = Some(value);
             } else if let Some(value) = arg.strip_prefix("--page=") {
                 page = Some(value.to_string());
+            } else if arg == "--descriptors" {
+                let value = args.next().ok_or("--descriptors requires a file")?;
+                descriptors = Some(value);
+            } else if let Some(value) = arg.strip_prefix("--descriptors=") {
+                descriptors = Some(value.to_string());
             } else {
                 return Err(format!("unknown argument: {arg}"));
             }
@@ -24,7 +32,7 @@ impl LaunchArgs {
             ),
             None => None,
         };
-        Ok(Self { page })
+        Ok(Self { page, descriptors })
     }
 }
 
@@ -43,8 +51,27 @@ mod tests {
     }
 
     #[test]
+    fn parses_descriptors_in_both_forms() {
+        assert_eq!(
+            parse(&["--descriptors", "/tmp/d.json"])
+                .unwrap()
+                .descriptors
+                .as_deref(),
+            Some("/tmp/d.json")
+        );
+        assert_eq!(
+            parse(&["--descriptors=/tmp/d.json"])
+                .unwrap()
+                .descriptors
+                .as_deref(),
+            Some("/tmp/d.json")
+        );
+    }
+
+    #[test]
     fn rejects_missing_page_value() {
         assert!(parse(&["--page"]).is_err());
+        assert!(parse(&["--descriptors"]).is_err());
     }
 
     #[test]

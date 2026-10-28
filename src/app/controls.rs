@@ -573,7 +573,7 @@ fn reset_to_default(app: &Rc<App>, control: &ControlRow) {
         return;
     };
     let base = app.base.borrow().clone();
-    let path = control.record.segments.clone();
+    let path = control.record.path_segments().to_vec();
     match metadata::default_expression(&base, &target, &path) {
         Ok(default) if !default.trim().is_empty() => {
             let mut record = control.record.clone();

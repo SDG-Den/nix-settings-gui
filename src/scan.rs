@@ -112,6 +112,17 @@ impl ScanResult {
     }
 }
 
+/// Merge a descriptor sidecar into a completed scan. An `@option` annotation
+/// always wins; otherwise the descriptor supplies the spec and the assignment
+/// span, so the resulting record edits and dispatches like an annotated one.
+pub fn merge_descriptors(
+    scan: &mut ScanResult,
+    descriptors: &[crate::descriptors::Descriptor],
+    locator: &dyn Fn(&str) -> Result<crate::descriptors::AssignmentLocation, String>,
+) -> crate::descriptors::MergeReport {
+    crate::descriptors::merge(scan, descriptors, locator)
+}
+
 /// Scan every `.nix` file under `root` into a menu model plus the discovered
 /// system targets.
 pub fn scan_root(root: &str) -> Result<ScanResult, String> {
@@ -895,6 +906,7 @@ fn collect_binding(
     let (line, col) = line_col(text, byte_start);
     out.push(Record {
         segments,
+        option_path: None,
         file: file.to_string(),
         line,
         col,
@@ -1041,7 +1053,7 @@ fn module_origin_from_path(path: &[String]) -> Option<String> {
     Some(format!("modules.{kind}.{name}"))
 }
 
-fn line_col(text: &str, offset: usize) -> (u32, u32) {
+pub(crate) fn line_col(text: &str, offset: usize) -> (u32, u32) {
     let mut line = 1;
     let mut col = 1;
     for (i, ch) in text.char_indices() {

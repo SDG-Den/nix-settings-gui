@@ -2,6 +2,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
 use gtk::gio;
 use gtk::glib;
@@ -17,6 +18,7 @@ use super::apply::ApplyState;
 
 pub(super) enum Msg {
     Scanned(Result<ScanResult, String>),
+    DescriptorsMerged(ScanResult, crate::descriptors::MergeReport),
     Saved(Result<usize, String>),
     SaveProgress(f64, String),
     Inserted(Result<(), String>),
@@ -216,6 +218,16 @@ pub(super) struct App {
         RefCell<Option<(String, Result<crate::metadata::WallpaperSet, String>)>>,
     pub(super) apply_state: Rc<ApplyState>,
     pub(super) tx: Tx,
+    /// Descriptor sidecar entries, empty when no file was supplied.
+    pub(super) descriptors: RefCell<Vec<crate::descriptors::Descriptor>>,
+    /// Path the descriptor sidecar was loaded from, watched for edits.
+    pub(super) descriptor_path: Option<String>,
+    /// Why the descriptor file could not be loaded on the latest scan.
+    pub(super) descriptor_error: RefCell<Option<String>>,
+    /// Metadata-resolved assignments, keyed by flake, target, and path, so a
+    /// rescan after a save does not run `nix eval` again.
+    pub(super) descriptor_cache:
+        Arc<Mutex<HashMap<String, crate::descriptors::AssignmentLocation>>>,
 
     pub(super) config: RefCell<AppConfig>,
     pub(super) base: RefCell<String>,

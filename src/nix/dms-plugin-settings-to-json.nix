@@ -1,7 +1,8 @@
-# Emits one DMS plugin's declarative settings QML as JSON:
+# Emits one Dux Shell plugin's declarative settings QML as JSON:
 # { id, settings = <text or null> }.
 # Only the requested plugin's package is read, so adding one plugin does not
-# instantiate the whole registry.
+# instantiate the whole registry. The registry is found by its current name
+# first, then by the legacy names.
 {flakePath, system ? null, pluginId}: let
   root = builtins.getFlake flakePath;
 
@@ -10,8 +11,31 @@
   in
     if r.success then r.value else default;
 
-  desktop = safe null (root.inputs.ojuny-desktop or null);
-  registry = safe null (desktop.inputs.dms-plugin-registry or null);
+  parents =
+    [root]
+    ++ builtins.filter (parent: parent != null) (builtins.map (name:
+      safe null (root.inputs.${name} or null)) [
+      "dux-shell"
+      "ojuny-desktop"
+    ]);
+
+  findInput = name: let
+    found =
+      builtins.filter (input: input != null) (builtins.map (parent:
+        safe null (parent.inputs.${name} or null))
+      parents);
+  in
+    if found == [] then null else builtins.head found;
+
+  registry = let
+    found =
+      builtins.filter (input: input != null) (builtins.map findInput [
+        "dux-plugin-registry"
+        "dms-plugin-registry"
+        "dms-plugins"
+      ]);
+  in
+    if found == [] then null else builtins.head found;
 
   packages =
     if registry == null

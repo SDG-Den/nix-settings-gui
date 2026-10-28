@@ -1,7 +1,10 @@
-# Emits the DMS plugin registry's ids (plus metadata when available) as
+# Emits the Dux Shell plugin registry's ids (plus metadata when available) as
 # JSON: { plugins = [ { id, name, description, category, repo } ]; }.
-# The registry is reached through the config flake's ojuny-desktop input;
-# every step is tryEval-guarded so a flake without that input yields [].
+# The registry is reached through the config flake's `dux-plugin-registry`
+# input, falling back to the legacy `dms-plugin-registry` and `dms-plugins`
+# names so existing configurations keep working. The input may sit at the flake
+# root or under the desktop shell input. Every step is tryEval-guarded so a
+# flake without any of them yields [].
 {flakePath, system ? null}: let
   root = builtins.getFlake flakePath;
 
@@ -10,8 +13,33 @@
   in
     if r.success then r.value else default;
 
-  desktop = safe null (root.inputs.ojuny-desktop or null);
-  registry = safe null (desktop.inputs.dms-plugin-registry or null);
+  # The input can be exposed directly or through the desktop shell input.
+  parents =
+    [root]
+    ++ builtins.filter (parent: parent != null) (builtins.map (name:
+      safe null (root.inputs.${name} or null)) [
+      "dux-shell"
+      "ojuny-desktop"
+    ]);
+
+  findInput = name: let
+    found =
+      builtins.filter (input: input != null) (builtins.map (parent:
+        safe null (parent.inputs.${name} or null))
+      parents);
+  in
+    if found == [] then null else builtins.head found;
+
+  # Current name first, then the legacy names in order.
+  registry = let
+    found =
+      builtins.filter (input: input != null) (builtins.map findInput [
+        "dux-plugin-registry"
+        "dms-plugin-registry"
+        "dms-plugins"
+      ]);
+  in
+    if found == [] then null else builtins.head found;
 
   # The registry source ships this manifest, keyed by meta.id. It is the
   # cheapest and most complete source for the picker.

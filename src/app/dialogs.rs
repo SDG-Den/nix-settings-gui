@@ -633,7 +633,7 @@ fn option_suggestions(app: &Rc<App>) -> Vec<String> {
     let mut set = std::collections::BTreeSet::new();
     for menu in &scan.menus {
         for record in &menu.records {
-            let segments = &record.segments;
+            let segments = record.path_segments();
             for depth in 1..=segments.len() {
                 set.insert(segments[..depth].join("."));
             }

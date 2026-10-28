@@ -1,5 +1,7 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Mutex;
 
 use gtk::gio;
 use gtk::glib;
@@ -43,6 +45,11 @@ fn watch_files(app: &Rc<App>) {
             }
         }
     }
+    if let Some(path) = app.descriptor_path.as_deref() {
+        if Path::new(path).is_file() && !files.contains(&path.to_string()) {
+            files.push(path.to_string());
+        }
+    }
     for file in files {
         let Ok(monitor) = gio::File::for_path(&file)
             .monitor_file(gio::FileMonitorFlags::NONE, gio::Cancellable::NONE)
@@ -61,6 +68,56 @@ fn watch_files(app: &Rc<App>) {
         });
         app.watchers.borrow_mut().push(monitor);
     }
+}
+
+/// Paint the finished scan and report what descriptor merging did.
+fn finish_scan(
+    app: &Rc<App>,
+    result: crate::scan::ScanResult,
+    report: crate::descriptors::MergeReport,
+    error: Option<String>,
+) {
+    app.title.set_text("settings");
+    *app.scan.borrow_mut() = Some(result);
+    watch_files(app);
+    app.status.set_text("Ready");
+    if let Some(error) = error {
+        app.status.set_text(&format!("Descriptor file: {error}"));
+    } else if !report.skipped.is_empty() {
+        app.status.set_text(&format!(
+            "Ready; {} descriptor(s) skipped",
+            report.skipped.len()
+        ));
+    }
+    rebuild_view(app);
+    inputs::update_warning(app);
+    if app.showing_inputs.get() {
+        inputs::refresh(app);
+        app.stack.set_visible_child_name(inputs::INPUTS_PAGE);
+    }
+    scan_finished(app);
+}
+
+/// Resolve one descriptor assignment, reusing the registry answer from an
+/// earlier scan. Cached locations are refreshed against the file so a save that
+/// moved bytes does not leave stale spans behind.
+fn locate_descriptor(
+    cache: &Mutex<HashMap<String, crate::descriptors::AssignmentLocation>>,
+    base: &str,
+    target: &str,
+    path: &str,
+) -> Result<crate::descriptors::AssignmentLocation, String> {
+    let key = format!("{base}\n{target}\n{path}");
+    if let Some(cached) = cache.lock().ok().and_then(|cache| cache.get(&key).cloned()) {
+        if let Ok(location) = crate::descriptors::find_assignment_in_file(&cached.file, path) {
+            return Ok(location);
+        }
+    }
+    let location = crate::descriptors::locate_via_metadata(base, target, path)?;
+    if let Ok(mut cache) = cache.lock() {
+        cache.insert(key, location.clone());
+    }
+    Ok(location)
 }
 
 pub(super) fn handle_msg(app: &Rc<App>, tx: &Tx, msg: Msg) {
@@ -112,18 +169,39 @@ pub(super) fn handle_msg(app: &Rc<App>, tx: &Tx, msg: Msg) {
             };
             *app.target.borrow_mut() = target;
 
-            app.title.set_text("settings");
-            *app.scan.borrow_mut() = Some(result);
-            watch_files(app);
-            app.status.set_text("Ready");
-            rebuild_view(app);
-            inputs::update_warning(app);
-            if app.showing_inputs.get() {
-                inputs::refresh(app);
-                app.stack.set_visible_child_name(inputs::INPUTS_PAGE);
+            app.descriptor_error.borrow_mut().take();
+            if let Some(path) = app.descriptor_path.clone() {
+                match crate::descriptors::load(&path) {
+                    Ok(descriptors) => *app.descriptors.borrow_mut() = descriptors,
+                    Err(error) => {
+                        app.descriptors.borrow_mut().clear();
+                        *app.descriptor_error.borrow_mut() = Some(error);
+                    }
+                }
             }
-            scan_finished(app);
+            let descriptors = app.descriptors.borrow().clone();
+            let error = app.descriptor_error.borrow_mut().take();
+            if descriptors.is_empty() {
+                finish_scan(
+                    app,
+                    result,
+                    crate::descriptors::MergeReport::default(),
+                    error,
+                );
+                return;
+            }
+            let base = app.base.borrow().clone();
+            let target = app.target.borrow().clone();
+            let cache = app.descriptor_cache.clone();
+            spawn(tx, move |tx| {
+                let mut result = result;
+                let report = crate::scan::merge_descriptors(&mut result, &descriptors, &|path| {
+                    locate_descriptor(&cache, &base, &target, path)
+                });
+                let _ = tx.send_blocking(Msg::DescriptorsMerged(result, report));
+            });
         }
+        Msg::DescriptorsMerged(result, report) => finish_scan(app, result, report, None),
         Msg::Scanned(Err(e)) => {
             app.status.set_text("Scan failed");
             show_error(&app.window, &e);
