@@ -100,6 +100,26 @@ the `nixd` JSON-RPC client, and the span-patch plus `nixfmt` write path.
   for the snippet's `%%placeholder%%` values, then inserts the fragment directly
   above the marker.
 
+### 1.4 Flake Inputs page and nixpkgs card
+
+The "Flake Inputs" sidebar entry opens a page listing the flake's top-level
+inputs. Each row shows the input name, its `@input description` or URL, and
+edit and delete buttons. A missing declared input produces a banner and an
+"Add N missing input(s)" action.
+
+The exact `nixpkgs` input is not part of that list. A `PreferencesGroup` card at
+the top shows its source URL and the revision pinned in `flake.lock`, with a
+Configure action, or an "Add nixpkgs" action when it is absent. The dialog's
+first control is a "Flake location" dropdown listing NixOS channel, registry
+(indirect), GitHub, GitLab, SourceHut, Git, Mercurial, Path, Tarball, and File.
+Changing it rebuilds the field grid for that type and updates a live URL
+preview. Free-text fields carry an `EntryCompletion` dropdown; scannable fields
+also carry an explicit scan button. Scans never start on focus or typing, and a
+scan with blank prerequisites reports the missing field inline. Channel
+selection uses a dropdown of discovered `nixos-*` branches; hosted types expose
+owner, repository, ref, optional commit, host, directory, and git fetch
+switches; path adds a folder chooser; tarball and file add a NAR hash field.
+
 ## 2. Bottom bar
 
 - Configure: opens the settings submenu (section 7).
@@ -163,15 +183,27 @@ configuration by following `imports` transitively. `@menu systems` overrides
 the graph, and the `hosts/<host>/` directory name is the fallback when no origin
 can be resolved. The special name `"all"` in a `systems` list matches every host.
 
-Bespoke controls (`keybinds`, `monitors`, `theme`, `wallpaper`, `menu`, `plugins`,
-`bar`, `dock`) render a configuration-specific UI for a single option, with
-their own add, remove, and reorder actions. Their field shapes are hard-coded in the
+Bespoke controls (`keybinds`, `monitors`, `theme`, `wallpaper`, `font`,
+`icon-theme`, `cursor-theme`, `menu`, `plugins`, `bar`, `dock`, `users`) render a
+configuration-specific UI for a single option, with their own add, remove, and
+reorder actions. The style choosers share one inline preview row and one
+searchable dialog; installed entries preview live, while catalog entries that
+are not installed use embedded preview sheets. Selecting a catalog entry stages
+the name and the package option named by `packageOption`. Their field shapes are hard-coded in the
 application; the configuration only names the widget through `@option`. The
 `plugins` control also reads a newly added plugin's settings QML from the DMS
 registry and renders its declarative `ToggleSetting`, `StringSetting`,
 `SliderSetting`, `SelectionSetting`, `ColorSetting`, and list controls.
 Defaults are shown without being written until changed; plugins with custom QML
 keep their existing configuration fields.
+
+The `users` control edits the whole `users.users` set as one expander per
+account. It shows description, password hash, extra groups, UID, shell, SSH
+authorized keys, and an extra-options editor. `wheel` is a
+separate sudo switch. "Change password" prompts for a new password and fills
+`hashedPassword` with a locally generated yescrypt hash. The remove button is
+disabled whenever removing that account would leave no normal user with sudo
+and a configured password; saving is rejected for the same reason.
 
 Bar and dock editors load disabled entries and show an enable switch on each
 row. Bar sections support moving a widget between left, center, and right by

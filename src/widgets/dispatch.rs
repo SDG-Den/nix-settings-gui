@@ -3,22 +3,29 @@ use super::basic::{
     build_color, build_dropdown, build_entry, build_list, build_multiline, build_package_editor,
     build_raw, build_slider, build_spin, build_switch,
 };
-use super::context::{BuildContext, ModuleKind};
+use super::context::BuildContext;
+use super::context::ModuleKind;
+use super::cursor_theme::build_cursor_theme;
 use super::editor::Editor;
+use super::font::build_font;
 use super::grid::build_grid_configuration;
+use super::icon_theme::build_icon_theme;
 use super::keybinds::build_keybinds;
 use super::menu::build_menu;
 use super::module_list::build_module_list;
 use super::monitors::build_monitors;
 use super::nix::unwrap_modifiers;
+use super::style_choice::PackageBinding;
 use super::submodule::{build_horizontal_submodule, build_submodule};
 use super::table::build_table;
 use super::theme::build_theme;
+use super::users::build_users;
 use super::wallpaper::build_wallpaper;
 use crate::apply::ApplyRequest;
 use crate::dsl::{OptionSpec, WidgetKind};
 use crate::model::Record;
 use crate::value;
+use std::cell::RefCell;
 use std::rc::Rc;
 /// Build the appropriate control for a record. `type_str` is the nixd type when
 /// it is known; the `@option widget` takes precedence, then the type, then the
@@ -102,6 +109,11 @@ fn build_editor(record: &Record, type_str: Option<&str>, ctx: &BuildContext) -> 
         WidgetKind::TableAttrset => build_table(record, ctx, false),
         WidgetKind::TableList => build_table(record, ctx, true),
         WidgetKind::Theme => build_theme(value_text),
+        WidgetKind::Font => build_font(value_text, spec, package_binding(record, ctx)),
+        WidgetKind::IconTheme => build_icon_theme(value_text, spec, package_binding(record, ctx)),
+        WidgetKind::CursorTheme => {
+            build_cursor_theme(value_text, spec, package_binding(record, ctx))
+        }
         WidgetKind::Wallpaper => build_wallpaper(record, value_text, ctx),
         WidgetKind::Keybinds => build_keybinds(record),
         WidgetKind::Monitors => build_monitors(record),
@@ -109,11 +121,23 @@ fn build_editor(record: &Record, type_str: Option<&str>, ctx: &BuildContext) -> 
         WidgetKind::Plugins => crate::plugin_list::build(record, ctx),
         WidgetKind::Bar => build_bar(record, ctx),
         WidgetKind::Dock => build_dock(record, ctx),
+        WidgetKind::Users => build_users(record, ctx),
         WidgetKind::Raw => {
             let (view, root) = build_raw(value_text, spec);
             Editor::Raw { view, root }
         }
     }
+}
+
+fn package_binding(record: &Record, ctx: &BuildContext) -> Option<PackageBinding> {
+    let path = record.spec.package_option.as_deref()?.trim();
+    let package = ctx.records.get(path)?;
+    Some(PackageBinding {
+        record: package.clone(),
+        value: Rc::new(RefCell::new(
+            unwrap_modifiers(&package.value).trim().to_string(),
+        )),
+    })
 }
 
 /// Whether a record is annotated as a single package or a package list.
@@ -236,6 +260,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn resolves_a_package_option_from_the_page_records() {
+        let mut package = Record::default();
+        package.value = "pkgs.dejavu_fonts".to_string();
+        let mut record = Record::default();
+        record.spec.package_option = Some("stylix.fonts.monospace.package".to_string());
+        let mut ctx = BuildContext::default();
+        ctx.records = Rc::new(std::collections::HashMap::from([(
+            "stylix.fonts.monospace.package".to_string(),
+            package,
+        )]));
+        let binding = package_binding(&record, &ctx).unwrap();
+        assert_eq!(binding.value.borrow().as_str(), "pkgs.dejavu_fonts");
+    }
+
+    #[test]
     fn parses_enum_choices_from_type() {
         assert_eq!(
             enum_choices("one of \"a\", \"b\", \"c\""),
@@ -310,6 +349,12 @@ mod tests {
         assert_eq!(WidgetKind::parse("plugins"), Some(WidgetKind::Plugins));
         assert_eq!(WidgetKind::parse("bar"), Some(WidgetKind::Bar));
         assert_eq!(WidgetKind::parse("dock"), Some(WidgetKind::Dock));
+        assert_eq!(WidgetKind::parse("font"), Some(WidgetKind::Font));
+        assert_eq!(WidgetKind::parse("icon-theme"), Some(WidgetKind::IconTheme));
+        assert_eq!(
+            WidgetKind::parse("cursor-theme"),
+            Some(WidgetKind::CursorTheme)
+        );
         assert_eq!(WidgetKind::parse("nope"), None);
     }
 }

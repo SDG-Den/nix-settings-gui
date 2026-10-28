@@ -27,7 +27,31 @@ Recent paths are remembered, so the selector offers them again next time.
 - The search box filters the menu list and the visible controls. The "system
   only" checkbox narrows everything to the selected host.
 
-## 3. Changing a value
+## 3. Flake inputs and nixpkgs
+
+The "Flake Inputs" entry in the left pane edits the flake's `inputs` set. It
+supports both `inputs = { ... };` and dotted declarations such as
+`inputs.nixpkgs.url = ...;`.
+
+The nixpkgs input appears in a separate card above the other inputs and is not
+listed again below. Configure selects a NixOS channel (`nixos-unstable`, the
+release branches, and their `-small` variants), a registry entry, or any flake
+location type: GitHub, GitLab, SourceHut, Git, Mercurial, Path, Tarball, or
+File. The fields for the selected type are generated automatically, and the URL
+preview updates as you edit. Saving preserves the input's description and
+follows.
+
+Fields that can be discovered from a remote forge have a scan button. Scans do
+not run automatically; press the button and it fails inline when the fields it
+needs are empty. Scanning users needs a search term, repositories need an
+owner, refs need an owner and repository, and commits need a ref. Channel
+discovery uses `git ls-remote` against `NixOS/nixpkgs`; forge scans use the
+GitHub or GitLab API through `curl`, optionally with `GITHUB_TOKEN` or
+`GITLAB_TOKEN`. Results fill the field's dropdown. The nixpkgs card also shows
+the revision pinned in `flake.lock`; changing the URL does not rewrite the lock
+file.
+
+## 4. Changing a value
 
 Each control type maps to one widget:
 
@@ -43,12 +67,15 @@ Each control type maps to one widget:
 | `package`   | a package expression |
 | `list`      | a list |
 | `color`     | a `#rrggbb` string |
+| `font`      | a font family string plus its package |
+| `icon-theme` | an icon theme string plus its package |
+| `cursor-theme` | a cursor theme string plus its package |
 | `submodule` | a nested attribute set |
 | `raw`       | verbatim text |
 
 Edits are staged in memory and are not written until you save.
 
-## 4. Saving
+## 5. Saving
 
 - **Save** serializes every dirty control, patches the affected files, checks
   each result with `rnix`, formats with `nixfmt`, and writes atomically. If any
@@ -57,7 +84,7 @@ Edits are staged in memory and are not written until you save.
   terminal. If the save fails, the rebuild does not run.
 - Files under `/nix/store` are never writable, and their controls refuse edits.
 
-## 5. Adding a file
+## 6. Adding a file
 
 **Add file** writes a new module with a generated `@menu` header. Choose a
 template kind (raw function, NixOS module, or home-manager module), a filename,
@@ -70,13 +97,13 @@ directory. These are `_`-prefixed files with a `@template` header (see
 directory and adds a form field for each placeholder. On create, the
 placeholders are substituted and the result is written to the chosen path.
 
-## 6. Adding an option
+## 7. Adding an option
 
 **Add option** on a menu opens a picker of known option paths, with autocomplete.
 After choosing a path, pick a widget and an initial value. The app writes the
 `@option` block and the assignment into the target file and reformats it.
 
-## 7. Settings
+## 8. Settings
 
 **Configure** edits the config file: the flake path, the terminal command, and
 the rebuild command. The rebuild runs `terminal_command` with
@@ -84,13 +111,13 @@ the rebuild command. The rebuild runs `terminal_command` with
 command is appended. Privilege escalation is expressed entirely in those two
 commands.
 
-## 8. When nixd is missing
+## 9. When nixd is missing
 
 `nixd` provides option types, descriptions, defaults, and enum choices. Without
 it, the app falls back to `nix eval --json` via `src/nix/options-to-json.nix`,
 and options with no type data render as `raw`.
 
-## 9. Options that do not appear
+## 10. Options that do not appear
 
 Options are discovered from the module system's option tree, not from `@option`
 comments alone. An option declared inside `lib.mkMerge`, a list of attribute

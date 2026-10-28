@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use crate::apply::ApplyRequest;
+use crate::model::Record;
 
 /// A late-bound change callback, set when the app wires a table editor's rows
 /// so dynamically added rows can notify the same handler.
@@ -53,6 +54,10 @@ pub type WallpaperSetHook =
 /// so the widgets stay free of process handling.
 pub type ApplyHook = Rc<dyn Fn(ApplyRequest)>;
 
+/// Prompts for a password and hands back a generated hash, or `None` when the
+/// prompt was cancelled.
+pub type PasswordPromptHook = Rc<dyn Fn(Box<dyn FnOnce(Option<String>)>)>;
+
 /// Copies a wallpaper into the repository and stages it with git.
 pub type WallpaperAdd = Rc<dyn Fn(&Path, &Path) -> Result<PathBuf, String>>;
 
@@ -101,6 +106,8 @@ pub struct BuildContext {
     pub wallpaper_set: Option<WallpaperSetHook>,
     /// Runs the apply command of an option that carries one.
     pub apply: Option<ApplyHook>,
+    /// Prompts for a password and returns a hash for a user account.
+    pub password_prompt: Option<PasswordPromptHook>,
     /// The flake root, used by widgets that resolve repository paths.
     pub base: String,
     /// Wallpaper copy and remove operations.
@@ -115,6 +122,8 @@ pub struct BuildContext {
     /// path instead of one relative to its parent.
     pub path_prefix: String,
     pub presets: PresetMap,
+    /// Records in the current menu, keyed by full option path.
+    pub records: Rc<std::collections::HashMap<String, Record>>,
     /// Whether helper text rows start expanded.
     pub expand_details: bool,
 }

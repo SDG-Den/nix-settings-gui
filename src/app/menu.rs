@@ -262,6 +262,12 @@ fn build_page(app: &Rc<App>, menu: &crate::model::MenuModel) -> MenuPage {
         content.append(&subtitle);
     }
 
+    let records: Rc<std::collections::HashMap<String, crate::model::Record>> = Rc::new(
+        menu.records
+            .iter()
+            .map(|record| (record.path(), record.clone()))
+            .collect(),
+    );
     let mut ordinary = Vec::new();
     let mut advanced = Vec::new();
     let ranks = crate::model::group_ranks(&menu.records);
@@ -269,7 +275,7 @@ fn build_page(app: &Rc<App>, menu: &crate::model::MenuModel) -> MenuPage {
         if record.spec.hidden && !app.advanced.get() {
             continue;
         }
-        let row = build_control_row(app, record, src_index);
+        let row = build_control_row(app, record, src_index, records.clone());
         if record.spec.advanced {
             advanced.push(row);
         } else {

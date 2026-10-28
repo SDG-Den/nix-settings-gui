@@ -12,6 +12,7 @@ use crate::flake_inputs::{self, DeclaredInput, FlakeInput};
 
 use super::pump::{show_error, spawn};
 use super::state::{App, Msg};
+use crate::nixpkgs as nixpkgs_model;
 
 pub(super) const INPUTS_PAGE: &str = "__flake_inputs";
 
@@ -32,7 +33,7 @@ pub(super) fn flake_icon_image() -> Option<gtk::Image> {
     None
 }
 
-fn flake_file(app: &Rc<App>) -> String {
+pub(super) fn flake_file(app: &Rc<App>) -> String {
     Path::new(&app.base.borrow().clone())
         .join("flake.nix")
         .display()
@@ -141,17 +142,29 @@ pub(super) fn refresh(app: &Rc<App>) {
         content.append(&banner);
     }
 
+    content.append(&super::nixpkgs::section(app, &document));
+
+    let listed: Vec<&FlakeInput> = document
+        .inputs
+        .iter()
+        .filter(|input| !nixpkgs_model::is_nixpkgs(&input.name))
+        .collect();
     let list = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    if document.inputs.is_empty() {
+    if listed.is_empty() {
+        let message = if document.inputs.is_empty() {
+            "No inputs declared in this flake."
+        } else {
+            "No other inputs declared in this flake."
+        };
         list.append(
             &gtk::Label::builder()
-                .label("No inputs declared in this flake.")
+                .label(message)
                 .xalign(0.0)
                 .css_classes(["dim-label"])
                 .build(),
         );
     } else {
-        for input in &document.inputs {
+        for input in listed {
             list.append(&input_row(app, input));
             list.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
         }
@@ -606,7 +619,7 @@ fn auto_add_missing(app: &Rc<App>, missing: &[DeclaredInput]) {
     }
 }
 
-fn save_edits(app: &Rc<App>, edits: Vec<edit::PendingEdit>) {
+pub(super) fn save_edits(app: &Rc<App>, edits: Vec<edit::PendingEdit>) {
     let root = app.base.borrow().clone();
     app.status.set_text("Saving flake inputs...");
     spawn(&app.tx, move |tx| {

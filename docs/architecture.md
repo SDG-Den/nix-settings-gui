@@ -92,6 +92,12 @@ should read the enable flag from `osConfig` instead of redeclaring it.
 wallpaper set for the current target through `presetSource`, and asks the app
 to copy or remove images and stage them with git. `widgets/icon.rs` does the same for `icon` table
 columns, resolving `iconDir` and showing a preview with an "Add icon" button.
+`widgets/style_choice.rs` hosts the shared style chooser and its search dialog.
+`widgets/font.rs`, `widgets/icon_theme.rs`, and `widgets/cursor_theme.rs` supply
+their catalogs and previews; `widgets/theme_catalog.rs` discovers installed
+themes, `widgets/xcursor.rs` decodes cursor files, and `widgets/style_catalog.rs`
+loads the Nixpkgs-only manifest embedded by `build.rs`. A style editor can emit
+two staged edits, one for the value and one for its package option.
 Each editor owns a GTK root widget, reports whether it is `unchanged`, produces
 its `PendingEdit`s, and renders its value as a Nix literal. Serialization rules
 live here: strings are quoted and escaped, numbers respect `digits`, paths stay
@@ -126,3 +132,32 @@ plain value and quotes it for the shell.
 `config.rs` reads and writes `~/.config/nix-settings-gui/config.json`: the flake
 path, the terminal and rebuild commands, and the recent flake paths. It is the
 only persistent state the app keeps.
+
+## 9. Flake inputs
+
+`flake_inputs.rs` parses the flake's `inputs` set, accepting a literal `inputs`
+attribute set and dotted declarations such as `inputs.nixpkgs.url`. It groups
+each input's bindings, keeps `@input description` comments, and produces span
+edits for upsert, add-all, and delete. `render_block` writes dotted entries back
+as `inputs.<name> = {...}` so mixed styles round-trip.
+
+`flake_ref.rs` is the pure flake-location model. It parses and renders every
+Nix flake URI type (indirect, path, git, mercurial, tarball, file, github,
+gitlab, sourcehut) with their common query attributes. It is used both to load
+an existing nixpkgs URL into the dialog and to build the URL written back.
+
+`nixpkgs.rs` holds the nixpkgs-specific rules. It recognizes the exact
+`nixpkgs` input name, builds the built-in channel list, discovers `nixos-*`
+branches with `git ls-remote`, sorts them, and caches the result for 24 hours
+under `$XDG_CACHE_HOME/nix-settings-gui`. `flake_lock.rs` reads the direct
+`nixpkgs` node from `flake.lock` for the card's pinned-revision line.
+
+`ref_suggest.rs` implements the manual scans. GitHub and GitLab use their REST
+APIs through `curl`, with optional `GITHUB_TOKEN` and `GITLAB_TOKEN`; generic
+Git and SourceHut fall back to `git ls-remote`, and indirect ids come from
+`nix registry list`. Every scan rejects missing prerequisites.
+
+The GTK flow lives in `app/nixpkgs.rs`: a `PreferencesGroup` card above the
+input list, and a dialog whose form is rebuilt when the flake-location type
+changes. `app/inputs.rs` filters the exact `nixpkgs` entry out of the regular
+list and reuses its `save_edits` path.

@@ -9,9 +9,11 @@ use super::nix::{
     package_literal, parse_string_literal, path_literal, quote, serialize_modules, string_literal,
     truthy, unwrap_modifiers,
 };
+use super::style_choice::StyleChoice;
 use super::table::{connect_table_row, table_nix, TableRow};
 use super::tile_list::WidgetTileList;
 use super::tile_nix::tiles_unchanged;
+use super::users::{self, UserRow};
 use crate::edit::PendingEdit;
 use crate::model::Record;
 use crate::value;
@@ -72,6 +74,10 @@ pub enum Editor {
         list: gtk::ListBox,
         entry: Option<gtk::Entry>,
     },
+    StyleChoice {
+        root: gtk::Box,
+        choice: Rc<StyleChoice>,
+    },
     Wallpaper {
         root: gtk::Box,
         ui: Rc<RefCell<super::wallpaper::WallpaperUi>>,
@@ -122,6 +128,12 @@ pub enum Editor {
         root: gtk::Box,
         state: Rc<GridLayoutState>,
     },
+    Users {
+        root: gtk::Box,
+        rows: Rc<RefCell<Vec<UserRow>>>,
+        on_change: ChangeHook,
+        orig_count: usize,
+    },
     Raw {
         view: gtk::TextView,
         root: gtk::ScrolledWindow,
@@ -146,6 +158,7 @@ impl Editor {
             Editor::HorizontalSubmodule { root, .. } => root.clone().upcast(),
             Editor::Table { root, .. } => root.clone().upcast(),
             Editor::Theme { root, .. } => root.clone().upcast(),
+            Editor::StyleChoice { root, .. } => root.clone().upcast(),
             Editor::Wallpaper { root, .. } => root.clone().upcast(),
             Editor::Icon { root, .. } => root.clone().upcast(),
             Editor::Keybinds { root, .. } => root.clone().upcast(),
@@ -155,6 +168,7 @@ impl Editor {
             Editor::Bar { root, .. } => root.clone().upcast(),
             Editor::Dock { root, .. } => root.clone().upcast(),
             Editor::Grid { root, .. } => root.clone().upcast(),
+            Editor::Users { root, .. } => root.clone().upcast(),
             Editor::Raw { root, .. } => root.clone().upcast(),
         }
     }
@@ -219,6 +233,7 @@ impl Editor {
             Editor::HorizontalSubmodule { .. } => "{ }".to_string(),
             Editor::Table { .. } => table_nix(self),
             Editor::Theme { current, .. } => quote(&current.borrow()),
+            Editor::StyleChoice { choice, .. } => quote(choice.current.borrow().as_str()),
             Editor::Wallpaper { ui, .. } => ui.borrow().nix_value(),
             Editor::Icon { ui, .. } => ui.borrow().nix_value(),
             Editor::Keybinds { rows, .. } => keybinds_nix(&rows.borrow()),
@@ -250,6 +265,7 @@ impl Editor {
                 ..
             } => dock_nix(widgets, *widgets_present, extras),
             Editor::Grid { state, .. } => grid_nix(state),
+            Editor::Users { .. } => users::users_nix(self),
             Editor::Raw { view, .. } => {
                 let buffer = view.buffer();
                 buffer
@@ -274,6 +290,7 @@ impl Editor {
         let original = unwrap_modifiers(original);
         let original = original.as_str();
         match self {
+            Editor::StyleChoice { choice, .. } => choice.unchanged(original),
             Editor::Switch(w) => w.is_active() == truthy(original),
             Editor::Spin(w) => match original.trim().parse::<f64>() {
                 Ok(v) => (w.value() - v).abs() < 1e-9,
@@ -354,6 +371,9 @@ impl Editor {
                         .iter()
                         .all(|(record, editor)| editor.unchanged(&record.value))
             }
+            Editor::Users {
+                rows, orig_count, ..
+            } => users::users_unchanged(rows, *orig_count),
             Editor::Grid { state, .. } => {
                 let tiles = state.tiles.borrow();
                 tiles.len() == state.orig_ids.len()
@@ -377,6 +397,14 @@ impl Editor {
         }
     }
 
+    /// A blocking validation error, if this control may not be saved as is.
+    pub fn validation_error(&self) -> Option<String> {
+        match self {
+            Editor::Users { rows, .. } => users::users_validation_error(rows),
+            _ => None,
+        }
+    }
+
     /// The selected index of a dropdown editor as a number, 0 for other kinds.
     pub fn current_choice(&self) -> f64 {
         match self {
@@ -388,6 +416,9 @@ impl Editor {
     /// The edits this control would make, empty when it is unchanged. A
     /// submodule emits one edit per nested control.
     pub fn edits(&self, record: &Record) -> Vec<PendingEdit> {
+        if let Editor::StyleChoice { choice, .. } = self {
+            return choice.edits(record);
+        }
         if let Editor::Submodule { children, .. } = self {
             let mut out = Vec::new();
             for (child, editor) in children {
@@ -469,6 +500,9 @@ impl Editor {
                     connect_table_row(row, update);
                 }
             }
+            Editor::StyleChoice { choice, .. } => {
+                *choice.on_change.borrow_mut() = Some(update.clone());
+            }
             Editor::Theme { list, entry, .. } => {
                 if let Some(entry) = entry {
                     let update = update.clone();
@@ -523,6 +557,9 @@ impl Editor {
                 for (_, editor) in extras {
                     editor.connect_changed(update);
                 }
+            }
+            Editor::Users { on_change, .. } => {
+                *on_change.borrow_mut() = Some(update.clone());
             }
             Editor::Grid { state, .. } => {
                 *state.on_change.borrow_mut() = Some(update.clone());

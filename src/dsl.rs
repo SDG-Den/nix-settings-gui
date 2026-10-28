@@ -285,6 +285,10 @@ pub enum WidgetKind {
     Plugins,
     Bar,
     Dock,
+    Font,
+    IconTheme,
+    CursorTheme,
+    Users,
     Raw,
 }
 
@@ -318,6 +322,10 @@ impl WidgetKind {
             "plugins" => Self::Plugins,
             "bar" => Self::Bar,
             "dock" => Self::Dock,
+            "font" => Self::Font,
+            "icon-theme" | "icontheme" | "icons" => Self::IconTheme,
+            "cursor-theme" | "cursortheme" | "cursors" => Self::CursorTheme,
+            "users" => Self::Users,
             "raw" => Self::Raw,
             _ => return None,
         })
@@ -437,6 +445,12 @@ pub struct OptionSpec {
     /// Directory holding icons for `icon` table columns, relative to the file
     /// containing the option. Defaults to `./icons`.
     pub icon_dir: Option<String>,
+    /// Full option path of the package that installs the selected value.
+    pub package_option: Option<String>,
+    /// Restrict a `font` control to monospace families.
+    pub monospace: bool,
+    /// Restrict an `icon-theme` control to a dark or light variant.
+    pub variant: Option<String>,
     /// Shell command that applies the option immediately, e.g. an IPC call.
     /// `%%val%%` in the command stands for the option's new value.
     pub apply_command: Option<String>,
@@ -478,6 +492,9 @@ impl OptionSpec {
             wallpaper_dir: d.string("wallpaperDir"),
             preset_source: d.string("presetSource"),
             icon_dir: d.string("iconDir"),
+            package_option: d.string("packageOption"),
+            monospace: d.bool("monospace").unwrap_or(false),
+            variant: d.string("variant"),
             apply_command: d.string("applyCommand"),
         }
     }
@@ -655,6 +672,27 @@ mod tests {
         assert_eq!(kind, MarkerKind::Option);
         let opt = OptionSpec::from_directives(&d);
         assert_eq!(opt.preset_source.as_deref(), Some("ojuny-desktop"));
+    }
+
+    #[test]
+    fn parses_style_choice_directives() {
+        let text = "/* @option widget = \"font\"; packageOption = \"stylix.fonts.monospace.package\"; monospace = true; */";
+        let (kind, directives) = parse_comment(text).unwrap();
+        assert_eq!(kind, MarkerKind::Option);
+        let opt = OptionSpec::from_directives(&directives);
+        assert_eq!(opt.widget, Some(WidgetKind::Font));
+        assert_eq!(
+            opt.package_option.as_deref(),
+            Some("stylix.fonts.monospace.package")
+        );
+        assert!(opt.monospace);
+
+        let text = "/* @option widget = \"icon-theme\"; variant = \"dark\"; */";
+        let (kind, directives) = parse_comment(text).unwrap();
+        assert_eq!(kind, MarkerKind::Option);
+        let opt = OptionSpec::from_directives(&directives);
+        assert_eq!(opt.widget, Some(WidgetKind::IconTheme));
+        assert_eq!(opt.variant.as_deref(), Some("dark"));
     }
 
     #[test]
@@ -876,6 +914,13 @@ mod tests {
         assert_eq!(WidgetKind::parse("plugins"), Some(WidgetKind::Plugins));
         assert_eq!(WidgetKind::parse("bar"), Some(WidgetKind::Bar));
         assert_eq!(WidgetKind::parse("dock"), Some(WidgetKind::Dock));
+        assert_eq!(WidgetKind::parse("users"), Some(WidgetKind::Users));
+        assert_eq!(WidgetKind::parse("font"), Some(WidgetKind::Font));
+        assert_eq!(WidgetKind::parse("icon-theme"), Some(WidgetKind::IconTheme));
+        assert_eq!(
+            WidgetKind::parse("cursor-theme"),
+            Some(WidgetKind::CursorTheme)
+        );
         assert_eq!(WidgetKind::parse("no-such-widget"), None);
     }
 

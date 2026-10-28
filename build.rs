@@ -1,3 +1,4 @@
+use serde::Deserialize;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -31,4 +32,101 @@ fn main() {
 
     let dest = PathBuf::from(env::var("OUT_DIR").unwrap()).join("schemes.rs");
     fs::write(dest, out).expect("write schemes.rs");
+
+    style_catalog_code();
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct StyleManifest {
+    #[serde(default)]
+    fonts: Vec<FontEntry>,
+    #[serde(default)]
+    icons: Vec<ThemeEntry>,
+    #[serde(default)]
+    cursors: Vec<ThemeEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FontEntry {
+    label: String,
+    value: String,
+    package: String,
+    preview: String,
+    #[serde(default)]
+    monospace: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct ThemeEntry {
+    label: String,
+    value: String,
+    package: String,
+    previews: Vec<String>,
+    #[serde(default)]
+    variant: String,
+}
+
+fn rust_string(value: &str) -> String {
+    format!("{value:?}")
+}
+
+fn embedded(path: &str) -> String {
+    format!(
+        "include_bytes!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/assets/style-catalog/{path}\"))"
+    )
+}
+
+fn style_catalog_code() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/style-catalog");
+    println!("cargo:rerun-if-changed={}", dir.display());
+    let manifest_path = dir.join("manifest.json");
+    println!("cargo:rerun-if-changed={}", manifest_path.display());
+    let manifest: StyleManifest = fs::read_to_string(&manifest_path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default();
+
+    let mut out = String::new();
+    out.push_str("pub static FONTS: &[super::StyleEntry] = &[\n");
+    for entry in &manifest.fonts {
+        out.push_str(&format!(
+            "    super::StyleEntry {{ label: {}, value: {}, package: {}, preview: Some({}), previews: &[], monospace: {}, variant: \"\" }},\n",
+            rust_string(&entry.label),
+            rust_string(&entry.value),
+            rust_string(&entry.package),
+            embedded(&entry.preview),
+            entry.monospace,
+        ));
+    }
+    out.push_str("];\n");
+
+    out.push_str("pub static ICON_THEMES: &[super::StyleEntry] = &[\n");
+    for entry in &manifest.icons {
+        let previews: Vec<String> = entry.previews.iter().map(|path| embedded(path)).collect();
+        out.push_str(&format!(
+            "    super::StyleEntry {{ label: {}, value: {}, package: {}, preview: None, previews: &[{}], monospace: false, variant: {} }},\n",
+            rust_string(&entry.label),
+            rust_string(&entry.value),
+            rust_string(&entry.package),
+            previews.join(", "),
+            rust_string(&entry.variant),
+        ));
+    }
+    out.push_str("];\n");
+
+    out.push_str("pub static CURSOR_THEMES: &[super::StyleEntry] = &[\n");
+    for entry in &manifest.cursors {
+        let previews: Vec<String> = entry.previews.iter().map(|path| embedded(path)).collect();
+        out.push_str(&format!(
+            "    super::StyleEntry {{ label: {}, value: {}, package: {}, preview: None, previews: &[{}], monospace: false, variant: \"\" }},\n",
+            rust_string(&entry.label),
+            rust_string(&entry.value),
+            rust_string(&entry.package),
+            previews.join(", "),
+        ));
+    }
+    out.push_str("];\n");
+
+    let dest = PathBuf::from(env::var("OUT_DIR").unwrap()).join("style_catalog.rs");
+    fs::write(dest, out).expect("write style_catalog.rs");
 }

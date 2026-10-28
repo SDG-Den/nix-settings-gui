@@ -1,8 +1,7 @@
 use super::context::{BuildContext, ChangeHook, WallpaperActions};
 use super::editor::Editor;
 use super::nix::{
-    nix_path_literal, normalize_path, parse_string_literal, quote, relative_path,
-    unwrap_modifiers,
+    nix_path_literal, normalize_path, parse_string_literal, quote, relative_path, unwrap_modifiers,
 };
 use crate::dsl::OptionSpec;
 use crate::model::Record;
@@ -259,8 +258,7 @@ impl WallpaperView {
                 path: PathBuf::from(preset.path),
             })
             .collect();
-        self.ui.borrow_mut().default_path =
-            Some(set.default_path).filter(|path| !path.is_empty());
+        self.ui.borrow_mut().default_path = Some(set.default_path).filter(|path| !path.is_empty());
         if let WallpaperChoice::Preset(preset) = current {
             let known = self
                 .presets

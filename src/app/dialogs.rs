@@ -92,6 +92,99 @@ pub(super) fn open_configure(app: &Rc<App>) {
     dialog.present();
 }
 
+/// Build the password hook the users widget calls from its "Change password"
+/// button. The dialog hashes the plaintext and hands back the finished hash.
+pub(super) fn password_prompt(app: &Rc<App>) -> widgets::PasswordPromptHook {
+    let app = app.clone();
+    Rc::new(move |done| open_password_dialog(&app, done))
+}
+
+fn open_password_dialog(app: &Rc<App>, done: Box<dyn FnOnce(Option<String>)>) {
+    let dialog = gtk::Dialog::builder()
+        .title("Change password")
+        .transient_for(&app.window)
+        .modal(true)
+        .build();
+    dialog.add_button("Cancel", gtk::ResponseType::Cancel);
+    let set = dialog.add_button("Set password", gtk::ResponseType::Accept);
+    set.add_css_class("suggested-action");
+
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    content.set_margin_top(12);
+    content.set_margin_bottom(12);
+    content.set_margin_start(12);
+    content.set_margin_end(12);
+
+    let description = gtk::Label::builder()
+        .xalign(0.0)
+        .wrap(true)
+        .label("The password is hashed locally and only the hash is written to the configuration.")
+        .css_classes(["dim-label", "caption"])
+        .build();
+    content.append(&description);
+
+    let password = gtk::PasswordEntry::new();
+    password.set_show_peek_icon(true);
+    password.set_placeholder_text(Some("New password"));
+    password.set_hexpand(true);
+    let confirm = gtk::PasswordEntry::new();
+    confirm.set_show_peek_icon(true);
+    confirm.set_placeholder_text(Some("Confirm password"));
+    confirm.set_hexpand(true);
+
+    content.append(&password);
+    content.append(&confirm);
+    let error = gtk::Label::builder()
+        .xalign(0.0)
+        .wrap(true)
+        .visible(false)
+        .css_classes(["error"])
+        .build();
+    content.append(&error);
+    dialog.content_area().append(&content);
+
+    let done = Rc::new(RefCell::new(Some(done)));
+    {
+        let dialog = dialog.clone();
+        let password = password.clone();
+        let confirm = confirm.clone();
+        let error = error.clone();
+        dialog.connect_response(move |dialog, response| {
+            if response != gtk::ResponseType::Accept {
+                if let Some(done) = done.borrow_mut().take() {
+                    done(None);
+                }
+                dialog.close();
+                return;
+            }
+            let plaintext = password.text().to_string();
+            if plaintext.is_empty() {
+                error.set_text("Password cannot be empty");
+                error.set_visible(true);
+                return;
+            }
+            if plaintext != confirm.text() {
+                error.set_text("Passwords do not match");
+                error.set_visible(true);
+                return;
+            }
+            match crate::passwords::hash_password(&plaintext) {
+                Ok(hash) => {
+                    if let Some(done) = done.borrow_mut().take() {
+                        done(Some(hash));
+                    }
+                    dialog.close();
+                }
+                Err(error_text) => {
+                    error.set_text(&format!("Cannot hash password: {error_text}"));
+                    error.set_visible(true);
+                }
+            }
+        });
+    }
+    dialog.present();
+}
+
 fn non_empty(text: String) -> Option<String> {
     if text.trim().is_empty() {
         None
@@ -477,6 +570,7 @@ pub(super) fn open_add_option(app: &Rc<App>, file: &str, origin: &str) {
         "list",
         "color",
         "submodule",
+        "users",
         "raw",
     ] {
         widget.append(Some(kind), kind);

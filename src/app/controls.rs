@@ -114,6 +114,7 @@ pub(super) fn build_context(app: &Rc<App>) -> widgets::BuildContext {
     ctx.plugin_settings = Some(plugin_settings_hook(app));
     ctx.wallpaper_set = Some(wallpaper_set_hook(app));
     ctx.apply = Some(apply_hook(app));
+    ctx.password_prompt = Some(super::dialogs::password_prompt(app));
     ctx.base = app.base.borrow().clone();
     ctx.wallpaper = Some(super::wallpaper::actions(app));
     ctx.icon = Some(super::icon::actions(app));
@@ -233,6 +234,21 @@ fn plugin_settings_hook(app: &Rc<App>) -> widgets::PluginSettingsHook {
     )
 }
 
+fn records_for_file(app: &Rc<App>, file: &str) -> Rc<HashMap<String, Record>> {
+    let scan = app.scan.borrow();
+    let records = scan
+        .as_ref()
+        .and_then(|scan| scan.menus.iter().find(|menu| menu.file == file))
+        .map(|menu| {
+            menu.records
+                .iter()
+                .map(|record| (record.path(), record.clone()))
+                .collect()
+        })
+        .unwrap_or_default();
+    Rc::new(records)
+}
+
 fn push_unique(list: &mut Vec<String>, name: &str) {
     if !list.iter().any(|n| n == name) {
         list.push(name.to_string());
@@ -243,9 +259,11 @@ pub(super) fn build_control_row(
     app: &Rc<App>,
     record: &Record,
     src_index: usize,
+    records: Rc<HashMap<String, Record>>,
 ) -> Rc<ControlRow> {
     let mut ctx = build_context(app);
     ctx.advanced = app.advanced.get();
+    ctx.records = records;
     let editor = widgets::build(record, None, &ctx);
     let inline = INLINE_LAYOUT_ENABLED
         && control_is_inline(&editor)
@@ -560,7 +578,9 @@ fn reset_to_default(app: &Rc<App>, control: &ControlRow) {
         Ok(default) if !default.trim().is_empty() => {
             let mut record = control.record.clone();
             record.value = default;
-            let editor = widgets::build(&record, None, &build_context(app));
+            let mut ctx = build_context(app);
+            ctx.records = records_for_file(app, &control.record.file);
+            let editor = widgets::build(&record, None, &ctx);
             control.set_editor(editor);
             connect_dirty(app, control);
             app.status.set_text("Reset to default");

@@ -99,6 +99,9 @@ services.pipewire.enable = true;
 | `wallpaperDir` | string     | Directory holding wallpaper images, relative to the file containing the option. Defaults to `./wallpapers`. |
 | `presetSource` | string | Flake input that declares wallpaper presets, e.g. `ojuny-desktop`. When set, the wallpaper picker loads the generated themed wallpaper set for the current target and lists those presets before the images in `wallpaperDir`. |
 | `iconDir`     | string          | Directory holding icons added by `icon` table columns, relative to the file containing the option. Defaults to `./icons`. |
+| `packageOption` | string        | Full option path of the package that installs the selected `font`, `icon-theme`, or `cursor-theme` value. Selecting a catalog entry stages both values. |
+| `monospace`   | boolean         | Restricts a `font` control to monospace catalog entries. |
+| `variant`     | string          | Restricts an `icon-theme` control to `dark` or `light` catalog entries. |
 
 ### Options must exist in the option tree
 
@@ -232,11 +235,15 @@ its own interface, such as a DMS or mango IPC call.
 | `keybinds` | Bind list with a modifier+keys preview and edit popout | mode -> name -> bind set |
 | `monitors` | Draggable monitor layout canvas over `monitor_rule` | list of monitor sets |
 | `theme` | Scheme picker with colour swatches | short scheme name string |
+| `font` | Searchable font chooser with live or baked previews | font family string |
+| `icon-theme` | Searchable icon theme chooser with icon previews | theme directory name string |
+| `cursor-theme` | Searchable cursor theme chooser with cursor previews | theme directory name string |
 | `wallpaper` | Horizontally scrolling wallpaper previews | `null`, a preset name, or a path string |
 | `menu` | Nestable tree of menu entries | dotted-id keyed attribute set |
 | `plugins` | Plugin list with a settings form | name-keyed attribute set |
 | `bar` | Bar widget configuration | bar-name-keyed attribute set |
 | `dock` | Dock configuration | dock-name-keyed attribute set |
+| `users` | User account list with passwords, groups, SSH keys, and extras | name-keyed attribute set of user options |
 | `raw`       | Monospace Nix editor | verbatim value |
 
 ### Submodules
@@ -311,19 +318,41 @@ row scaffolded from `columns`, "remove" deletes the selected row.
 
 These widgets hard-code the shape of a specific configuration and attach to the
 relevant option with `widget = "..."`. They render at the top level of a menu and
-provide their own add, remove, and reorder buttons. The template only names the
-widget; the field shape lives in the application.
+provide their own editing UI, including add, remove, and reorder actions where
+the shape needs them. The template only names the widget; the field shape lives
+in the application.
 
 | Widget | Attach to | Shape |
 |--------|-----------|-------|
 | `keybinds` | a bind mode, e.g. `binds.default` | `name -> { modifier; keys; dispatcher; args; description; group; subcat; }`. Shows a `modifier+keys` preview per row and opens a popout to edit the fields. |
 | `monitors` | `mango.rules.monitor_rule` | a list of monitor sets. Renders the configured rules on a draggable canvas; dragging writes `x`/`y` only. Unset sizes default to a 1920x1080 rectangle (marked visually). |
 | `theme` | the scheme option | a scheme name string. Shows a swatch per bundled scheme and writes the short name (`base16-ocean` becomes `ocean`). `polarity` and `wallpaper` stay separate options. |
+| `font` | a font family option, e.g. `stylix.fonts.monospace.name` | A searchable chooser with installed detection and previews. The shipped catalog contains Nixpkgs fonts; selecting an entry writes the family and the package named by `packageOption`. `monospace = true` filters the list. |
+| `icon-theme` | an icon theme option, e.g. `stylix.icons.dark` | A searchable chooser with live sample icons for installed themes and baked preview sheets for uninstalled themes. Selecting an entry writes the theme and the package named by `packageOption`; `variant` filters dark or light entries. |
+| `cursor-theme` | `stylix.cursor.name` | A searchable chooser with decoded cursor previews for installed themes and baked preview sheets for uninstalled themes. Selecting an entry writes the theme and the package named by `packageOption`. |
 | `wallpaper` | the wallpaper option | `null` for the default themed preset, a preset name, or a path to an image. With `presetSource`, the strip starts with the themed generated presets, then the images in `wallpaperDir`. Added files are copied into `wallpaperDir` and staged with `git add`; preset tiles are not removable. |
 | `menu` | `dankMenu.menu` | an attribute set keyed by dotted id. Splits the id on `.` and renders a nestable tree; leaves are editable rows. |
 | `plugins` | `dms.plugins` | a name-keyed attribute set of `{ enable; src; settings; dir; config; }`. `settings` renders as `raw` unless annotated as a typed submodule. |
 | `bar` | `barConfigs` | a name-keyed attribute set with id-keyed `left`/`center`/`right` widget lists plus layout and appearance. |
 | `dock` | `dockConfigs` | the same shape as `bar`, in its own control. |
+| `users` | `users.users` | a name-keyed attribute set of accounts. Edits `description`, `hashedPassword`, `extraGroups`, `uid`, `shell`, `openssh.authorizedKeys.keys`, and an extra-options field. `wheel` is a separate sudo toggle. The add and remove actions keep at least one normal account with sudo and a password. |
+
+The `users` widget expects the whole `users.users` attribute set, not a single
+account. Place the marker above that assignment:
+
+```nix
+/* @option widget = "users"; label = "Accounts"; */
+users.users = {
+  alice = {
+    isNormalUser = true;
+    description = "Alice";
+    hashedPassword = "$y$...";
+    extraGroups = [ "wheel" "video" ];
+    shell = pkgs.zsh;
+    openssh.authorizedKeys.keys = [ "ssh-ed25519 ..." ];
+  };
+};
+```
 
 The `menu` provider `apps` is only valid on a top-level entry. A top-level
 entry with `provider = "apps"` cannot receive child options because the

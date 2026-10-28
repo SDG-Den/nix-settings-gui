@@ -11,14 +11,19 @@ mod dsl;
 mod edit;
 mod error_dialog;
 mod flake_inputs;
+mod flake_lock;
+mod flake_ref;
 #[allow(dead_code)]
 mod metadata;
 #[allow(dead_code)]
 mod model;
 mod monitor_detect;
 mod nixd;
+mod nixpkgs;
+mod passwords;
 mod plugin_list;
 mod plugin_schema;
+mod ref_suggest;
 mod scan;
 #[allow(dead_code)]
 mod templates;

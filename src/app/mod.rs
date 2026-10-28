@@ -18,6 +18,7 @@ mod git;
 mod icon;
 mod inputs;
 pub(crate) mod menu;
+mod nixpkgs;
 mod pump;
 mod save;
 mod state;

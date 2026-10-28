@@ -1,0 +1,202 @@
+{
+  "fonts": [
+    {
+      "label": "DejaVu Sans",
+      "value": "DejaVu Sans",
+      "package": "pkgs.dejavu_fonts",
+      "preview": "previews/font-dejavu-sans.png",
+      "monospace": false
+    },
+    {
+      "label": "DejaVu Sans Mono",
+      "value": "DejaVu Sans Mono",
+      "package": "pkgs.dejavu_fonts",
+      "preview": "previews/font-dejavu-sans-mono.png",
+      "monospace": true
+    },
+    {
+      "label": "DejaVu Serif",
+      "value": "DejaVu Serif",
+      "package": "pkgs.dejavu_fonts",
+      "preview": "previews/font-dejavu-serif.png",
+      "monospace": false
+    },
+    {
+      "label": "Fira Code",
+      "value": "Fira Code",
+      "package": "pkgs.fira-code",
+      "preview": "previews/font-fira-code.png",
+      "monospace": true
+    },
+    {
+      "label": "Inter",
+      "value": "Inter",
+      "package": "pkgs.inter",
+      "preview": "previews/font-inter.png",
+      "monospace": false
+    },
+    {
+      "label": "Liberation Sans",
+      "value": "Liberation Sans",
+      "package": "pkgs.liberation_ttf",
+      "preview": "previews/font-liberation-sans.png",
+      "monospace": false
+    },
+    {
+      "label": "Liberation Mono",
+      "value": "Liberation Mono",
+      "package": "pkgs.liberation_ttf",
+      "preview": "previews/font-liberation-mono.png",
+      "monospace": true
+    },
+    {
+      "label": "Liberation Serif",
+      "value": "Liberation Serif",
+      "package": "pkgs.liberation_ttf",
+      "preview": "previews/font-liberation-serif.png",
+      "monospace": false
+    },
+    {
+      "label": "Noto Sans CJK JP",
+      "value": "Noto Sans CJK JP",
+      "package": "pkgs.noto-fonts-cjk-sans",
+      "preview": "previews/font-noto-sans-cjk-jp.png",
+      "monospace": false
+    },
+    {
+      "label": "Noto Sans Mono CJK JP",
+      "value": "Noto Sans Mono CJK JP",
+      "package": "pkgs.noto-fonts-cjk-sans",
+      "preview": "previews/font-noto-sans-mono-cjk-jp.png",
+      "monospace": true
+    },
+    {
+      "label": "Noto Serif CJK JP",
+      "value": "Noto Serif CJK JP",
+      "package": "pkgs.noto-fonts-cjk-serif",
+      "preview": "previews/font-noto-serif-cjk-jp.png",
+      "monospace": false
+    },
+    {
+      "label": "CaskaydiaCove Nerd Font",
+      "value": "CaskaydiaCove Nerd Font",
+      "package": "pkgs.nerd-fonts.caskaydia-cove",
+      "preview": "previews/font-caskaydiacove-nerd-font.png",
+      "monospace": false
+    },
+    {
+      "label": "CaskaydiaCove Nerd Font Mono",
+      "value": "CaskaydiaCove Nerd Font Mono",
+      "package": "pkgs.nerd-fonts.caskaydia-cove",
+      "preview": "previews/font-caskaydiacove-nerd-font-mono.png",
+      "monospace": true
+    },
+    {
+      "label": "CaskaydiaMono Nerd Font",
+      "value": "CaskaydiaMono Nerd Font",
+      "package": "pkgs.nerd-fonts.caskaydia-mono",
+      "preview": "previews/font-caskaydiamono-nerd-font.png",
+      "monospace": true
+    }
+  ],
+  "icons": [
+    {
+      "label": "Papirus",
+      "value": "Papirus",
+      "package": "pkgs.papirus-icon-theme",
+      "variant": "",
+      "previews": [
+        "previews/icon-papirus-1-folder.png",
+        "previews/icon-papirus-2-internet-web-browser.png",
+        "previews/icon-papirus-3-system-file-manager.png",
+        "previews/icon-papirus-4-edit-copy.png",
+        "previews/icon-papirus-5-dialog-information.png",
+        "previews/icon-papirus-6-computer.png",
+        "previews/icon-papirus-7-utilities-terminal.png",
+        "previews/icon-papirus-8-view-refresh.png"
+      ]
+    },
+    {
+      "label": "Papirus Dark",
+      "value": "Papirus-Dark",
+      "package": "pkgs.papirus-icon-theme",
+      "variant": "dark",
+      "previews": [
+        "previews/icon-papirus-1-folder.png",
+        "previews/icon-papirus-2-internet-web-browser.png",
+        "previews/icon-papirus-3-system-file-manager.png",
+        "previews/icon-papirus-4-edit-copy.png",
+        "previews/icon-papirus-5-dialog-information.png",
+        "previews/icon-papirus-6-computer.png",
+        "previews/icon-papirus-7-utilities-terminal.png",
+        "previews/icon-papirus-8-view-refresh.png"
+      ]
+    },
+    {
+      "label": "Papirus Light",
+      "value": "Papirus-Light",
+      "package": "pkgs.papirus-icon-theme",
+      "variant": "light",
+      "previews": [
+        "previews/icon-papirus-1-folder.png",
+        "previews/icon-papirus-2-internet-web-browser.png",
+        "previews/icon-papirus-3-system-file-manager.png",
+        "previews/icon-papirus-4-edit-copy.png",
+        "previews/icon-papirus-5-dialog-information.png",
+        "previews/icon-papirus-6-computer.png",
+        "previews/icon-papirus-7-utilities-terminal.png",
+        "previews/icon-papirus-8-view-refresh.png"
+      ]
+    }
+  ],
+  "cursors": [
+    {
+      "label": "Bibata Modern Classic",
+      "value": "Bibata-Modern-Classic",
+      "package": "pkgs.bibata-cursors",
+      "previews": [
+        "previews/cursor-bibata-modern-classic-1-default.png",
+        "previews/cursor-bibata-modern-classic-2-pointer.png",
+        "previews/cursor-bibata-modern-classic-3-text.png",
+        "previews/cursor-bibata-modern-classic-4-wait.png",
+        "previews/cursor-bibata-modern-classic-5-crosshair.png",
+        "previews/cursor-bibata-modern-classic-6-move.png",
+        "previews/cursor-bibata-modern-classic-7-not-allowed.png",
+        "previews/cursor-bibata-modern-classic-8-ew-resize.png",
+        "previews/cursor-bibata-modern-classic-9-ns-resize.png"
+      ]
+    },
+    {
+      "label": "Bibata Modern Ice",
+      "value": "Bibata-Modern-Ice",
+      "package": "pkgs.bibata-cursors",
+      "previews": [
+        "previews/cursor-bibata-modern-ice-1-default.png",
+        "previews/cursor-bibata-modern-ice-2-pointer.png",
+        "previews/cursor-bibata-modern-ice-3-text.png",
+        "previews/cursor-bibata-modern-ice-4-wait.png",
+        "previews/cursor-bibata-modern-ice-5-crosshair.png",
+        "previews/cursor-bibata-modern-ice-6-move.png",
+        "previews/cursor-bibata-modern-ice-7-not-allowed.png",
+        "previews/cursor-bibata-modern-ice-8-ew-resize.png",
+        "previews/cursor-bibata-modern-ice-9-ns-resize.png"
+      ]
+    },
+    {
+      "label": "Bibata Modern Amber",
+      "value": "Bibata-Modern-Amber",
+      "package": "pkgs.bibata-cursors",
+      "previews": [
+        "previews/cursor-bibata-modern-amber-1-default.png",
+        "previews/cursor-bibata-modern-amber-2-pointer.png",
+        "previews/cursor-bibata-modern-amber-3-text.png",
+        "previews/cursor-bibata-modern-amber-4-wait.png",
+        "previews/cursor-bibata-modern-amber-5-crosshair.png",
+        "previews/cursor-bibata-modern-amber-6-move.png",
+        "previews/cursor-bibata-modern-amber-7-not-allowed.png",
+        "previews/cursor-bibata-modern-amber-8-ew-resize.png",
+        "previews/cursor-bibata-modern-amber-9-ns-resize.png"
+      ]
+    }
+  ]
+}

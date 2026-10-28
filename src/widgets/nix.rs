@@ -266,7 +266,12 @@ pub fn literal_for_widget(widget: WidgetKind, value: &str) -> String {
                 "0".to_string()
             }
         }
-        WidgetKind::Text | WidgetKind::Multiline | WidgetKind::Color => string_literal(value),
+        WidgetKind::Text
+        | WidgetKind::Multiline
+        | WidgetKind::Color
+        | WidgetKind::Font
+        | WidgetKind::IconTheme
+        | WidgetKind::CursorTheme => string_literal(value),
         WidgetKind::Path => path_literal(value),
         WidgetKind::Wallpaper => {
             if t == "null" {
@@ -281,6 +286,13 @@ pub fn literal_for_widget(widget: WidgetKind, value: &str) -> String {
             serialize_packages(&items)
         }
         WidgetKind::Package => package_literal(value),
+        WidgetKind::Users => {
+            if t.is_empty() {
+                "{ }".to_string()
+            } else {
+                expr_literal(value)
+            }
+        }
         WidgetKind::List
         | WidgetKind::NixosModules
         | WidgetKind::HmModules

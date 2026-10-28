@@ -45,7 +45,14 @@ pub struct InputDocument {
     pub inputs: Vec<FlakeInput>,
     groups: BTreeMap<String, InputGroup>,
     insert_offset: usize,
-    wrap_inputs: bool,
+    style: InsertStyle,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum InsertStyle {
+    Literal,
+    Dotted,
+    Create,
 }
 
 /// One `@inputs` declaration found at the top of a repository file.
@@ -62,6 +69,7 @@ struct InputGroup {
     bindings: Vec<Range<usize>>,
     description_span: Option<Range<usize>>,
     description: Option<String>,
+    dotted: bool,
 }
 
 pub fn load(path: &str) -> Result<InputDocument, String> {
@@ -78,16 +86,18 @@ pub fn load(path: &str) -> Result<InputDocument, String> {
     };
 
     let mut inputs_set: Option<AttrSet> = None;
+    let mut has_dotted = false;
     for binding in top.attrpath_values() {
-        let Some(path) = binding.attrpath() else {
+        let Some(attrpath) = binding.attrpath() else {
             continue;
         };
-        let comps = attr_components(&path);
+        let comps = attr_components(&attrpath);
         if comps.first().map(String::as_str) != Some("inputs") {
             continue;
         }
         if comps.len() != 1 {
-            return Err(format!("{path}: inputs is not a literal attribute set"));
+            has_dotted = true;
+            continue;
         }
         let Some(value) = binding.value() else {
             continue;
@@ -96,83 +106,46 @@ pub fn load(path: &str) -> Result<InputDocument, String> {
             return Err(format!("{path}: inputs is not a literal attribute set"));
         };
         inputs_set = Some(set);
-        break;
     }
-    let (insert_offset, wrap_inputs) = match &inputs_set {
-        Some(set) => {
-            let offset = set
-                .r_curly_token()
-                .map(|token| usize::from(token.text_range().start()))
-                .ok_or_else(|| format!("{path}: cannot locate the end of the inputs set"))?;
-            (offset, false)
-        }
-        None => {
-            let offset = top
-                .l_curly_token()
-                .map(|token| usize::from(token.text_range().end()))
-                .ok_or_else(|| format!("{path}: cannot locate the top-level attribute set"))?;
-            (offset, true)
-        }
+    let style = if inputs_set.is_some() {
+        InsertStyle::Literal
+    } else if has_dotted {
+        InsertStyle::Dotted
+    } else {
+        InsertStyle::Create
+    };
+    let insert_offset = match (&inputs_set, style) {
+        (Some(set), _) => set
+            .r_curly_token()
+            .map(|token| usize::from(token.text_range().start()))
+            .ok_or_else(|| format!("{path}: cannot locate the end of the inputs set"))?,
+        (None, InsertStyle::Dotted) => top
+            .r_curly_token()
+            .map(|token| usize::from(token.text_range().start()))
+            .ok_or_else(|| format!("{path}: cannot locate the end of the top-level set"))?,
+        (None, InsertStyle::Create) => top
+            .l_curly_token()
+            .map(|token| usize::from(token.text_range().end()))
+            .ok_or_else(|| format!("{path}: cannot locate the top-level attribute set"))?,
+        (None, InsertStyle::Literal) => unreachable!(),
     };
 
     let mut groups: BTreeMap<String, InputGroup> = BTreeMap::new();
     let mut inputs: BTreeMap<String, FlakeInput> = BTreeMap::new();
     if let Some(set) = &inputs_set {
-        let mut pending: Option<(String, Range<usize>)> = None;
-        for element in set.syntax().children_with_tokens() {
-            match element {
-                NodeOrToken::Token(token) => match token.kind() {
-                    SyntaxKind::TOKEN_COMMENT => {
-                        let range = token.text_range();
-                        pending = Some((
-                            token.text().to_string(),
-                            usize::from(range.start())..usize::from(range.end()),
-                        ));
-                    }
-                    SyntaxKind::TOKEN_WHITESPACE => {}
-                    _ => pending = None,
-                },
-                NodeOrToken::Node(node) => {
-                    let comment = pending.take();
-                    if node.kind() != SyntaxKind::NODE_ATTRPATH_VALUE {
-                        continue;
-                    }
-                    let Some(binding) = AttrpathValue::cast(node) else {
-                        continue;
-                    };
-                    let Some(attrpath) = binding.attrpath() else {
-                        continue;
-                    };
-                    let comps = attr_components(&attrpath);
-                    let Some(name) = comps.first().cloned() else {
-                        continue;
-                    };
-                    if name == "self" {
-                        continue;
-                    }
-                    let range = binding.syntax().text_range();
-                    let group = groups.entry(name.clone()).or_default();
-                    if group.bindings.is_empty() {
-                        if let Some((text, span)) = comment {
-                            if let Some(description) = parse_input_description(&text) {
-                                group.description = Some(description);
-                                group.description_span = Some(span);
-                            }
-                        }
-                    }
-                    group
-                        .bindings
-                        .push(usize::from(range.start())..usize::from(range.end()));
-
-                    let input = inputs
-                        .entry(name.clone())
-                        .or_insert_with(|| FlakeInput::new(name));
-                    if let Some(value) = binding.value() {
-                        apply_path(input, &comps[1..], &value);
-                    }
-                }
-            }
-        }
+        collect_bindings(
+            set.syntax().children_with_tokens(),
+            false,
+            &mut groups,
+            &mut inputs,
+        );
+    } else if has_dotted {
+        collect_bindings(
+            top.syntax().children_with_tokens(),
+            true,
+            &mut groups,
+            &mut inputs,
+        );
     }
 
     for (name, group) in &groups {
@@ -192,8 +165,82 @@ pub fn load(path: &str) -> Result<InputDocument, String> {
         inputs: inputs.into_values().collect(),
         groups,
         insert_offset,
-        wrap_inputs,
+        style,
     })
+}
+
+fn collect_bindings<I>(
+    elements: I,
+    dotted: bool,
+    groups: &mut BTreeMap<String, InputGroup>,
+    inputs: &mut BTreeMap<String, FlakeInput>,
+) where
+    I: Iterator<Item = NodeOrToken<rnix::SyntaxNode, rnix::SyntaxToken>>,
+{
+    let mut pending: Option<(String, Range<usize>)> = None;
+    for element in elements {
+        match element {
+            NodeOrToken::Token(token) => match token.kind() {
+                SyntaxKind::TOKEN_COMMENT => {
+                    let range = token.text_range();
+                    pending = Some((
+                        token.text().to_string(),
+                        usize::from(range.start())..usize::from(range.end()),
+                    ));
+                }
+                SyntaxKind::TOKEN_WHITESPACE => {}
+                _ => pending = None,
+            },
+            NodeOrToken::Node(node) => {
+                let comment = pending.take();
+                if node.kind() != SyntaxKind::NODE_ATTRPATH_VALUE {
+                    continue;
+                }
+                let Some(binding) = AttrpathValue::cast(node) else {
+                    continue;
+                };
+                let Some(attrpath) = binding.attrpath() else {
+                    continue;
+                };
+                let comps = attr_components(&attrpath);
+                let (name, path) = if dotted {
+                    if comps.first().map(String::as_str) != Some("inputs") || comps.len() < 2 {
+                        continue;
+                    }
+                    (comps[1].clone(), &comps[2..])
+                } else {
+                    let Some(name) = comps.first().cloned() else {
+                        continue;
+                    };
+                    (name, &comps[1..])
+                };
+                if name == "self" {
+                    continue;
+                }
+                let range = binding.syntax().text_range();
+                let group = groups.entry(name.clone()).or_default();
+                group.dotted = dotted;
+                if group.bindings.is_empty() {
+                    if let Some((text, span)) = comment {
+                        if let Some(description) = parse_input_description(&text) {
+                            group.description = Some(description);
+                            group.description_span = Some(span);
+                        }
+                    }
+                }
+                group
+                    .bindings
+                    .push(usize::from(range.start())..usize::from(range.end()));
+
+                let input = inputs
+                    .entry(name.clone())
+                    .or_insert_with(|| FlakeInput::new(name));
+                if let Some(value) = binding.value() {
+                    apply_path(input, path, &value);
+                }
+            }
+        }
+    }
 }
 
 impl InputDocument {
@@ -206,9 +253,9 @@ impl InputDocument {
             return Err("input URL cannot be empty".to_string());
         }
         let marker = render_description(input.description.as_deref());
-        let block = render_block(input);
 
         let Some(group) = self.groups.get(&input.name) else {
+            let block = render_block(input, self.style == InsertStyle::Dotted);
             let mut rendered = String::new();
             if let Some(marker) = &marker {
                 rendered.push_str(marker);
@@ -217,6 +264,7 @@ impl InputDocument {
             rendered.push_str(&block);
             return Ok(self.insert_blocks(vec![rendered]));
         };
+        let block = render_block(input, group.dotted);
 
         let Some(first) = group.bindings.first().cloned() else {
             return Err(format!("input `{}` has no source binding", input.name));
@@ -262,7 +310,7 @@ impl InputDocument {
                 rendered.push_str(&marker);
                 rendered.push('\n');
             }
-            rendered.push_str(&render_block(input));
+            rendered.push_str(&render_block(input, self.style == InsertStyle::Dotted));
             blocks.push(rendered);
         }
         if blocks.is_empty() {
@@ -273,7 +321,7 @@ impl InputDocument {
 
     fn insert_blocks(&self, blocks: Vec<String>) -> Vec<PendingEdit> {
         let body = blocks.join("");
-        let value = if self.wrap_inputs {
+        let value = if self.style == InsertStyle::Create {
             format!("\ninputs = {{\n{body}}};\n")
         } else {
             format!("\n{body}\n")
@@ -283,6 +331,11 @@ impl InputDocument {
             self.insert_offset..self.insert_offset,
             value,
         )]
+    }
+
+    /// The parsed input named `name`, if it is declared.
+    pub fn input(&self, name: &str) -> Option<&FlakeInput> {
+        self.inputs.iter().find(|input| input.name == name)
     }
 
     /// Edits that remove every binding and the description marker for `name`.
@@ -368,8 +421,13 @@ fn pending(file: &str, span: Range<usize>, value: String) -> PendingEdit {
     }
 }
 
-fn render_block(input: &FlakeInput) -> String {
-    let mut out = format!("{} = {{\n", attr_key(&input.name));
+fn render_block(input: &FlakeInput, prefix_inputs: bool) -> String {
+    let key = if prefix_inputs {
+        format!("inputs.{}", attr_key(&input.name))
+    } else {
+        attr_key(&input.name)
+    };
+    let mut out = format!("{key} = {{\n");
     if let Some(url) = input.url.as_deref() {
         let url = set_url_flag(
             &set_url_flag(url, "submodules", input.submodules),
@@ -857,6 +915,36 @@ mod tests {
         assert!(patched.contains("foo = {"));
         assert!(patched.contains("bar = {"));
         inputs.clear();
+    }
+
+    #[test]
+    fn updates_dotted_top_level_inputs() {
+        let text = r#"{
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+  inputs.foo.url = "github:owner/foo";
+  outputs = { ... }: {};
+}
+"#;
+        let doc = document("dotted", text);
+        assert_eq!(
+            input(&doc, "nixpkgs").url.as_deref(),
+            Some("github:NixOS/nixpkgs/nixos-unstable")
+        );
+        let mut updated = input(&doc, "nixpkgs").clone();
+        updated.url = Some("github:NixOS/nixpkgs/nixos-26.05".to_string());
+        let edits = doc.edits_for_upsert(&updated).unwrap();
+        let patched = patch(text, &edits);
+        assert!(rnix::Root::parse(&patched).ok().is_ok());
+        assert!(patched.contains("inputs.nixpkgs = {"));
+        assert!(patched.contains("nixos-26.05"));
+
+        let mut added = FlakeInput::new("bar");
+        added.url = Some("https://example.com/bar".to_string());
+        let doc = document("dotted-add", &patched);
+        let edits = doc.edits_for_upsert(&added).unwrap();
+        let patched = patch(&patched, &edits);
+        assert!(rnix::Root::parse(&patched).ok().is_ok());
+        assert!(patched.contains("inputs.bar = {"));
     }
 
     #[test]

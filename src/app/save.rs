@@ -32,6 +32,22 @@ pub(super) fn collect_edits(app: &Rc<App>) -> Vec<edit::PendingEdit> {
     edits
 }
 
+/// A save-blocking error reported by a control that enforces an invariant,
+/// such as the user list keeping one sudo account with a password.
+fn validation_error(app: &Rc<App>) -> Option<String> {
+    for page in app.pages.borrow().iter() {
+        for control in &page.controls {
+            if !control.dep_visible.get() {
+                continue;
+            }
+            if let Some(error) = control.editor.borrow().validation_error() {
+                return Some(error);
+            }
+        }
+    }
+    None
+}
+
 /// Package assignments that changed, as `(path, literal)` pairs to validate
 /// with nixd before writing. Hidden-by-dependency controls are skipped.
 fn collect_package_checks(app: &Rc<App>) -> Vec<(String, String)> {
@@ -65,6 +81,11 @@ pub(super) fn save_all(app: &Rc<App>, tx: &Tx, rebuild: bool) {
         if rebuild {
             run_rebuild(app);
         }
+        return;
+    }
+    if let Some(error) = validation_error(app) {
+        app.status.set_text("Cannot save");
+        show_error(&app.window, &error);
         return;
     }
     let root = app.base.borrow().clone();
@@ -211,6 +232,10 @@ pub(super) fn run_changes_prompt(app: &Rc<App>, on_save: Box<dyn Fn()>) {
     let state = app.clone();
     dialog.connect_response(move |dialog, response| match changes_action(response) {
         ChangesAction::Save => {
+            if let Some(error) = validation_error(&state) {
+                show_error(&state.window, &error);
+                return;
+            }
             dialog.set_response_sensitive(gtk::ResponseType::Yes, false);
             dialog.set_response_sensitive(gtk::ResponseType::No, false);
             dialog.set_response_sensitive(gtk::ResponseType::Cancel, false);
