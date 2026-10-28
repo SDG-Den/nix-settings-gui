@@ -100,6 +100,52 @@ services.pipewire.enable = true;
 | `presetSource` | string | Flake input that declares wallpaper presets, e.g. `ojuny-desktop`. When set, the wallpaper picker loads the generated themed wallpaper set for the current target and lists those presets before the images in `wallpaperDir`. |
 | `iconDir`     | string          | Directory holding icons added by `icon` table columns, relative to the file containing the option. Defaults to `./icons`. |
 
+### Options must exist in the option tree
+
+An `@option` comment does not create an option. It only supplies rendering
+metadata for an assignment whose option already exists in the module's option
+tree. If the option is declared inside `lib.mkMerge`, a list of attribute sets,
+or another config-level expression, nixd or `nix eval` may not enumerate it, so
+the control can be missing or lack type metadata.
+
+Declare options at the top level of a module's `options` attribute. For an
+optional feature, use a thin wrapper exposed as
+`flake.modules.nixos.patch-<id>` and a permanent backend:
+
+```nix
+# modules/nixos/patch-example.nix
+{ lib, ... }: {
+  imports = [ ./example-backend.nix ];
+
+  options.ojuny.example.enable = lib.mkEnableOption "example feature";
+
+  config = {
+    /* @option widget = "switch"; label = "Enable example"; */
+    ojuny.example.enable = false;
+  };
+}
+```
+
+```nix
+# modules/nixos/example-backend.nix
+{ config, lib, pkgs, ... }: {
+  options.ojuny.example.package = lib.mkOption {
+    type = lib.types.package;
+    default = pkgs.hello;
+  };
+
+  config = lib.mkIf config.ojuny.example.enable {
+    environment.systemPackages = [ config.ojuny.example.package ];
+  };
+}
+```
+
+The wrapper declares the toggle and imports the backend. The backend keeps its
+options at the top level and gates its `config`, so the options stay visible even
+while the feature is disabled. Home-manager backends should be added
+conditionally through `home-manager.sharedModules` and should read the enable
+flag from `osConfig`.
+
 ### Visibility dependencies
 
 `visibleWhen.path` names another option in the same menu. The control renders
