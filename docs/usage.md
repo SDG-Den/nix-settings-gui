@@ -89,3 +89,13 @@ commands.
 `nixd` provides option types, descriptions, defaults, and enum choices. Without
 it, the app falls back to `nix eval --json` via `src/nix/options-to-json.nix`,
 and options with no type data render as `raw`.
+
+## 9. Options that do not appear
+
+Options are discovered from the module system's option tree, not from `@option`
+comments alone. An option declared inside `lib.mkMerge`, a list of attribute
+sets, or another config-level expression may not be enumerated, so its control
+can be missing or untyped. The recommended module structure is described in
+`architecture.md`, section 4, "Option discovery and module shape", with a short
+example in `comment-syntax.md`, section 2, "Options must exist in the option
+tree".

@@ -62,6 +62,28 @@ absent or returns nothing, it falls back to `nix eval --json` against
 `nix/options-to-json.nix`. `value.rs` classifies the resulting literal so the
 widget factory can pick a control.
 
+### Option discovery and module shape
+
+nix-settings-gui discovers options through the NixOS/Home Manager module system
+and nixd/eval, not only through `@option` comments. `@option` comments attach
+rendering metadata to an assignment; they do not declare the option. Enumeration
+reads the option tree exposed by the chosen target: nixd's option index when
+available, and `nix eval` via `nix/options-to-json.nix` as the fallback.
+
+An option declared inside `lib.mkMerge`, a list of attribute sets, or another
+config-level expression is not reliably visible to option enumeration. The module
+system may still evaluate the expression, but the option does not appear as a
+stable declaration in the registry that the GUI walks. It can therefore be
+missing from the option picker or render without type metadata.
+
+Options must be declared at the top level of a module's `options` attribute. The
+recommended pattern for an optional feature is a thin
+`flake.modules.nixos.patch-<id>` module that declares the enable toggle and
+imports a permanent backend module. The backend declares the feature's options
+at its own top level and gates its `config` with `lib.mkIf`. Home-manager
+backends should be added conditionally through `home-manager.sharedModules` and
+should read the enable flag from `osConfig` instead of redeclaring it.
+
 ## 5. Widgets
 
 `widgets.rs` maps a record and its type string to one of the `Editor` variants.
