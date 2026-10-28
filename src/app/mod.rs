@@ -342,6 +342,7 @@ fn build_ui(app: &adw::Application, tx: &Tx, page_pattern: Option<Regex>) -> Rc<
         package_service: PackageService::new(),
         plugin_registry: Rc::new(PluginRegistryState::new()),
         wallpaper_set: RefCell::new(None),
+        style_fonts: RefCell::new(None),
         apply_state: ApplyState::new(),
         tx: tx.clone(),
         config: RefCell::new(AppConfig::load()),

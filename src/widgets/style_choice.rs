@@ -140,7 +140,9 @@ pub(crate) fn custom_entry(value: &str) -> ChoiceEntry {
             );
             root.append(
                 &gtk::Label::builder()
-                    .label("This value is not part of the shipped catalog, so its package is left unchanged.")
+                    .label(
+                        "This value is not part of the catalog, so its package is left unchanged.",
+                    )
                     .xalign(0.0)
                     .wrap(true)
                     .css_classes(["dim-label"])
@@ -170,7 +172,6 @@ pub(crate) fn build(
     value_text: &str,
     package: Option<PackageBinding>,
     mut items: Vec<ChoiceEntry>,
-    title: &str,
     search_placeholder: &str,
 ) -> Editor {
     if items.is_empty() {
@@ -185,175 +186,18 @@ pub(crate) fn build(
     if !items.iter().any(|item| item.value == current) {
         items.push(custom_entry(&current));
     }
-    let title = title.to_string();
-    let search_placeholder = search_placeholder.to_string();
     let choice = Rc::new(StyleChoice {
-        current: Rc::new(RefCell::new(current)),
+        current: Rc::new(RefCell::new(current.clone())),
         package,
         on_change: Rc::new(RefCell::new(None)),
     });
 
-    let preview_host = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    preview_host.set_size_request(150, 40);
-    preview_host.set_valign(gtk::Align::Center);
-    preview_host.add_css_class("style-choice-inline-preview");
-    let name = gtk::Label::builder()
-        .xalign(0.0)
-        .ellipsize(gtk::pango::EllipsizeMode::End)
-        .max_width_chars(28)
-        .build();
-    let badge = gtk::Label::builder()
-        .xalign(0.0)
-        .css_classes(["dim-label", "caption"])
-        .build();
-    let texts = gtk::Box::new(gtk::Orientation::Vertical, 1);
-    texts.set_hexpand(true);
-    texts.append(&name);
-    texts.append(&badge);
-    let chevron = gtk::Image::from_icon_name("pan-down-symbolic");
-    chevron.set_valign(gtk::Align::Center);
-    let content = gtk::Box::new(gtk::Orientation::Horizontal, 10);
-    content.append(&preview_host);
-    content.append(&texts);
-    content.append(&chevron);
-    let button = gtk::Button::new();
-    button.add_css_class("style-choice-button");
-    button.set_hexpand(true);
-    button.set_child(Some(&content));
-
-    refresh_inline(
-        &preview_host,
-        &name,
-        &badge,
-        &items,
-        choice.current.borrow().as_str(),
-    );
-
-    {
-        let choice = choice.clone();
-        let items = items.clone();
-        let title = title.clone();
-        let search_placeholder = search_placeholder.clone();
-        let preview_host = preview_host.clone();
-        let name = name.clone();
-        let badge = badge.clone();
-        button.connect_clicked(move |button| {
-            let parent = button.root().and_downcast::<gtk::Window>();
-            let choice = choice.clone();
-            let items = items.clone();
-            let preview_host = preview_host.clone();
-            let name = name.clone();
-            let badge = badge.clone();
-            let accept_choice = choice.clone();
-            let accept_items = items.clone();
-            let accept: Rc<dyn Fn(ChoiceEntry)> = Rc::new(move |item| {
-                *accept_choice.current.borrow_mut() = item.value.clone();
-                if let (Some(binding), Some(package)) = (&accept_choice.package, &item.package) {
-                    *binding.value.borrow_mut() = package.clone();
-                }
-                refresh_inline(
-                    &preview_host,
-                    &name,
-                    &badge,
-                    &accept_items,
-                    accept_choice.current.borrow().as_str(),
-                );
-                accept_choice.fire();
-            });
-            open_dialog(
-                parent.as_ref(),
-                &items,
-                choice.current.borrow().as_str(),
-                &title,
-                &search_placeholder,
-                accept,
-            );
-        });
-    }
-
-    let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    root.set_hexpand(true);
-    root.append(&button);
-    Editor::StyleChoice { root, choice }
-}
-
-fn refresh_inline(
-    host: &gtk::Box,
-    name: &gtk::Label,
-    badge: &gtk::Label,
-    items: &[ChoiceEntry],
-    value: &str,
-) {
-    while let Some(child) = host.first_child() {
-        host.remove(&child);
-    }
-    let Some(item) = items.iter().find(|item| item.value == value) else {
-        return;
-    };
-    host.append(&(item.thumbnail)());
-    name.set_text(&item.label);
-    badge.set_text(if item.installed {
-        "Installed"
-    } else {
-        "Not installed"
-    });
-}
-
-fn open_dialog(
-    parent: Option<&gtk::Window>,
-    items: &[ChoiceEntry],
-    current: &str,
-    title: &str,
-    search_placeholder: &str,
-    accept: Rc<dyn Fn(ChoiceEntry)>,
-) {
-    let dialog = gtk::Dialog::builder()
-        .title(title)
-        .modal(true)
-        .default_width(760)
-        .default_height(520)
-        .build();
-    if let Some(parent) = parent {
-        dialog.set_transient_for(Some(parent));
-    }
-    dialog.add_button("Cancel", gtk::ResponseType::Cancel);
-    let select = dialog.add_button("Select", gtk::ResponseType::Accept);
-    select.add_css_class("suggested-action");
-
-    let search = gtk::SearchEntry::builder()
-        .placeholder_text(search_placeholder)
-        .hexpand(true)
-        .build();
     let list = gtk::ListBox::new();
     list.add_css_class("style-choice-list");
     list.set_selection_mode(gtk::SelectionMode::Single);
-    let scrolled = gtk::ScrolledWindow::builder()
-        .hscrollbar_policy(gtk::PolicyType::Never)
-        .vexpand(true)
-        .min_content_height(320)
-        .child(&list)
-        .build();
-    let left = gtk::Box::new(gtk::Orientation::Vertical, 8);
-    left.set_size_request(330, -1);
-    left.append(&search);
-    left.append(&scrolled);
-
-    let preview_host = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    preview_host.set_hexpand(true);
-    preview_host.set_valign(gtk::Align::Start);
-    preview_host.add_css_class("style-choice-preview");
-    let right = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    right.set_hexpand(true);
-    right.append(&preview_host);
-
-    let content = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-    content.set_hexpand(true);
-    content.append(&left);
-    content.append(&right);
-    dialog.content_area().append(&content);
 
     let mut rows: Vec<(gtk::ListBoxRow, ChoiceEntry)> = Vec::new();
-    let mut selected: Option<gtk::ListBoxRow> = None;
+    let mut selected = None;
     for item in items {
         let row = gtk::ListBoxRow::new();
         row.set_widget_name(&item.value);
@@ -374,16 +218,14 @@ fn open_dialog(
                 .ellipsize(gtk::pango::EllipsizeMode::End)
                 .build(),
         );
-        let detail = match (&item.package, item.installed) {
-            (Some(package), true) => format!("Installed  {package}"),
-            (Some(package), false) => format!("Available  {package}"),
-            (None, _) => "Not in catalog".to_string(),
-        };
         text.append(
             &gtk::Label::builder()
-                .label(detail)
+                .label(if item.installed {
+                    "Installed"
+                } else {
+                    "Not installed"
+                })
                 .xalign(0.0)
-                .ellipsize(gtk::pango::EllipsizeMode::End)
                 .css_classes(["dim-label", "caption"])
                 .build(),
         );
@@ -393,67 +235,83 @@ fn open_dialog(
         if item.value == current {
             selected = Some(row.clone());
         }
-        rows.push((row, item.clone()));
+        rows.push((row, item));
     }
 
-    let rows_for_select = rows.clone();
-    let preview_for_select = preview_host.clone();
-    list.connect_row_selected(move |_, row| {
-        let Some(row) = row else { return };
-        let name = row.widget_name();
-        if let Some((_, item)) = rows_for_select
-            .iter()
-            .find(|(candidate, _)| candidate.widget_name() == name)
-        {
-            set_preview(&preview_for_select, &(item.preview)());
-        }
-    });
+    let search = gtk::SearchEntry::builder()
+        .placeholder_text(search_placeholder)
+        .hexpand(true)
+        .build();
+    let scrolled = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .min_content_height(260)
+        .vexpand(true)
+        .child(&list)
+        .build();
+    let left = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    left.set_size_request(360, -1);
+    left.append(&search);
+    left.append(&scrolled);
 
-    let rows_for_search = rows.clone();
-    let list_for_search = list.clone();
-    search.connect_search_changed(move |entry| {
-        let query = entry.text().trim().to_lowercase();
-        for (row, item) in &rows_for_search {
-            row.set_visible(query.is_empty() || item.search.contains(&query));
-        }
-        let selected_visible = list_for_search
-            .selected_row()
-            .map(|row| row.is_visible())
-            .unwrap_or(false);
-        if !selected_visible {
-            if let Some((row, _)) = rows_for_search.iter().find(|(row, _)| row.is_visible()) {
-                list_for_search.select_row(Some(row));
-            }
-        }
-    });
+    let preview_host = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    preview_host.set_hexpand(true);
+    preview_host.set_valign(gtk::Align::Start);
+    preview_host.add_css_class("style-choice-preview");
+    let right = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    right.set_hexpand(true);
+    right.append(&preview_host);
 
-    let dialog_for_activate = dialog.clone();
-    list.connect_row_activated(move |_, _| {
-        dialog_for_activate.response(gtk::ResponseType::Accept);
-    });
+    let content = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    content.set_hexpand(true);
+    content.append(&left);
+    content.append(&right);
+    let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    root.set_hexpand(true);
+    root.append(&content);
 
-    if let Some(row) = selected.or_else(|| rows.first().map(|(row, _)| row.clone())) {
+    if let Some(row) = selected {
         list.select_row(Some(&row));
+        if let Some((_, item)) = rows
+            .iter()
+            .find(|(candidate, _)| candidate.widget_name() == row.widget_name())
+        {
+            set_preview(&preview_host, &(item.preview)());
+        }
     }
 
-    let list_for_response = list.clone();
-    let rows_for_response = rows.clone();
-    dialog.connect_response(move |dialog, response| {
-        if response == gtk::ResponseType::Accept {
-            if let Some(row) = list_for_response.selected_row() {
-                if let Some((_, item)) = rows_for_response
-                    .iter()
-                    .find(|(candidate, _)| candidate.widget_name() == row.widget_name())
-                {
-                    accept(item.clone());
-                }
+    {
+        let rows = rows.clone();
+        let choice = choice.clone();
+        let preview_host = preview_host.clone();
+        list.connect_row_selected(move |_, row| {
+            let Some(row) = row else { return };
+            let name = row.widget_name();
+            let Some((_, item)) = rows
+                .iter()
+                .find(|(candidate, _)| candidate.widget_name() == name)
+            else {
+                return;
+            };
+            *choice.current.borrow_mut() = item.value.clone();
+            if let (Some(binding), Some(package)) = (&choice.package, &item.package) {
+                *binding.value.borrow_mut() = package.clone();
             }
-        }
-        dialog.close();
-    });
+            set_preview(&preview_host, &(item.preview)());
+            choice.fire();
+        });
+    }
 
-    dialog.present();
-    search.grab_focus();
+    {
+        let rows = rows.clone();
+        search.connect_search_changed(move |entry| {
+            let query = entry.text().trim().to_lowercase();
+            for (row, item) in &rows {
+                row.set_visible(query.is_empty() || item.search.contains(&query));
+            }
+        });
+    }
+
+    Editor::StyleChoice { root, choice }
 }
 
 fn set_preview(host: &gtk::Box, child: &gtk::Widget) {
@@ -466,11 +324,8 @@ fn set_preview(host: &gtk::Box, child: &gtk::Widget) {
 fn install_css() {
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
-        let css = ".style-choice-button { padding: 6px 10px; border-radius: 8px; background: alpha(currentColor, 0.06); }
-.style-choice-button:hover { background: alpha(currentColor, 0.10); }
-.style-choice-inline-preview { border-radius: 6px; background: alpha(currentColor, 0.08); }
+        let css = ".style-choice-list row { border-radius: 6px; }
 .style-choice-preview { padding: 12px; border-radius: 8px; background: alpha(currentColor, 0.06); }
-.style-choice-list row { border-radius: 6px; }
 ";
         let provider = gtk::CssProvider::new();
         provider.load_from_data(css);

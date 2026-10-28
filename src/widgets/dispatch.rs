@@ -109,7 +109,7 @@ fn build_editor(record: &Record, type_str: Option<&str>, ctx: &BuildContext) -> 
         WidgetKind::TableAttrset => build_table(record, ctx, false),
         WidgetKind::TableList => build_table(record, ctx, true),
         WidgetKind::Theme => build_theme(value_text),
-        WidgetKind::Font => build_font(value_text, spec, package_binding(record, ctx)),
+        WidgetKind::Font => build_font(value_text, spec, package_binding(record, ctx), ctx),
         WidgetKind::IconTheme => build_icon_theme(value_text, spec, package_binding(record, ctx)),
         WidgetKind::CursorTheme => {
             build_cursor_theme(value_text, spec, package_binding(record, ctx))

@@ -214,6 +214,7 @@ pub(super) struct App {
     pub(super) plugin_registry: Rc<PluginRegistryState>,
     pub(super) wallpaper_set:
         RefCell<Option<(String, Result<crate::metadata::WallpaperSet, String>)>>,
+    pub(super) style_fonts: RefCell<Option<Result<Vec<crate::metadata::StyleFont>, String>>>,
     pub(super) apply_state: Rc<ApplyState>,
     pub(super) tx: Tx,
 

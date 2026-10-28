@@ -118,8 +118,22 @@ pub(super) fn build_context(app: &Rc<App>) -> widgets::BuildContext {
     ctx.base = app.base.borrow().clone();
     ctx.wallpaper = Some(super::wallpaper::actions(app));
     ctx.icon = Some(super::icon::actions(app));
+    ctx.style_fonts = style_fonts(app);
     ctx.expand_details = app.config.borrow().expand_details_by_default;
     ctx
+}
+
+fn style_fonts(app: &Rc<App>) -> Option<Rc<Vec<crate::metadata::StyleFont>>> {
+    let mut cache = app.style_fonts.borrow_mut();
+    if cache.is_none() {
+        let base = app.base.borrow().clone();
+        *cache = Some(crate::metadata::style_fonts(&base));
+    }
+    cache
+        .as_ref()
+        .and_then(|result| result.as_ref().ok())
+        .cloned()
+        .map(Rc::new)
 }
 
 /// Apply hook: queues the option's apply command, so the command runs on the

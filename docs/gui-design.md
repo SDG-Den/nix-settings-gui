@@ -186,10 +186,10 @@ can be resolved. The special name `"all"` in a `systems` list matches every host
 Bespoke controls (`keybinds`, `monitors`, `theme`, `wallpaper`, `font`,
 `icon-theme`, `cursor-theme`, `menu`, `plugins`, `bar`, `dock`, `users`) render a
 configuration-specific UI for a single option, with their own add, remove, and
-reorder actions. The style choosers share one inline preview row and one
-searchable dialog; installed entries preview live, while catalog entries that
-are not installed use embedded preview sheets. Selecting a catalog entry stages
-the name and the package option named by `packageOption`. Their field shapes are hard-coded in the
+reorder actions. The style choosers share one inline search list and preview
+pane, modelled on the palette control; installed entries preview live, while
+catalog entries that are not installed use embedded preview sheets. Selecting a
+catalog entry stages the name and the package option named by `packageOption`. Their field shapes are hard-coded in the
 application; the configuration only names the widget through `@option`. The
 `plugins` control also reads a newly added plugin's settings QML from the DMS
 registry and renders its declarative `ToggleSetting`, `StringSetting`,

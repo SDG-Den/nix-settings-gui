@@ -114,6 +114,8 @@ pub struct BuildContext {
     pub wallpaper: Option<WallpaperActions>,
     /// Icon copy operation for `icon` table columns.
     pub icon: Option<IconActions>,
+    /// Nixpkgs Nerd Font entries evaluated for the opened flake.
+    pub style_fonts: Option<Rc<Vec<crate::metadata::StyleFont>>>,
     /// Whether the Advanced toggle is on, so nested hidden controls show.
     pub advanced: bool,
     /// Nesting depth of the control being built, used for submodule indent.

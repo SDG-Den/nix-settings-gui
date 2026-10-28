@@ -92,7 +92,7 @@ should read the enable flag from `osConfig` instead of redeclaring it.
 wallpaper set for the current target through `presetSource`, and asks the app
 to copy or remove images and stage them with git. `widgets/icon.rs` does the same for `icon` table
 columns, resolving `iconDir` and showing a preview with an "Add icon" button.
-`widgets/style_choice.rs` hosts the shared style chooser and its search dialog.
+`widgets/style_choice.rs` hosts the shared inline style chooser and preview pane.
 `widgets/font.rs`, `widgets/icon_theme.rs`, and `widgets/cursor_theme.rs` supply
 their catalogs and previews; `widgets/theme_catalog.rs` discovers installed
 themes, `widgets/xcursor.rs` decodes cursor files, and `widgets/style_catalog.rs`
