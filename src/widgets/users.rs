@@ -841,6 +841,7 @@ fn unique_user_name(rows: &[UserRow]) -> String {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn make_user_row(
     scan: UserFields,
     home_fields: HomeFields,
