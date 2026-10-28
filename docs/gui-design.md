@@ -204,7 +204,12 @@ authorized keys, and an extra-options editor. `wheel` is a
 separate sudo switch. "Change password" prompts for a new password and fills
 `hashedPassword` with a locally generated yescrypt hash. The remove button is
 disabled whenever removing that account would leave no normal user with sudo
-and a configured password; saving is rejected for the same reason.
+and a configured password; saving is rejected for the same reason. Account
+names, group names, UIDs, and shell expressions are validated before saving.
+With
+`homeManager = true` on the option, each expander also shows
+`home.stateVersion` and an extra home-manager options field, and the sibling
+`home-manager.users` block follows account renames, additions, and removals.
 
 Bar and dock editors load disabled entries and show an enable switch on each
 row. Bar sections support moving a widget between left, center, and right by

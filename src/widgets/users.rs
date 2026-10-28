@@ -3,6 +3,7 @@ use super::context::{BuildContext, ChangeHook};
 use super::editor::Editor;
 use super::nix::{attr_key, entry_text, parse_string_literal, quote, string_literal};
 use crate::dsl::OptionSpec;
+use crate::edit::PendingEdit;
 use crate::model::Record;
 use crate::scan;
 use crate::value;
@@ -23,6 +24,120 @@ pub(crate) struct UserFields {
     pub is_normal_user: bool,
     pub is_normal_present: bool,
     pub extras: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct HomeFields {
+    pub state_version: String,
+    pub extras: String,
+}
+
+#[derive(Clone, Debug)]
+enum HomeSpans {
+    Missing {
+        insert_at: usize,
+    },
+    Block {
+        start: usize,
+        end: usize,
+    },
+    Dotted {
+        ranges: Vec<(usize, usize)>,
+        insert_at: usize,
+    },
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct HomeUsers {
+    entries: Vec<(String, HomeFields)>,
+    orig_nix: String,
+    spans: HomeSpans,
+    default_state_version: String,
+}
+
+impl Default for HomeUsers {
+    fn default() -> Self {
+        Self {
+            entries: Vec::new(),
+            orig_nix: "{ }".to_string(),
+            spans: HomeSpans::Missing { insert_at: 0 },
+            default_state_version: "25.05".to_string(),
+        }
+    }
+}
+
+impl HomeUsers {
+    pub(crate) fn load(record: &Record) -> Self {
+        let Ok(text) = std::fs::read_to_string(&record.file) else {
+            return Self::default();
+        };
+        let Some((siblings, insert_at)) =
+            scan::sibling_assignments(&text, record.byte_start, record.byte_end)
+        else {
+            return Self::default();
+        };
+        if let Some(block) = siblings.iter().find(|assignment| {
+            assignment.segments == ["home-manager", "users"]
+                && value::classify(&assignment.value) == value::ValueKind::AttrSet
+        }) {
+            let entries = scan_home_block(&block.value);
+            return Self::from_entries(
+                entries,
+                HomeSpans::Block {
+                    start: block.value_start,
+                    end: block.value_end,
+                },
+            );
+        }
+        let dotted: Vec<&scan::SiblingAssignment> = siblings
+            .iter()
+            .filter(|assignment| {
+                assignment.segments.len() >= 3
+                    && assignment.segments[0] == "home-manager"
+                    && assignment.segments[1] == "users"
+            })
+            .collect();
+        if !dotted.is_empty() {
+            let entries = scan_home_dotted(&dotted);
+            let ranges = dotted
+                .iter()
+                .map(|assignment| (assignment.full_start, assignment.full_end))
+                .collect();
+            return Self::from_entries(entries, HomeSpans::Dotted { ranges, insert_at });
+        }
+        Self::from_entries(Vec::new(), HomeSpans::Missing { insert_at })
+    }
+
+    fn from_entries(entries: Vec<(String, HomeFields)>, spans: HomeSpans) -> Self {
+        let default_state_version = entries
+            .iter()
+            .map(|(_, home)| home.state_version.trim())
+            .find(|value| !value.is_empty())
+            .unwrap_or("25.05")
+            .to_string();
+        let orig_nix = serialize_home(&entries);
+        Self {
+            entries,
+            orig_nix,
+            spans,
+            default_state_version,
+        }
+    }
+
+    fn entry(&self, name: &str) -> HomeFields {
+        self.entries
+            .iter()
+            .find(|(entry, _)| entry == name)
+            .map(|(_, fields)| fields.clone())
+            .unwrap_or_else(|| HomeFields {
+                state_version: self.default_state_version.clone(),
+                ..HomeFields::default()
+            })
+    }
+
+    pub(crate) fn default_state_version(&self) -> &str {
+        &self.default_state_version
+    }
 }
 
 impl UserFields {
@@ -47,6 +162,8 @@ pub(crate) struct UserRow {
     pub(crate) shell: gtk::Entry,
     pub(crate) ssh_keys: gtk::TextView,
     pub(crate) extras: gtk::TextView,
+    pub(crate) home_state_version: Option<gtk::Entry>,
+    pub(crate) home_extras: Option<gtk::TextView>,
     pub(crate) remove: gtk::Button,
     pub(crate) expander: gtk::Expander,
     pub(crate) orig: UserFields,
@@ -68,6 +185,17 @@ impl UserRow {
             is_normal_user: self.is_normal_user,
             is_normal_present: self.is_normal_present,
             extras: text_of(&self.extras),
+        }
+    }
+
+    pub(crate) fn read_home(&self) -> HomeFields {
+        HomeFields {
+            state_version: self
+                .home_state_version
+                .as_ref()
+                .map(|entry| entry.text().to_string())
+                .unwrap_or_default(),
+            extras: self.home_extras.as_ref().map(text_of).unwrap_or_default(),
         }
     }
 }
@@ -149,6 +277,89 @@ fn scan_openssh(value_text: &str, fields: &mut UserFields) {
             ));
         }
     }
+}
+
+fn scan_home_block(value_text: &str) -> Vec<(String, HomeFields)> {
+    scan::scan_value_direct(value_text)
+        .into_iter()
+        .filter(|record| record.segments.len() == 1)
+        .map(|record| (record.segments[0].clone(), scan_home_user(&record.value)))
+        .collect()
+}
+
+fn scan_home_user(value_text: &str) -> HomeFields {
+    let mut fields = HomeFields::default();
+    for leaf in scan::scan_value(value_text) {
+        apply_home_leaf(&mut fields, &leaf.segments, &leaf.value);
+    }
+    fields.extras = fields.extras.trim().to_string();
+    fields
+}
+
+fn scan_home_dotted(assignments: &[&scan::SiblingAssignment]) -> Vec<(String, HomeFields)> {
+    let mut entries: Vec<(String, HomeFields)> = Vec::new();
+    for assignment in assignments {
+        let Some(name) = assignment.segments.get(2).cloned() else {
+            continue;
+        };
+        let index = match entries.iter().position(|(entry, _)| entry == &name) {
+            Some(index) => index,
+            None => {
+                entries.push((name, HomeFields::default()));
+                entries.len() - 1
+            }
+        };
+        if assignment.segments.len() == 3 {
+            if value::classify(&assignment.value) == value::ValueKind::AttrSet {
+                entries[index].1 = scan_home_user(&assignment.value);
+            }
+            continue;
+        }
+        apply_home_leaf(
+            &mut entries[index].1,
+            &assignment.segments[3..],
+            &assignment.value,
+        );
+    }
+    for (_, fields) in &mut entries {
+        fields.extras = fields.extras.trim().to_string();
+    }
+    entries
+}
+
+fn apply_home_leaf(fields: &mut HomeFields, segments: &[String], value_text: &str) {
+    match segments.join(".").as_str() {
+        "home.stateVersion" => fields.state_version = entry_text(value_text),
+        "home.username" | "home.homeDirectory" => {}
+        _ => fields.extras.push_str(&format!(
+            "{} = {}; ",
+            dotted_key(segments),
+            value_text.trim()
+        )),
+    }
+}
+
+fn serialize_home(entries: &[(String, HomeFields)]) -> String {
+    let mut parts = Vec::new();
+    for (name, home) in entries {
+        let name = name.trim();
+        if name.is_empty() {
+            continue;
+        }
+        let mut fields = Vec::new();
+        if !home.state_version.trim().is_empty() {
+            fields.push(format!(
+                "home.stateVersion = {};",
+                string_literal(&home.state_version)
+            ));
+        }
+        let extras = home.extras.trim();
+        if !extras.is_empty() {
+            fields.push(extras.to_string());
+        }
+        parts.push(format!("{} = {{ {} }};", attr_key(name), fields.join(" ")));
+    }
+    format!("{{ {} }}", parts.join(" "))
 }
 
 fn normalize_secret(value: &str) -> String {
@@ -268,14 +479,138 @@ pub(crate) fn users_nix(editor: &Editor) -> String {
     serialize_users(&users)
 }
 
-pub(crate) fn users_unchanged(rows: &Rc<RefCell<Vec<UserRow>>>, orig_count: usize) -> bool {
-    let rows = rows.borrow();
-    rows.len() == orig_count && rows.iter().all(|row| row.read_fields() == row.orig)
+pub(crate) fn users_unchanged(
+    rows: &Rc<RefCell<Vec<UserRow>>>,
+    orig_count: usize,
+    home_manager: bool,
+    home: Option<&HomeUsers>,
+) -> bool {
+    let unchanged_users = {
+        let rows = rows.borrow();
+        rows.len() == orig_count && rows.iter().all(|row| row.read_fields() == row.orig)
+    };
+    if !unchanged_users || !home_manager {
+        return unchanged_users;
+    }
+    let Some(home) = home else {
+        return true;
+    };
+    let entries = home_entries(rows);
+    serialize_home(&entries) == home.orig_nix
 }
 
-pub(crate) fn users_validation_error(rows: &Rc<RefCell<Vec<UserRow>>>) -> Option<String> {
+pub(crate) fn users_validation_error(
+    rows: &Rc<RefCell<Vec<UserRow>>>,
+    home_manager: bool,
+) -> Option<String> {
     let users: Vec<UserFields> = rows.borrow().iter().map(UserRow::read_fields).collect();
-    validation_error(&users)
+    if let Some(error) = validation_error(&users) {
+        return Some(error);
+    }
+    if !home_manager {
+        return None;
+    }
+    let rows = rows.borrow();
+    home_validation_error(&rows)
+}
+
+fn home_entries(rows: &Rc<RefCell<Vec<UserRow>>>) -> Vec<(String, HomeFields)> {
+    rows.borrow()
+        .iter()
+        .map(|row| (row.key.text().trim().to_string(), row.read_home()))
+        .collect()
+}
+
+fn home_validation_error(rows: &[UserRow]) -> Option<String> {
+    for row in rows {
+        if row.home_state_version.is_none() {
+            continue;
+        }
+        let name = row.key.text().trim().to_string();
+        let state_version = row
+            .home_state_version
+            .as_ref()
+            .map(|entry| entry.text().trim().to_string())
+            .unwrap_or_default();
+        if state_version.is_empty() {
+            return Some(format!(
+                "Home-manager settings for {} need a stateVersion.",
+                if name.is_empty() {
+                    "this user"
+                } else {
+                    name.as_str()
+                }
+            ));
+        }
+    }
+    None
+}
+
+/// The edits for the user list: the `users.users` value plus, when enabled,
+/// the sibling `home-manager.users` block.
+pub(crate) fn users_edits(editor: &Editor, record: &Record) -> Vec<PendingEdit> {
+    let Editor::Users {
+        rows,
+        home,
+        home_manager,
+        orig_count,
+        ..
+    } = editor
+    else {
+        return Vec::new();
+    };
+    let users_changed = !users_unchanged(rows, *orig_count, false, None);
+    let mut edits = Vec::new();
+    if users_changed {
+        edits.push(PendingEdit {
+            file: record.file.clone(),
+            start: record.byte_start,
+            end: record.byte_end,
+            value: users_nix(editor),
+        });
+    }
+    if !home_manager {
+        return edits;
+    }
+    let Some(home) = home else {
+        return edits;
+    };
+    let entries = home_entries(rows);
+    let nix = serialize_home(&entries);
+    if nix == home.orig_nix {
+        return edits;
+    }
+    match &home.spans {
+        HomeSpans::Block { start, end } => edits.push(PendingEdit {
+            file: record.file.clone(),
+            start: *start,
+            end: *end,
+            value: nix,
+        }),
+        HomeSpans::Dotted { ranges, insert_at } => {
+            for (start, end) in ranges {
+                edits.push(PendingEdit {
+                    file: record.file.clone(),
+                    start: *start,
+                    end: *end,
+                    value: String::new(),
+                });
+            }
+            edits.push(PendingEdit {
+                file: record.file.clone(),
+                start: *insert_at,
+                end: *insert_at,
+                value: format!("\n\nhome-manager.users = {nix};"),
+            });
+        }
+        HomeSpans::Missing { insert_at } => edits.push(PendingEdit {
+            file: record.file.clone(),
+            start: *insert_at,
+            end: *insert_at,
+            value: format!("\n\nhome-manager.users = {nix};"),
+        }),
+    }
+    edits
 }
 
 pub(crate) fn password_is_set(password: &str) -> bool {
@@ -290,18 +625,82 @@ pub(crate) fn is_valid_admin(user: &UserFields) -> bool {
         && password_is_set(&user.password)
 }
 
+fn valid_account_name(name: &str) -> bool {
+    let mut characters = name.chars();
+    match characters.next() {
+        Some(character) if character.is_ascii_alphabetic() || character == '_' => {}
+        _ => return false,
+    }
+    name != "."
+        && name != ".."
+        && characters.all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '.')
+        })
+}
+
+fn valid_group_name(group: &str) -> bool {
+    valid_account_name(group)
+}
+
+fn valid_shell(shell: &str) -> bool {
+    let Some(path) = shell.trim().strip_prefix("pkgs.") else {
+        return false;
+    };
+    !path.is_empty()
+        && path.split('.').all(|segment| {
+            let mut characters = segment.chars();
+            match characters.next() {
+                Some(character) if character.is_ascii_alphabetic() || character == '_' => {}
+                _ => return false,
+            }
+            characters.all(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, '_' | '\'')
+            })
+        })
+}
+
 pub(crate) fn validation_error(users: &[UserFields]) -> Option<String> {
     if users.is_empty() {
         return Some("At least one user is required.".to_string());
     }
     let mut names = std::collections::HashSet::new();
+    let mut uids = std::collections::HashMap::new();
     for user in users {
         let name = user.name.trim();
         if name.is_empty() {
             return Some("Every user needs a name.".to_string());
         }
+        if !valid_account_name(name) {
+            return Some(format!(
+                "User name {name:?} is invalid. Use letters, digits, underscores, dots, and dashes, starting with a letter or underscore."
+            ));
+        }
         if !names.insert(name.to_string()) {
             return Some(format!("User names must be unique; {name} is repeated."));
+        }
+        for group in &user.groups {
+            let group = group.trim();
+            if !valid_group_name(group) {
+                return Some(format!(
+                    "Group {group:?} for {name} is invalid. Use letters, digits, underscores, dots, and dashes, starting with a letter or underscore."
+                ));
+            }
+        }
+        if !user.uid.trim().is_empty() {
+            let uid = match user.uid.trim().parse::<u32>() {
+                Ok(0) | Err(_) => {
+                    return Some(format!("UID for {name} must be a positive number."));
+                }
+                Ok(uid) => uid,
+            };
+            if let Some(other) = uids.insert(uid, name.to_string()) {
+                return Some(format!("UID {uid} is used by both {other} and {name}."));
+            }
+        }
+        if !user.shell.trim().is_empty() && !valid_shell(user.shell.trim()) {
+            return Some(format!(
+                "Shell for {name} must be a pkgs.* package expression, for example pkgs.zsh."
+            ));
         }
     }
     if !users.iter().any(is_valid_admin) {
@@ -353,10 +752,28 @@ pub(crate) fn build_users(record: &Record, ctx: &BuildContext) -> Editor {
         })
     };
 
+    let home = record.spec.home_manager.then(|| HomeUsers::load(record));
+    let default_state_version = home
+        .as_ref()
+        .map(|home| home.default_state_version().to_string())
+        .unwrap_or_else(|| "25.05".to_string());
     let scans = scan_users(&record.value);
     let orig_count = scans.len();
     for scan in scans {
-        let row = make_user_row(scan, ctx, &rows_box, &rows, &notify);
+        let home_fields = home
+            .as_ref()
+            .map(|home| home.entry(&scan.name))
+            .unwrap_or_default();
+        let row = make_user_row(
+            scan,
+            home_fields,
+            &default_state_version,
+            record.spec.home_manager,
+            ctx,
+            &rows_box,
+            &rows,
+            &notify,
+        );
         rows_box.append(&row.expander);
         rows.borrow_mut().push(row);
     }
@@ -368,10 +785,25 @@ pub(crate) fn build_users(record: &Record, ctx: &BuildContext) -> Editor {
         let rows = rows.clone();
         let notify = notify.clone();
         let ctx = ctx.clone();
+        let default_state_version = default_state_version.clone();
+        let home_manager = record.spec.home_manager;
         add.connect_clicked(move |_| {
             let name = unique_user_name(&rows.borrow());
             let scan = UserFields::new(name);
-            let row = make_user_row(scan, &ctx, &rows_box, &rows, &notify);
+            let home_fields = HomeFields {
+                state_version: default_state_version.clone(),
+                ..HomeFields::default()
+            };
+            let row = make_user_row(
+                scan,
+                home_fields,
+                &default_state_version,
+                home_manager,
+                &ctx,
+                &rows_box,
+                &rows,
+                &notify,
+            );
             rows_box.append(&row.expander);
             rows.borrow_mut().push(row);
             notify();
@@ -385,6 +817,8 @@ pub(crate) fn build_users(record: &Record, ctx: &BuildContext) -> Editor {
         rows,
         on_change,
         orig_count,
+        home_manager: record.spec.home_manager,
+        home,
     }
 }
 
@@ -409,6 +843,9 @@ fn unique_user_name(rows: &[UserRow]) -> String {
 
 fn make_user_row(
     scan: UserFields,
+    home_fields: HomeFields,
+    default_state_version: &str,
+    home_manager: bool,
     ctx: &BuildContext,
     rows_box: &gtk::Box,
     rows: &Rc<RefCell<Vec<UserRow>>>,
@@ -522,6 +959,35 @@ fn make_user_row(
     );
     content.append(&field_block("Extra options", &extras_root));
 
+    let (home_state_version, home_extras) = if home_manager {
+        let heading = gtk::Label::builder()
+            .xalign(0.0)
+            .label("Home-manager")
+            .css_classes(["heading"])
+            .build();
+        content.append(&heading);
+        let state_version = gtk::Entry::new();
+        state_version.set_text(if home_fields.state_version.trim().is_empty() {
+            default_state_version
+        } else {
+            &home_fields.state_version
+        });
+        state_version.set_hexpand(true);
+        state_version.set_placeholder_text(Some(default_state_version));
+        content.append(&field_block("home.stateVersion", &state_version));
+        let (home_extra_view, home_extra_root) = build_raw(
+            &home_fields.extras,
+            &OptionSpec {
+                rows: Some(3),
+                ..OptionSpec::default()
+            },
+        );
+        content.append(&field_block("Extra home-manager options", &home_extra_root));
+        (Some(state_version), Some(home_extra_view))
+    } else {
+        (None, None)
+    };
+
     expander.set_child(Some(&content));
 
     let row = UserRow {
@@ -534,6 +1000,8 @@ fn make_user_row(
         shell,
         ssh_keys,
         extras,
+        home_state_version,
+        home_extras,
         remove,
         expander,
         orig,
@@ -581,11 +1049,23 @@ fn connect_user_row(row: &UserRow, notify: &Rc<dyn Fn()>) {
         let notify = notify.clone();
         row.extras.buffer().connect_changed(move |_| notify());
     }
+    if let Some(state_version) = &row.home_state_version {
+        let notify = notify.clone();
+        state_version.connect_changed(move |_| notify());
+    }
+    if let Some(extras) = &row.home_extras {
+        let notify = notify.clone();
+        extras.buffer().connect_changed(move |_| notify());
+    }
 }
 
 fn refresh_user_state(rows: &Rc<RefCell<Vec<UserRow>>>, status: &gtk::Label) {
     let users: Vec<UserFields> = rows.borrow().iter().map(UserRow::read_fields).collect();
-    let error = validation_error(&users);
+    let home_error = {
+        let rows = rows.borrow();
+        home_validation_error(&rows)
+    };
+    let error = validation_error(&users).or(home_error);
     status.set_text(error.as_deref().unwrap_or(""));
     status.set_visible(error.is_some());
 
@@ -711,11 +1191,191 @@ mod tests {
         assert!(validation_error(&duplicate).is_some());
     }
 
+    fn admin(name: &str) -> UserFields {
+        UserFields {
+            name: name.into(),
+            is_normal_user: true,
+            wheel: true,
+            password: "$6$hash".into(),
+            ..UserFields::default()
+        }
+    }
+
+    #[test]
+    fn validation_rejects_invalid_names_and_groups() {
+        let mut user = admin("alice");
+        user.name = "bad name".into();
+        assert!(validation_error(&[user]).is_some());
+
+        let mut user = admin("alice");
+        user.name = "1alice".into();
+        assert!(validation_error(&[user]).is_some());
+
+        let mut user = admin("alice");
+        user.groups = vec!["bad group".into()];
+        assert!(validation_error(&[user]).is_some());
+    }
+
+    #[test]
+    fn validation_rejects_invalid_and_duplicate_uids() {
+        let mut user = admin("alice");
+        user.uid = "1000".into();
+        assert_eq!(validation_error(&[user.clone()]), None);
+
+        user.uid = "0".into();
+        assert!(validation_error(&[user.clone()]).is_some());
+
+        user.uid = "abc".into();
+        assert!(validation_error(&[user]).is_some());
+
+        let first = UserFields {
+            uid: "1000".into(),
+            ..admin("alice")
+        };
+        let second = UserFields {
+            uid: "1000".into(),
+            ..admin("bob")
+        };
+        assert!(validation_error(&[first, second]).is_some());
+    }
+
+    #[test]
+    fn validation_rejects_invalid_shell_expressions() {
+        let mut user = admin("alice");
+        user.shell = "pkgs.zsh".into();
+        assert_eq!(validation_error(&[user.clone()]), None);
+
+        user.shell = "pkgs.kdePackages.konsole".into();
+        assert_eq!(validation_error(&[user.clone()]), None);
+
+        user.shell = "zsh".into();
+        assert!(validation_error(&[user]).is_some());
+    }
+
     #[test]
     fn password_set_check_ignores_locked_markers() {
         assert!(!password_is_set(""));
         assert!(!password_is_set("!"));
         assert!(!password_is_set("*"));
         assert!(password_is_set("$6$hash"));
+    }
+
+    #[test]
+    fn scans_home_block_and_derives_identity_fields() {
+        let entries = scan_home_block(
+            r#"{
+                alice = {
+                    home.stateVersion = "25.05";
+                    home.username = "alice";
+                    home.homeDirectory = "/home/alice";
+                    imports = [ self.modules.homeManager.foo ];
+                };
+            }"#,
+        );
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].0, "alice");
+        assert_eq!(entries[0].1.state_version, "25.05");
+        assert!(entries[0]
+            .1
+            .extras
+            .contains("imports = [ self.modules.homeManager.foo ];"));
+        assert!(!entries[0].1.extras.contains("home.username"));
+        assert!(!entries[0].1.extras.contains("home.homeDirectory"));
+
+        let nix = serialize_home(&entries);
+        assert!(nix.contains("home.stateVersion = \"25.05\";"));
+        assert!(nix.contains("imports = [ self.modules.homeManager.foo ];"));
+        assert!(!nix.contains("home.username"));
+    }
+
+    #[test]
+    fn scans_dotted_home_assignments() {
+        let assignment = |segments: &[&str], value: &str| scan::SiblingAssignment {
+            segments: segments
+                .iter()
+                .map(|segment| (*segment).to_string())
+                .collect(),
+            value: value.to_string(),
+            value_start: 0,
+            value_end: 0,
+            full_start: 0,
+            full_end: 0,
+        };
+        let dotted = assignment(
+            &["home-manager", "users", "alice", "home", "stateVersion"],
+            "\"25.05\"",
+        );
+        let imports = assignment(
+            &["home-manager", "users", "alice", "imports"],
+            "[ self.modules.homeManager.foo ]",
+        );
+        let entries = scan_home_dotted(&[&dotted, &imports]);
+        assert_eq!(entries[0].1.state_version, "25.05");
+        assert!(entries[0]
+            .1
+            .extras
+            .contains("imports = [ self.modules.homeManager.foo ];"));
+    }
+
+    fn home_record(text: &str) -> (std::path::PathBuf, Record) {
+        let dir = std::env::temp_dir().join(format!(
+            "nsg-users-home-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("users.nix");
+        std::fs::write(&path, text).unwrap();
+        let scan = crate::scan::scan_file(&path, text);
+        let record = scan
+            .records
+            .into_iter()
+            .find(|record| record.path() == "config.users.users")
+            .unwrap();
+        (dir, record)
+    }
+
+    #[test]
+    fn loads_home_manager_block_from_the_sibling_assignment() {
+        let text = r#"{ ... }: {
+  config = {
+    /* @option widget = "users"; label = "Accounts"; homeManager = true; */
+    users.users = { user = { isNormalUser = true; }; };
+    home-manager.users = {
+      user = {
+        home.stateVersion = "25.05";
+        imports = [ self.modules.homeManager.foo ];
+      };
+    };
+  };
+}
+"#;
+        let (dir, record) = home_record(text);
+        let home = HomeUsers::load(&record);
+        assert_eq!(home.entry("user").state_version, "25.05");
+        assert!(home.entry("user").extras.contains("imports ="));
+        assert!(matches!(home.spans, HomeSpans::Block { .. }));
+        assert_eq!(home.orig_nix, serialize_home(&home.entries));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn loads_dotted_home_manager_assignments() {
+        let text = r#"{ ... }: {
+  config = {
+    /* @option widget = "users"; label = "Accounts"; homeManager = true; */
+    users.users = { user = { isNormalUser = true; }; };
+    home-manager.users.user.home.stateVersion = "25.05";
+  };
+}
+"#;
+        let (dir, record) = home_record(text);
+        let home = HomeUsers::load(&record);
+        assert_eq!(home.entry("user").state_version, "25.05");
+        assert!(matches!(home.spans, HomeSpans::Dotted { .. }));
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

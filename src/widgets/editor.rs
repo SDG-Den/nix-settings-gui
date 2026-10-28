@@ -133,6 +133,8 @@ pub enum Editor {
         rows: Rc<RefCell<Vec<UserRow>>>,
         on_change: ChangeHook,
         orig_count: usize,
+        home_manager: bool,
+        home: Option<users::HomeUsers>,
     },
     Raw {
         view: gtk::TextView,
@@ -372,8 +374,12 @@ impl Editor {
                         .all(|(record, editor)| editor.unchanged(&record.value))
             }
             Editor::Users {
-                rows, orig_count, ..
-            } => users::users_unchanged(rows, *orig_count),
+                rows,
+                orig_count,
+                home_manager,
+                home,
+                ..
+            } => users::users_unchanged(rows, *orig_count, *home_manager, home.as_ref()),
             Editor::Grid { state, .. } => {
                 let tiles = state.tiles.borrow();
                 tiles.len() == state.orig_ids.len()
@@ -400,7 +406,9 @@ impl Editor {
     /// A blocking validation error, if this control may not be saved as is.
     pub fn validation_error(&self) -> Option<String> {
         match self {
-            Editor::Users { rows, .. } => users::users_validation_error(rows),
+            Editor::Users {
+                rows, home_manager, ..
+            } => users::users_validation_error(rows, *home_manager),
             _ => None,
         }
     }
@@ -416,6 +424,9 @@ impl Editor {
     /// The edits this control would make, empty when it is unchanged. A
     /// submodule emits one edit per nested control.
     pub fn edits(&self, record: &Record) -> Vec<PendingEdit> {
+        if let Editor::Users { .. } = self {
+            return users::users_edits(self, record);
+        }
         if let Editor::StyleChoice { choice, .. } = self {
             return choice.edits(record);
         }

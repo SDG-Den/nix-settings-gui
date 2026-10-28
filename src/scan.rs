@@ -259,6 +259,70 @@ pub fn scan_value_direct(text: &str) -> Vec<Record> {
     out
 }
 
+/// One direct assignment in the same attribute set as a scanned value, with
+/// its full source span including the semicolon. Used by bespoke widgets that
+/// manage a sibling assignment next to the one they are attached to.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SiblingAssignment {
+    pub segments: Vec<String>,
+    pub value: String,
+    pub value_start: usize,
+    pub value_end: usize,
+    pub full_start: usize,
+    pub full_end: usize,
+}
+
+/// Find every direct assignment sharing the parent set with the value span
+/// `value_start..value_end`, plus the offset just after that assignment.
+pub fn sibling_assignments(
+    text: &str,
+    value_start: usize,
+    value_end: usize,
+) -> Option<(Vec<SiblingAssignment>, usize)> {
+    let root = rnix::Root::parse(text).ok().ok()?;
+    let target = root
+        .syntax()
+        .descendants()
+        .filter(|node| node.kind() == SyntaxKind::NODE_ATTRPATH_VALUE)
+        .filter_map(AttrpathValue::cast)
+        .filter_map(|binding| {
+            let value = binding.value()?;
+            let range = value.syntax().text_range();
+            let start = usize::from(range.start());
+            let end = usize::from(range.end());
+            (start <= value_start && end >= value_end)
+                .then_some((end.saturating_sub(start), binding))
+        })
+        .min_by_key(|(len, _)| *len)
+        .map(|(_, binding)| binding)?;
+    let set = AttrSet::cast(target.syntax().parent()?)?;
+    let insert_at = usize::from(target.syntax().text_range().end());
+    let mut assignments = Vec::new();
+    for binding in set.attrpath_values() {
+        let Some(path) = binding.attrpath() else {
+            continue;
+        };
+        let segments: Vec<String> = path
+            .attrs()
+            .filter_map(|attr| attr_component(&attr))
+            .collect();
+        let Some(value) = binding.value() else {
+            continue;
+        };
+        let value_range = value.syntax().text_range();
+        let full_range = binding.syntax().text_range();
+        assignments.push(SiblingAssignment {
+            segments,
+            value: value.syntax().text().to_string(),
+            value_start: usize::from(value_range.start()),
+            value_end: usize::from(value_range.end()),
+            full_start: usize::from(full_range.start()),
+            full_end: usize::from(full_range.end()),
+        });
+    }
+    Some((assignments, insert_at))
+}
+
 /// One row of a `table-attrset` / `table-list` value.
 #[derive(Debug, Clone, Default)]
 pub struct TableRowScan {
@@ -1639,5 +1703,35 @@ in
         let text = "/* @snippet label = \"No name\"; */\n{ a = 1; }\n";
         let scan = scan(text);
         assert!(scan.snippets.is_empty());
+    }
+
+    #[test]
+    fn finds_sibling_assignments_inside_config() {
+        let text = r#"{ config, ... }: {
+  config = {
+    users.users = { user = { isNormalUser = true; }; };
+    home-manager.users.user.home.stateVersion = "25.05";
+    misc = 1;
+  };
+}
+"#;
+        let value = "{ user = { isNormalUser = true; }; }";
+        let start = text.find(value).unwrap();
+        let end = start + value.len();
+        let (siblings, insert_at) = sibling_assignments(text, start, end).unwrap();
+        let paths: Vec<String> = siblings
+            .iter()
+            .map(|assignment| assignment.segments.join("."))
+            .collect();
+        assert_eq!(
+            paths,
+            vec![
+                "users.users".to_string(),
+                "home-manager.users.user.home.stateVersion".to_string(),
+                "misc".to_string(),
+            ]
+        );
+        assert!(insert_at > end);
+        assert!(text[..insert_at].ends_with("};"));
     }
 }

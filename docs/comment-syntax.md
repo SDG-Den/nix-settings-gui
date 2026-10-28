@@ -68,6 +68,7 @@ services.pipewire.enable = true;
 | Key           | Type            | Meaning |
 |---------------|-----------------|---------|
 | `widget`      | string          | Forces a control instead of the type default. |
+| `homeManager` | boolean         | `users`: also maintain the sibling `home-manager.users` block. Shows a per-user `home.stateVersion`; identity fields use home-manager's defaults. Default `false`. |
 | `label`       | string          | Display label; defaults to the option's short name or nixd description. |
 | `description` | string          | Helper text; defaults to the nixd description. |
 | `choices`     | list of strings | Values for `dropdown` and `radio`. |
@@ -341,7 +342,7 @@ The `users` widget expects the whole `users.users` attribute set, not a single
 account. Place the marker above that assignment:
 
 ```nix
-/* @option widget = "users"; label = "Accounts"; */
+/* @option widget = "users"; label = "Accounts"; homeManager = true; */
 users.users = {
   alice = {
     isNormalUser = true;
@@ -352,7 +353,19 @@ users.users = {
     openssh.authorizedKeys.keys = [ "ssh-ed25519 ..." ];
   };
 };
+
+home-manager.users = {
+  alice = {
+    home.stateVersion = "25.05";
+  };
+};
 ```
+
+The widget validates account names, group names, UIDs, shell expressions, and
+the administrator invariant. With `homeManager = true` it keeps the
+`home-manager.users` keys in sync with the account rows, writes
+`home.stateVersion` and any extra home-manager options, and lets home-manager
+derive `home.username` and `home.homeDirectory` from the account.
 
 The `menu` provider `apps` is only valid on a top-level entry. A top-level
 entry with `provider = "apps"` cannot receive child options because the

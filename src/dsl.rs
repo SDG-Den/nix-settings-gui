@@ -454,6 +454,8 @@ pub struct OptionSpec {
     /// Shell command that applies the option immediately, e.g. an IPC call.
     /// `%%val%%` in the command stands for the option's new value.
     pub apply_command: Option<String>,
+    /// Whether the `users` widget also generates a per-user home-manager block.
+    pub home_manager: bool,
 }
 
 impl OptionSpec {
@@ -496,6 +498,7 @@ impl OptionSpec {
             monospace: d.bool("monospace").unwrap_or(false),
             variant: d.string("variant"),
             apply_command: d.string("applyCommand"),
+            home_manager: d.bool("homeManager").unwrap_or(false),
         }
     }
 }
@@ -703,6 +706,15 @@ mod tests {
         assert_eq!(kind, MarkerKind::Option);
         let opt = OptionSpec::from_directives(&d);
         assert_eq!(opt.icon_dir.as_deref(), Some("./icons"));
+    }
+
+    #[test]
+    fn parses_users_home_manager_flag() {
+        let text = "/* @option widget = \"users\"; homeManager = true; */";
+        let (_, d) = parse_comment(text).unwrap();
+        assert!(OptionSpec::from_directives(&d).home_manager);
+        let (_, d) = parse_comment("/* @option widget = \"users\"; */").unwrap();
+        assert!(!OptionSpec::from_directives(&d).home_manager);
     }
 
     #[test]
