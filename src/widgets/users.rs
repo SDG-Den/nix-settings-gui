@@ -162,7 +162,7 @@ pub(crate) struct UserRow {
     pub(crate) shell: gtk::Entry,
     pub(crate) ssh_keys: gtk::TextView,
     pub(crate) extras: gtk::TextView,
-    pub(crate) home_state_version: Option<gtk::Entry>,
+    pub(crate) home_state_version: Option<String>,
     pub(crate) home_extras: Option<gtk::TextView>,
     pub(crate) remove: gtk::Button,
     pub(crate) expander: gtk::Expander,
@@ -190,11 +190,7 @@ impl UserRow {
 
     pub(crate) fn read_home(&self) -> HomeFields {
         HomeFields {
-            state_version: self
-                .home_state_version
-                .as_ref()
-                .map(|entry| entry.text().to_string())
-                .unwrap_or_default(),
+            state_version: self.home_state_version.clone().unwrap_or_default(),
             extras: self.home_extras.as_ref().map(text_of).unwrap_or_default(),
         }
     }
@@ -501,17 +497,10 @@ pub(crate) fn users_unchanged(
 
 pub(crate) fn users_validation_error(
     rows: &Rc<RefCell<Vec<UserRow>>>,
-    home_manager: bool,
+    _home_manager: bool,
 ) -> Option<String> {
     let users: Vec<UserFields> = rows.borrow().iter().map(UserRow::read_fields).collect();
-    if let Some(error) = validation_error(&users) {
-        return Some(error);
-    }
-    if !home_manager {
-        return None;
-    }
-    let rows = rows.borrow();
-    home_validation_error(&rows)
+    validation_error(&users)
 }
 
 fn home_entries(rows: &Rc<RefCell<Vec<UserRow>>>) -> Vec<(String, HomeFields)> {
@@ -519,31 +508,6 @@ fn home_entries(rows: &Rc<RefCell<Vec<UserRow>>>) -> Vec<(String, HomeFields)> {
         .iter()
         .map(|row| (row.key.text().trim().to_string(), row.read_home()))
         .collect()
-}
-
-fn home_validation_error(rows: &[UserRow]) -> Option<String> {
-    for row in rows {
-        if row.home_state_version.is_none() {
-            continue;
-        }
-        let name = row.key.text().trim().to_string();
-        let state_version = row
-            .home_state_version
-            .as_ref()
-            .map(|entry| entry.text().trim().to_string())
-            .unwrap_or_default();
-        if state_version.is_empty() {
-            return Some(format!(
-                "Home-manager settings for {} need a stateVersion.",
-                if name.is_empty() {
-                    "this user"
-                } else {
-                    name.as_str()
-                }
-            ));
-        }
-    }
-    None
 }
 
 /// The edits for the user list: the `users.users` value plus, when enabled,
@@ -967,15 +931,11 @@ fn make_user_row(
             .css_classes(["heading"])
             .build();
         content.append(&heading);
-        let state_version = gtk::Entry::new();
-        state_version.set_text(if home_fields.state_version.trim().is_empty() {
-            default_state_version
+        let state_version = if home_fields.state_version.trim().is_empty() {
+            default_state_version.to_string()
         } else {
-            &home_fields.state_version
-        });
-        state_version.set_hexpand(true);
-        state_version.set_placeholder_text(Some(default_state_version));
-        content.append(&field_block("home.stateVersion", &state_version));
+            home_fields.state_version.clone()
+        };
         let (home_extra_view, home_extra_root) = build_raw(
             &home_fields.extras,
             &OptionSpec {
@@ -1050,10 +1010,6 @@ fn connect_user_row(row: &UserRow, notify: &Rc<dyn Fn()>) {
         let notify = notify.clone();
         row.extras.buffer().connect_changed(move |_| notify());
     }
-    if let Some(state_version) = &row.home_state_version {
-        let notify = notify.clone();
-        state_version.connect_changed(move |_| notify());
-    }
     if let Some(extras) = &row.home_extras {
         let notify = notify.clone();
         extras.buffer().connect_changed(move |_| notify());
@@ -1062,11 +1018,7 @@ fn connect_user_row(row: &UserRow, notify: &Rc<dyn Fn()>) {
 
 fn refresh_user_state(rows: &Rc<RefCell<Vec<UserRow>>>, status: &gtk::Label) {
     let users: Vec<UserFields> = rows.borrow().iter().map(UserRow::read_fields).collect();
-    let home_error = {
-        let rows = rows.borrow();
-        home_validation_error(&rows)
-    };
-    let error = validation_error(&users).or(home_error);
+    let error = validation_error(&users);
     status.set_text(error.as_deref().unwrap_or(""));
     status.set_visible(error.is_some());
 

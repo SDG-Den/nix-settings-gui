@@ -23,13 +23,15 @@ struct PluginRow {
     orig_key: String,
     #[allow(dead_code)]
     name_label: gtk::Label,
+    known: bool,
+    settings_configured: bool,
     enable: Editor,
     enable_orig: String,
     enable_present: bool,
     children: Vec<PluginChild>,
     trailing: gtk::Box,
     #[allow(dead_code)]
-    settings: Option<(gtk::MenuButton, gtk::Popover)>,
+    settings: (gtk::MenuButton, gtk::Popover),
     row_box: gtk::Box,
     remove: gtk::Button,
 }
@@ -45,6 +47,9 @@ struct PluginChild {
 
 /// The rows of a `plugins` editor, shared by construction and wiring.
 type PluginRows = Rc<RefCell<Vec<PluginRow>>>;
+
+/// The display names of the ids in the fetched plugin registry.
+type RegistryNames = Rc<RefCell<HashMap<String, String>>>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PluginFieldKind {
@@ -273,7 +278,7 @@ struct Picker {
     search: gtk::SearchEntry,
     rows: PluginRows,
     source: Rc<RefCell<Vec<String>>>,
-    names: Rc<RefCell<HashMap<String, String>>>,
+    names: RegistryNames,
     available: Rc<RefCell<Vec<String>>>,
 }
 
@@ -322,11 +327,18 @@ pub fn build(record: &Record, ctx: &BuildContext) -> Editor {
         available: Rc::new(RefCell::new(Vec::new())),
     };
 
+    let mut pending_schema = Vec::new();
     for (id, leaves, shown) in &plugin_groups(record, ctx) {
-        let row = make_plugin_row(id, leaves, ctx);
+        if needs_initial_schema(id, leaves) {
+            pending_schema.push(id.clone());
+        }
+        let row = make_plugin_row(id, leaves, ctx, &picker.names);
         attach_plugin_row(&container, &rows, row, &on_change, &picker, *shown);
     }
     picker.refresh();
+    for id in pending_schema {
+        fetch_plugin_schema(&id, &rows, ctx, &picker, &on_change);
+    }
 
     {
         let picker = picker.clone();
@@ -351,11 +363,15 @@ pub fn build(record: &Record, ctx: &BuildContext) -> Editor {
                 let picker = picker.clone();
                 let status = status.clone();
                 let retry = retry.clone();
+                let ctx = ctx.clone();
+                let on_change = on_change.clone();
                 Rc::new(move || {
                     let fetch = fetch.clone();
                     let picker = picker.clone();
                     let status = status.clone();
                     let retry = retry.clone();
+                    let ctx = ctx.clone();
+                    let on_change = on_change.clone();
                     status.set_visible(false);
                     status.set_tooltip_text(None::<&str>);
                     retry.set_visible(false);
@@ -369,7 +385,9 @@ pub fn build(record: &Record, ctx: &BuildContext) -> Editor {
                                     &mut picker.names.borrow_mut(),
                                     &plugins,
                                 );
+                                adopt_registry_rows(&picker.rows, &picker.names.borrow());
                                 picker.refresh();
+                                fetch_registry_schemas(&picker, &ctx, &on_change);
                             }
                             Ok(_) => {
                                 status.set_label("No Dux Shell plugin registry found");
@@ -712,11 +730,21 @@ fn plugin_settings_popover(
     detail.append(&caption);
     detail.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
 
+    let mut shown = 0;
     for child in children {
         if child.record.spec.hidden && !ctx.advanced {
             continue;
         }
         detail.append(&build_plugin_setting_row(id, &child.record, &child.editor));
+        shown += 1;
+    }
+    if shown == 0 {
+        let empty = gtk::Label::builder()
+            .xalign(0.0)
+            .label("No additional settings.")
+            .css_classes(["dim-label"])
+            .build();
+        detail.append(&empty);
     }
 
     let popover = gtk::Popover::builder().child(&detail).build();
@@ -732,7 +760,12 @@ fn plugin_settings_popover(
 /// Assemble one plugin row from its leaves: the name (static for known ids,
 /// an editable entry otherwise), a right-aligned cog/enable/remove cluster,
 /// and the structural handles.
-fn make_plugin_row(id: &str, leaves: &[Record], ctx: &BuildContext) -> PluginRow {
+fn make_plugin_row(
+    id: &str,
+    leaves: &[Record],
+    ctx: &BuildContext,
+    names: &RegistryNames,
+) -> PluginRow {
     let (enable, enable_orig, enable_present) = plugin_enable(id, leaves);
     let children = plugin_children(id, leaves, &[], ctx);
 
@@ -740,12 +773,13 @@ fn make_plugin_row(id: &str, leaves: &[Record], ctx: &BuildContext) -> PluginRow
     row_box.set_hexpand(true);
     row_box.set_valign(gtk::Align::Center);
 
-    let known = plugin_spec(id).is_some();
+    let names = names.borrow();
+    let known = registry_known(id, &names);
     let name_label = gtk::Label::builder()
         .xalign(0.0)
         .hexpand(true)
         .ellipsize(gtk::pango::EllipsizeMode::End)
-        .label(display_name(id))
+        .label(row_name(id, &names))
         .build();
     name_label.set_tooltip_text(Some(id));
 
@@ -765,10 +799,8 @@ fn make_plugin_row(id: &str, leaves: &[Record], ctx: &BuildContext) -> PluginRow
     trailing.set_halign(gtk::Align::End);
     trailing.set_valign(gtk::Align::Center);
 
-    let settings = (!children.is_empty()).then(|| plugin_settings_popover(id, &children, ctx));
-    if let Some((cog, _)) = &settings {
-        trailing.append(cog);
-    }
+    let settings = plugin_settings_popover(id, &children, ctx);
+    trailing.append(&settings.0);
     trailing.append(&enable.root());
 
     let remove = gtk::Button::from_icon_name("user-trash-symbolic");
@@ -782,6 +814,8 @@ fn make_plugin_row(id: &str, leaves: &[Record], ctx: &BuildContext) -> PluginRow
         key,
         orig_key: id.to_string(),
         name_label,
+        known,
+        settings_configured: has_settings_leaves(leaves),
         enable,
         enable_orig,
         enable_present,
@@ -794,17 +828,29 @@ fn make_plugin_row(id: &str, leaves: &[Record], ctx: &BuildContext) -> PluginRow
 }
 
 impl PluginRow {
-    /// Rebuild the settings popover after schema fields arrive asynchronously.
-    fn refresh_settings(&mut self, id: &str, ctx: &BuildContext) {
-        if let Some((cog, _)) = self.settings.take() {
-            self.trailing.remove(&cog);
-        }
-        if self.children.is_empty() {
+    /// Replace the editable id entry with the display name once the fetched
+    /// registry reports the id as known.
+    fn adopt_registry(&mut self, names: &HashMap<String, String>) {
+        if self.known {
             return;
         }
-        let (cog, popover) = plugin_settings_popover(id, &self.children, ctx);
-        self.trailing.prepend(&cog);
-        self.settings = Some((cog, popover));
+        let id = self.key.text().to_string();
+        let Some(name) = names.get(&id) else {
+            return;
+        };
+        self.name_label.set_text(name);
+        self.key.set_hexpand(false);
+        self.row_box.remove(&self.key);
+        self.row_box.prepend(&self.name_label);
+        self.known = true;
+    }
+
+    /// Rebuild the settings popover after schema fields arrive asynchronously.
+    fn refresh_settings(&mut self, id: &str, ctx: &BuildContext) {
+        self.trailing.remove(&self.settings.0);
+        let settings = plugin_settings_popover(id, &self.children, ctx);
+        self.trailing.prepend(&settings.0);
+        self.settings = settings;
     }
 }
 
@@ -861,13 +907,25 @@ fn scaffold_plugin_row(
     ctx: &BuildContext,
     picker: &Picker,
 ) {
-    let mut row = make_plugin_row(id, &[], ctx);
+    let mut row = make_plugin_row(id, &[], ctx, &picker.names);
     row.orig_key = "\0".to_string();
     connect_plugin_row(&row, &hook_notify(on_change));
     attach_plugin_row(container, rows, row, on_change, picker, true);
     if let Some(cb) = on_change.borrow().as_ref() {
         cb();
     }
+    fetch_plugin_schema(id, rows, ctx, picker, on_change);
+}
+
+/// Fetch one plugin's settings schema and merge it into its row, keeping the
+/// settings already present in configuration.
+fn fetch_plugin_schema(
+    id: &str,
+    rows: &PluginRows,
+    ctx: &BuildContext,
+    picker: &Picker,
+    on_change: &ChangeHook,
+) {
     let Some(fetch) = ctx.plugin_settings.clone() else {
         return;
     };
@@ -886,14 +944,20 @@ fn scaffold_plugin_row(
             if schema.is_empty() {
                 return;
             }
-            let children = plugin_children(&id, &[], &schema, &ctx);
-            if children.is_empty() {
-                return;
-            }
             let mut borrowed = rows.borrow_mut();
             let Some(row) = borrowed.iter_mut().find(|row| row.key.text() == id) else {
                 return;
             };
+            let leaves: Vec<Record> = row
+                .children
+                .iter()
+                .filter(|child| child.present)
+                .map(|child| child.record.clone())
+                .collect();
+            let children = plugin_children(&id, &leaves, &schema, &ctx);
+            if children.is_empty() {
+                return;
+            }
             row.children = children;
             let hook = hook_notify(&on_change);
             for child in &row.children {
@@ -925,12 +989,40 @@ fn apply_registry_source(
     names.clear();
     source.clear();
     for plugin in plugins {
-        if let Some(name) = &plugin.name {
-            names.insert(plugin.id.clone(), name.clone());
-        }
+        let name = plugin
+            .name
+            .clone()
+            .unwrap_or_else(|| display_name(&plugin.id));
+        names.insert(plugin.id.clone(), name);
         source.push(plugin.id.clone());
     }
     source.sort();
+}
+
+/// Switch every row whose id the fetched registry knows to its display name.
+fn adopt_registry_rows(rows: &PluginRows, names: &HashMap<String, String>) {
+    for row in rows.borrow_mut().iter_mut() {
+        row.adopt_registry(names);
+    }
+}
+
+/// Fetch schemas for rows added from the fetched registry that have no
+/// configured settings yet. Hardcoded registry rows are fetched at build time.
+fn fetch_registry_schemas(picker: &Picker, ctx: &BuildContext, on_change: &ChangeHook) {
+    let names = picker.names.borrow();
+    let ids: Vec<String> = picker
+        .rows
+        .borrow()
+        .iter()
+        .filter(|row| {
+            needs_registry_schema(row.key.text().as_str(), &names, row.settings_configured)
+        })
+        .map(|row| row.key.text().to_string())
+        .collect();
+    drop(names);
+    for id in ids {
+        fetch_plugin_schema(&id, &picker.rows, ctx, picker, on_change);
+    }
 }
 
 /// The ids the footer dropdown offers: the template's `choices` when present,
@@ -953,6 +1045,41 @@ fn display_name(id: &str) -> String {
     plugin_spec(id)
         .map(|spec| spec.name.to_string())
         .unwrap_or_else(|| humanize(id))
+}
+
+/// Whether a plugin id is known: present in the hardcoded registry or in the
+/// fetched one.
+fn registry_known(id: &str, names: &HashMap<String, String>) -> bool {
+    plugin_spec(id).is_some() || names.contains_key(id)
+}
+
+/// The label of a plugin row: the fetched registry name wins, then the
+/// hardcoded registry name, then a humanized id.
+fn row_name(id: &str, names: &HashMap<String, String>) -> String {
+    names.get(id).cloned().unwrap_or_else(|| display_name(id))
+}
+
+/// Whether the configured leaves of a plugin row already include settings.
+fn has_settings_leaves(leaves: &[Record]) -> bool {
+    leaves
+        .iter()
+        .any(|leaf| leaf.segments.first().map(String::as_str) == Some("settings"))
+}
+
+/// Whether a hardcoded registry row needs its schema fetched at build time.
+fn needs_initial_schema(id: &str, leaves: &[Record]) -> bool {
+    plugin_spec(id).is_some() && !has_settings_leaves(leaves)
+}
+
+/// Whether a row needs its schema fetched when the fetched registry arrives:
+/// the id must come from that registry, not the hardcoded one, and the row
+/// must have no configured settings.
+fn needs_registry_schema(
+    id: &str,
+    names: &HashMap<String, String>,
+    settings_configured: bool,
+) -> bool {
+    plugin_spec(id).is_none() && names.contains_key(id) && !settings_configured
 }
 
 /// The source ids minus the ones already present, so a plugin is offered once.
@@ -1067,6 +1194,88 @@ mod tests {
     }
 
     #[test]
+    fn registry_ids_are_known_and_use_their_display_names() {
+        let mut names = HashMap::new();
+        assert!(registry_known("nixMonitor", &names));
+        assert!(!registry_known("absPlayer", &names));
+        names.insert("absPlayer".to_string(), "Audiobookshelf".to_string());
+        assert!(registry_known("absPlayer", &names));
+        assert_eq!(row_name("absPlayer", &names), "Audiobookshelf");
+        assert_eq!(row_name("nixMonitor", &names), "Nix Monitor");
+        assert_eq!(row_name("someNewPlugin", &names), "Some New Plugin");
+    }
+
+    #[test]
+    fn schema_fetch_skips_rows_with_configured_settings() {
+        let configured = vec![Record {
+            segments: vec!["settings".to_string(), "showChevron".to_string()],
+            ..Record::default()
+        }];
+        let mut names = HashMap::new();
+        names.insert("absPlayer".to_string(), "Audiobookshelf".to_string());
+
+        assert!(needs_initial_schema("nixMonitor", &[]));
+        assert!(!needs_initial_schema("nixMonitor", &configured));
+        assert!(!needs_initial_schema("absPlayer", &[]));
+
+        assert!(needs_registry_schema("absPlayer", &names, false));
+        assert!(!needs_registry_schema("absPlayer", &names, true));
+        assert!(!needs_registry_schema("nixMonitor", &names, false));
+        assert!(!needs_registry_schema("unknown", &names, false));
+    }
+
+    #[test]
+    #[ignore = "needs a display; run with `cargo test -- --ignored`"]
+    fn every_row_has_a_cog_with_an_empty_settings_message() {
+        if gtk::init().is_err() {
+            eprintln!("skipping plugin cog check: no display");
+            return;
+        }
+        let names: RegistryNames = Rc::new(RefCell::new(HashMap::new()));
+        let row = make_plugin_row("dankMenu", &[], &BuildContext::default(), &names);
+        assert_eq!(row.trailing.observe_children().n_items(), 3);
+        assert!(row.settings.0.parent().is_some());
+        let detail = row
+            .settings
+            .1
+            .child()
+            .and_then(|child| child.downcast::<gtk::Box>().ok())
+            .expect("the popover detail box");
+        let texts: Vec<String> = detail
+            .observe_children()
+            .into_iter()
+            .filter_map(|child| child.ok())
+            .filter_map(|child| child.downcast::<gtk::Label>().ok())
+            .map(|label| label.text().to_string())
+            .collect();
+        assert!(
+            texts.contains(&"No additional settings.".to_string()),
+            "{texts:?}"
+        );
+    }
+
+    #[test]
+    #[ignore = "needs a display; run with `cargo test -- --ignored`"]
+    fn fetched_registry_ids_replace_the_key_entry() {
+        if gtk::init().is_err() {
+            eprintln!("skipping registry name check: no display");
+            return;
+        }
+        let names: RegistryNames = Rc::new(RefCell::new(HashMap::new()));
+        let mut row = make_plugin_row("absPlayer", &[], &BuildContext::default(), &names);
+        assert!(!row.known);
+        assert!(row.key.parent().is_some());
+        names
+            .borrow_mut()
+            .insert("absPlayer".to_string(), "Audiobookshelf".to_string());
+        row.adopt_registry(&names.borrow());
+        assert!(row.known);
+        assert_eq!(row.name_label.text(), "Audiobookshelf");
+        assert!(row.name_label.parent().is_some());
+        assert!(row.key.parent().is_none());
+    }
+
+    #[test]
     fn apply_registry_source_replaces_ids() {
         let mut source: Vec<String> = vec!["dankMenu".to_string(), "webSearch".to_string()];
         let mut names = HashMap::new();
@@ -1091,8 +1300,10 @@ mod tests {
         ];
         apply_registry_source(&mut source, &mut names, &plugins);
         assert_eq!(source, ["aPlugin", "bPlugin"]);
-        assert_eq!(names.len(), 1);
+        assert_eq!(names.len(), 2);
         assert_eq!(names.get("bPlugin").map(String::as_str), Some("B Plugin"));
+        assert_eq!(names.get("aPlugin").map(String::as_str), Some("APlugin"));
+        assert!(registry_known("aPlugin", &names));
         assert!(!source.contains(&"dankMenu".to_string()));
     }
 
@@ -1250,7 +1461,8 @@ mod tests {
         "#;
         let schema = parse_settings(qml);
         let ctx = BuildContext::default();
-        let mut row = make_plugin_row("barDropdown", &[], &ctx);
+        let names: RegistryNames = Rc::new(RefCell::new(HashMap::new()));
+        let mut row = make_plugin_row("barDropdown", &[], &ctx, &names);
         row.children = plugin_children("barDropdown", &[], &schema, &ctx);
         assert_eq!(row.children.len(), 2);
         assert!(row.children.iter().all(|child| !child.present));

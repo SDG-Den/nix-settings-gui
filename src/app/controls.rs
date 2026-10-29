@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 use gtk::prelude::*;
 
-use crate::dsl::Visibility;
+use crate::dsl::{Visibility, WidgetKind};
 use crate::metadata::{self, Target};
 use crate::model::Record;
 use crate::widgets::{self, Editor};
@@ -121,6 +121,7 @@ pub(super) fn build_context(app: &Rc<App>) -> widgets::BuildContext {
     ctx.secureboot_rebuild = Some(super::secureboot::rebuild_hook(app));
     ctx.base = app.base.borrow().clone();
     ctx.wallpaper = Some(super::wallpaper::actions(app));
+    ctx.file = Some(super::file::actions(app));
     ctx.icon = Some(super::icon::actions(app));
     ctx.expand_details = app.config.borrow().expand_details_by_default;
     ctx
@@ -502,6 +503,28 @@ fn visible_group_names(
     set
 }
 
+pub(super) fn record_matches_query(record: &Record, query: &str) -> bool {
+    if query.is_empty() {
+        return true;
+    }
+    if record.path().to_lowercase().contains(query) {
+        return true;
+    }
+    if record
+        .spec
+        .label
+        .as_deref()
+        .map(|label| label.to_lowercase().contains(query))
+        .unwrap_or(false)
+    {
+        return true;
+    }
+    if record.spec.widget == Some(WidgetKind::Keybinds) {
+        return record.value.to_lowercase().contains(query);
+    }
+    false
+}
+
 pub(super) fn apply_control_filter(app: &Rc<App>) {
     let query = app.search.text().to_lowercase();
     let current = app.current_file.borrow().clone();
@@ -513,15 +536,22 @@ pub(super) fn apply_control_filter(app: &Rc<App>) {
         let mut visible_rows: Vec<((bool, String), bool)> = Vec::new();
         for control in &page.controls {
             control.row.remove_css_class("search-hit");
-            let matches = query.is_empty()
-                || control.record.path().to_lowercase().contains(&query)
-                || control
-                    .record
-                    .spec
-                    .label
-                    .as_deref()
-                    .map(|l| l.to_lowercase().contains(&query))
-                    .unwrap_or(false);
+            let keybind_match = if let Editor::Keybinds { rows, .. } = &*control.editor.borrow() {
+                let mut any = false;
+                for row in rows.borrow().iter() {
+                    let matches =
+                        query.is_empty() || row.search_text.to_lowercase().contains(&query);
+                    row.row_box.set_visible(matches);
+                    any |= matches;
+                }
+                Some(any)
+            } else {
+                None
+            };
+            let matches = match keybind_match {
+                Some(any) if !query.is_empty() => any,
+                _ => record_matches_query(&control.record, &query),
+            };
             let visible = matches && control.dep_visible.get();
             control.row.set_visible(visible);
             if visible && !query.is_empty() && first_match.is_none() {
@@ -678,6 +708,15 @@ mod tests {
             Some("false")
         );
         assert_eq!(resolve_dependency_value(&values, "missing.path"), None);
+    }
+
+    #[test]
+    fn keybind_records_match_their_row_text() {
+        let text = "{ # @option widget = \"keybinds\"; label = \"Binds\";\n  binds = { shot = { description = \"Selection screenshot\"; }; }; }";
+        let record = scan::scan_value(text).remove(0);
+        assert!(record_matches_query(&record, "selection screenshot"));
+        assert!(record_matches_query(&record, "binds"));
+        assert!(!record_matches_query(&record, "unrelated"));
     }
 
     #[test]

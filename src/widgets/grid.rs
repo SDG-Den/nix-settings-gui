@@ -258,6 +258,9 @@ pub(crate) fn build_grid_configuration(record: &Record, ctx: &BuildContext) -> E
     for child in scan_direct_children(record, ctx.advanced) {
         if value::classify(&child.value) == value::ValueKind::AttrSet {
             let id = child.segments.last().cloned().unwrap_or_default();
+            if profile.surface == GridSurface::ControlCenter && id == "edit" {
+                continue;
+            }
             orig_ids.push(id.clone());
             built.push(make_grid_tile(&id, &child.value, profile, ctx));
         } else {
@@ -305,6 +308,8 @@ pub(crate) fn build_grid_configuration(record: &Record, ctx: &BuildContext) -> E
         programmatic: Rc::new(Cell::new(false)),
         gesture_moved: Rc::new(Cell::new(false)),
     });
+
+    grid_repack(&state, None, false);
 
     {
         let toolbar = gtk::Box::new(gtk::Orientation::Horizontal, 6);
@@ -381,6 +386,28 @@ pub(crate) fn grid_tile_is_footer(tile: &GridTile) -> bool {
         field.record.segments.last().map(String::as_str) == Some("footer")
             && field.editor.to_nix().trim() == "true"
     })
+}
+
+/// Add, replace or remove the `footer` field of a tile.
+pub(crate) fn grid_set_footer(tile: &mut GridTile, on: bool) {
+    let value = if on { "true" } else { "false" };
+    if let Some(field) = tile
+        .fields
+        .iter_mut()
+        .find(|field| field.record.segments.last().map(String::as_str) == Some("footer"))
+    {
+        field.record.value = value.to_string();
+        field.editor = Editor::Switch(super::basic::build_switch(value));
+        return;
+    }
+    tile.fields.push(GridField {
+        record: Record {
+            segments: vec!["footer".to_string()],
+            value: value.to_string(),
+            ..Record::default()
+        },
+        editor: Editor::Switch(super::basic::build_switch(value)),
+    });
 }
 
 pub(crate) fn grid_index_of(

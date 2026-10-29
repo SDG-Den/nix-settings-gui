@@ -99,15 +99,9 @@ fn menu_matches(menu: &crate::model::MenuModel, query: &str) -> bool {
     {
         return true;
     }
-    menu.records.iter().any(|record| {
-        record.path().to_lowercase().contains(query)
-            || record
-                .spec
-                .label
-                .as_deref()
-                .map(|l| l.to_lowercase().contains(query))
-                .unwrap_or(false)
-    })
+    menu.records
+        .iter()
+        .any(|record| super::controls::record_matches_query(record, query))
 }
 
 const FALLBACK_MENU_ICON: &str = "preferences-system-symbolic";

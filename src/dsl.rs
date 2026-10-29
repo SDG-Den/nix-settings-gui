@@ -281,6 +281,7 @@ pub enum WidgetKind {
     Monitors,
     Theme,
     Wallpaper,
+    File,
     Menu,
     Plugins,
     Bar,
@@ -319,6 +320,7 @@ impl WidgetKind {
             "monitors" => Self::Monitors,
             "theme" => Self::Theme,
             "wallpaper" => Self::Wallpaper,
+            "file" => Self::File,
             "menu" => Self::Menu,
             "plugins" => Self::Plugins,
             "bar" => Self::Bar,
@@ -444,6 +446,12 @@ pub struct OptionSpec {
     /// `ojuny-desktop`. When set, the wallpaper picker lists those presets in
     /// addition to the images in `wallpaperDir`.
     pub preset_source: Option<String>,
+    /// Directory holding selectable files for the `file` widget, relative to
+    /// the file containing the option. Defaults to `./files`.
+    pub file_dir: Option<String>,
+    /// File extensions the `file` widget lists and accepts. Defaults to common
+    /// image and text extensions.
+    pub file_extensions: Option<Vec<String>>,
     /// Directory holding icons for `icon` table columns, relative to the file
     /// containing the option. Defaults to `./icons`.
     pub icon_dir: Option<String>,
@@ -495,6 +503,8 @@ impl OptionSpec {
             visible_when: parse_visibility(d),
             wallpaper_dir: d.string("wallpaperDir"),
             preset_source: d.string("presetSource"),
+            file_dir: d.string("fileDir"),
+            file_extensions: d.strings("fileExtensions"),
             icon_dir: d.string("iconDir"),
             package_option: d.string("packageOption"),
             monospace: d.bool("monospace").unwrap_or(false),
@@ -677,6 +687,20 @@ mod tests {
         assert_eq!(kind, MarkerKind::Option);
         let opt = OptionSpec::from_directives(&d);
         assert_eq!(opt.preset_source.as_deref(), Some("ojuny-desktop"));
+    }
+
+    #[test]
+    fn parses_file_widget_directives() {
+        let text = "/* @option widget = \"file\"; fileDir = \"./assets/files\"; fileExtensions = [ \"txt\" \"md\" ]; */";
+        let (kind, d) = parse_comment(text).unwrap();
+        assert_eq!(kind, MarkerKind::Option);
+        let opt = OptionSpec::from_directives(&d);
+        assert_eq!(opt.widget, Some(WidgetKind::File));
+        assert_eq!(opt.file_dir.as_deref(), Some("./assets/files"));
+        assert_eq!(
+            opt.file_extensions,
+            Some(vec!["txt".to_string(), "md".to_string()])
+        );
     }
 
     #[test]
@@ -924,6 +948,7 @@ mod tests {
         assert_eq!(WidgetKind::parse("monitors"), Some(WidgetKind::Monitors));
         assert_eq!(WidgetKind::parse("theme"), Some(WidgetKind::Theme));
         assert_eq!(WidgetKind::parse("wallpaper"), Some(WidgetKind::Wallpaper));
+        assert_eq!(WidgetKind::parse("file"), Some(WidgetKind::File));
         assert_eq!(WidgetKind::parse("menu"), Some(WidgetKind::Menu));
         assert_eq!(WidgetKind::parse("plugins"), Some(WidgetKind::Plugins));
         assert_eq!(WidgetKind::parse("bar"), Some(WidgetKind::Bar));

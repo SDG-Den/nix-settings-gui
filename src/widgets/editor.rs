@@ -83,6 +83,11 @@ pub enum Editor {
         ui: Rc<RefCell<super::wallpaper::WallpaperUi>>,
         on_change: ChangeHook,
     },
+    File {
+        root: gtk::Box,
+        ui: Rc<RefCell<super::file::FileUi>>,
+        on_change: ChangeHook,
+    },
     Icon {
         root: gtk::Box,
         ui: Rc<RefCell<super::icon::IconUi>>,
@@ -166,6 +171,7 @@ impl Editor {
             Editor::Theme { root, .. } => root.clone().upcast(),
             Editor::StyleChoice { root, .. } => root.clone().upcast(),
             Editor::Wallpaper { root, .. } => root.clone().upcast(),
+            Editor::File { root, .. } => root.clone().upcast(),
             Editor::Icon { root, .. } => root.clone().upcast(),
             Editor::Keybinds { root, .. } => root.clone().upcast(),
             Editor::Monitors { root, .. } => root.clone().upcast(),
@@ -242,6 +248,7 @@ impl Editor {
             Editor::Theme { current, .. } => quote(&current.borrow()),
             Editor::StyleChoice { choice, .. } => quote(choice.current.borrow().as_str()),
             Editor::Wallpaper { ui, .. } => ui.borrow().nix_value(),
+            Editor::File { ui, .. } => ui.borrow().nix_value(),
             Editor::Icon { ui, .. } => ui.borrow().nix_value(),
             Editor::Keybinds { rows, .. } => keybinds_nix(&rows.borrow()),
             Editor::Monitors { rows, .. } => monitors_nix(&rows.borrow()),
@@ -532,6 +539,9 @@ impl Editor {
                 list.connect_row_selected(move |_, _| update());
             }
             Editor::Wallpaper { on_change, .. } => {
+                *on_change.borrow_mut() = Some(update.clone());
+            }
+            Editor::File { on_change, .. } => {
                 *on_change.borrow_mut() = Some(update.clone());
             }
             Editor::Icon { on_change, .. } => {

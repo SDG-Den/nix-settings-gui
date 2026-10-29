@@ -7,6 +7,7 @@ use super::context::BuildContext;
 use super::context::ModuleKind;
 use super::cursor_theme::build_cursor_theme;
 use super::editor::Editor;
+use super::file::build_file;
 use super::font::build_font;
 use super::grid::build_grid_configuration;
 use super::icon_theme::build_icon_theme;
@@ -116,6 +117,7 @@ fn build_editor(record: &Record, type_str: Option<&str>, ctx: &BuildContext) -> 
             build_cursor_theme(value_text, spec, package_binding(record, ctx))
         }
         WidgetKind::Wallpaper => build_wallpaper(record, value_text, ctx),
+        WidgetKind::File => build_file(record, value_text, ctx),
         WidgetKind::Keybinds => build_keybinds(record),
         WidgetKind::Monitors => build_monitors(record),
         WidgetKind::Menu => build_menu(record, ctx),
@@ -347,6 +349,7 @@ mod tests {
         assert_eq!(WidgetKind::parse("monitors"), Some(WidgetKind::Monitors));
         assert_eq!(WidgetKind::parse("theme"), Some(WidgetKind::Theme));
         assert_eq!(WidgetKind::parse("wallpaper"), Some(WidgetKind::Wallpaper));
+        assert_eq!(WidgetKind::parse("file"), Some(WidgetKind::File));
         assert_eq!(WidgetKind::parse("menu"), Some(WidgetKind::Menu));
         assert_eq!(WidgetKind::parse("plugins"), Some(WidgetKind::Plugins));
         assert_eq!(WidgetKind::parse("bar"), Some(WidgetKind::Bar));

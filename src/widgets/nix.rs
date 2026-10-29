@@ -280,6 +280,13 @@ pub fn literal_for_widget(widget: WidgetKind, value: &str) -> String {
                 nix_path_literal(value)
             }
         }
+        WidgetKind::File => {
+            if t == "null" {
+                "null".to_string()
+            } else {
+                nix_path_literal(value)
+            }
+        }
         WidgetKind::Dropdown | WidgetKind::Radio => choice_literal(value),
         WidgetKind::Packages => {
             let items = value::list_items(value).unwrap_or_else(|| vec![value.trim().to_string()]);
@@ -462,6 +469,11 @@ mod tests {
             literal_for_widget(WidgetKind::Wallpaper, "everforest"),
             "\"everforest\""
         );
+        assert_eq!(
+            literal_for_widget(WidgetKind::File, "./files/my notes.txt"),
+            "(./files + \"/my notes.txt\")"
+        );
+        assert_eq!(literal_for_widget(WidgetKind::File, "null"), "null");
     }
 
     #[test]

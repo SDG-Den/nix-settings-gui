@@ -30,6 +30,7 @@ pub(crate) struct KeybindRow {
     pub(crate) remove: gtk::Button,
     pub(crate) popup: gtk::Window,
     pub(crate) snapshot: Rc<RefCell<Option<PopoutSnapshot>>>,
+    pub(crate) search_text: String,
 }
 /// Install the one-time stylesheet that paints the keybind preview pill.
 pub(crate) fn install_keybind_css() {
@@ -107,6 +108,15 @@ pub(crate) fn make_keybind_row(scan_row: &scan::TableRowScan, ctx: &BuildContext
     title_stack.set_hexpand(true);
 
     let label_override = scan_row.spec.label.clone();
+    let mut search_text = format!(
+        "{} {}",
+        scan_row.key,
+        bind_display_label(&scan_row.key, label_override.as_deref())
+    );
+    for (_, value) in &scan_row.fields {
+        search_text.push(' ');
+        search_text.push_str(value);
+    }
     let title = gtk::Label::builder()
         .xalign(0.0)
         .hexpand(true)
@@ -232,6 +242,7 @@ pub(crate) fn make_keybind_row(scan_row: &scan::TableRowScan, ctx: &BuildContext
         remove,
         popup,
         snapshot: Rc::new(RefCell::new(None)),
+        search_text,
     };
 
     {

@@ -14,6 +14,7 @@ mod apply;
 mod controls;
 mod dialogs;
 mod enrich;
+mod file;
 mod files;
 mod git;
 mod icon;

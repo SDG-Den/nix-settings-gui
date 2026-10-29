@@ -100,6 +100,8 @@ services.pipewire.enable = true;
 | `wallpaperDir` | string     | Directory holding wallpaper images, relative to the file containing the option. Defaults to `./wallpapers`. |
 | `presetSource` | string | Flake input that declares wallpaper presets, e.g. `ojuny-desktop`. When set, the wallpaper picker loads the generated themed wallpaper set for the current target and lists those presets before the images in `wallpaperDir`. |
 | `iconDir`     | string          | Directory holding icons added by `icon` table columns, relative to the file containing the option. Defaults to `./icons`. |
+| `fileDir`     | string          | Directory holding files added by the `file` widget, relative to the file containing the option. Defaults to `./files`. |
+| `fileExtensions` | list of strings | Extensions the `file` widget offers. Defaults to common image and text extensions. |
 | `packageOption` | string        | Full option path of the package that installs the selected `font`, `icon-theme`, or `cursor-theme` value. Selecting a catalog entry stages both values. |
 | `monospace`   | boolean         | Restricts a `font` control to monospace catalog entries. |
 | `variant`     | string          | Restricts an `icon-theme` control to `dark` or `light` catalog entries. |
@@ -240,6 +242,7 @@ its own interface, such as a Dux Shell or mango IPC call.
 | `icon-theme` | Searchable icon theme chooser with icon previews | theme directory name string |
 | `cursor-theme` | Searchable cursor theme chooser with cursor previews | theme directory name string |
 | `wallpaper` | Horizontally scrolling wallpaper previews | `null`, a preset name, or a path string |
+| `file` | File picker with image/text preview, multi-file upload and delete | a path string or `null` |
 | `menu` | Nestable tree of menu entries | dotted-id keyed attribute set |
 | `plugins` | Plugin list with a settings form | name-keyed attribute set |
 | `bar` | Bar widget configuration | bar-name-keyed attribute set |

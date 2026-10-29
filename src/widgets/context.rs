@@ -85,6 +85,19 @@ pub struct WallpaperActions {
     pub remove: WallpaperRemove,
 }
 
+/// Copies a general file into the repository and stages it with git.
+pub type FileAdd = Rc<dyn Fn(&Path, &Path) -> Result<PathBuf, String>>;
+
+/// Removes a general file from the repository and stages the deletion.
+pub type FileRemove = Rc<dyn Fn(&Path) -> Result<(), String>>;
+
+/// File operations for the general file picker, supplied by the app.
+#[derive(Clone)]
+pub struct FileActions {
+    pub add: FileAdd,
+    pub remove: FileRemove,
+}
+
 /// Copies an icon into the repository and stages it with git.
 pub type IconAdd = Rc<dyn Fn(&Path, &Path) -> Result<PathBuf, String>>;
 
@@ -134,6 +147,8 @@ pub struct BuildContext {
     pub base: String,
     /// Wallpaper copy and remove operations.
     pub wallpaper: Option<WallpaperActions>,
+    /// General file copy and remove operations.
+    pub file: Option<FileActions>,
     /// Icon copy operation for `icon` table columns.
     pub icon: Option<IconActions>,
     /// Whether the Advanced toggle is on, so nested hidden controls show.

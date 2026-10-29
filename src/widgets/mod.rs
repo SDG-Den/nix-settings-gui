@@ -7,6 +7,7 @@ mod dispatch;
 mod dms_catalog;
 mod editor;
 mod fields;
+mod file;
 mod font;
 mod grid;
 mod grid_details;
@@ -39,9 +40,9 @@ mod xcursor;
 
 pub(crate) use basic::{build_entry, build_spin, build_switch};
 pub(crate) use context::{
-    ApplyHook, BuildContext, ChangeHook, IconActions, PackageSearch, PasswordPromptHook,
-    PluginRegistryHook, PluginSettingsHook, SecureBootRebuild, SecureBootRun, SecureBootStatus,
-    SecureBootWrite, WallpaperActions, WallpaperSetHook,
+    ApplyHook, BuildContext, ChangeHook, FileActions, IconActions, PackageSearch,
+    PasswordPromptHook, PluginRegistryHook, PluginSettingsHook, SecureBootRebuild, SecureBootRun,
+    SecureBootStatus, SecureBootWrite, WallpaperActions, WallpaperSetHook,
 };
 pub(crate) use details::InfoDetails;
 pub(crate) use dispatch::{build, is_package};
