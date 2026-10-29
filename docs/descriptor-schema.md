@@ -35,7 +35,7 @@ path in the flag wins over the environment variable.
 | Key | Type | Required | Meaning |
 |-----|------|----------|---------|
 | `path` | string | yes | Full option path, dot-separated. `desktop.ojuny.dms` and `desktop.ojuny.dux` are treated as the same namespace. A leading `config.` is ignored. |
-| `widget` | string | yes | One of the `@option widget` names: `switch`, `dropdown`, `radio`, `spin`, `slider`, `text`, `multiline`, `path`, `package`, `packages`, `list`, `color`, `submodule`, `horizontal-submodule`, `grid-configuration`, `table-attrset`, `table-list`, `keybinds`, `monitors`, `theme`, `wallpaper`, `menu`, `plugins`, `bar`, `dock`, `font`, `icon-theme`, `cursor-theme`, `users`, `raw`. |
+| `widget` | string | yes | One of the `@option widget` names: `switch`, `dropdown`, `radio`, `spin`, `slider`, `text`, `multiline`, `path`, `package`, `packages`, `list`, `color`, `submodule`, `horizontal-submodule`, `grid-configuration`, `table-attrset`, `table-list`, `keybinds`, `monitors`, `theme`, `wallpaper`, `menu`, `plugins`, `bar`, `dock`, `font`, `icon-theme`, `cursor-theme`, `users`, `secureboot`, `raw`. |
 | `label` | string | no | Display label. Defaults to the last segment of the path. |
 | `description` | string | no | Helper text. |
 | `group` | string | no | Sub-heading within the menu. |

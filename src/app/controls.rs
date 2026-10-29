@@ -115,6 +115,10 @@ pub(super) fn build_context(app: &Rc<App>) -> widgets::BuildContext {
     ctx.wallpaper_set = Some(wallpaper_set_hook(app));
     ctx.apply = Some(apply_hook(app));
     ctx.password_prompt = Some(super::dialogs::password_prompt(app));
+    ctx.secureboot_status = Some(super::secureboot::status_hook(app));
+    ctx.secureboot_write = Some(super::secureboot::write_hook(app));
+    ctx.secureboot_run = Some(super::secureboot::run_hook(app));
+    ctx.secureboot_rebuild = Some(super::secureboot::rebuild_hook(app));
     ctx.base = app.base.borrow().clone();
     ctx.wallpaper = Some(super::wallpaper::actions(app));
     ctx.icon = Some(super::icon::actions(app));

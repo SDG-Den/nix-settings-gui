@@ -22,6 +22,7 @@ pub(crate) mod menu;
 mod nixpkgs;
 mod pump;
 mod save;
+mod secureboot;
 mod state;
 mod wallpaper;
 
@@ -362,6 +363,9 @@ fn build_ui(
         package_service: PackageService::new(),
         plugin_registry: Rc::new(PluginRegistryState::new()),
         wallpaper_set: RefCell::new(None),
+        secureboot_state: RefCell::new(None),
+        secureboot_pending: RefCell::new(Vec::new()),
+        secureboot_loading: Cell::new(false),
         apply_state: ApplyState::new(),
         tx: tx.clone(),
         descriptors: RefCell::new(descriptors),

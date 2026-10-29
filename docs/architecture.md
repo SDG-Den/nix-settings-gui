@@ -23,6 +23,7 @@ main.rs
     templates.rs  _-prefixed file templates and placeholder rendering
     config.rs   ~/.config/nix-settings-gui/config.json
     apply.rs    apply-command helpers: value substitution and shell quoting
+    secureboot.rs  Secure Boot state, setup stages, and generated config
   nix/options-to-json.nix  eval fallback that enumerates options
 ```
 
@@ -96,7 +97,10 @@ columns, resolving `iconDir` and showing a preview with an "Add icon" button.
 `widgets/font.rs`, `widgets/icon_theme.rs`, and `widgets/cursor_theme.rs` supply
 their catalogs and previews; `widgets/theme_catalog.rs` discovers installed
 themes, `widgets/xcursor.rs` decodes cursor files, and `widgets/style_catalog.rs`
-loads the Nixpkgs-only manifest embedded by `build.rs`. A style editor can emit
+loads the Nixpkgs-only manifest embedded by `build.rs`. `widgets/secureboot.rs`
+renders the Secure Boot card and `widgets/secureboot_wizard.rs` renders the
+stage-driven setup dialog; both use hooks so they stay free of process handling
+and file writes. A style editor can emit
 two staged edits, one for the value and one for its package option.
 Each editor owns a GTK root widget, reports whether it is `unchanged`, produces
 its `PendingEdit`s, and renders its value as a Nix literal. Serialization rules
@@ -161,3 +165,22 @@ The GTK flow lives in `app/nixpkgs.rs`: a `PreferencesGroup` card above the
 input list, and a dialog whose form is rebuilt when the flake-location type
 changes. `app/inputs.rs` filters the exact `nixpkgs` entry out of the regular
 list and reuses its `save_edits` path.
+
+## 10. Secure Boot
+
+`secureboot.rs` is the pure layer. It parses `bootctl status`, `sbctl status`,
+and `sbctl verify` into `SecureBootState`, discovers the ESP, Windows, and
+BitLocker, and derives `SetupStage` from the live state. `SetupOptions` and
+`setup_commands` turn the dialog choices into the commands that must run as
+root. `config_lines` renders the module block the setup flow writes.
+
+`app/secureboot.rs` is the process and write layer. Status collection runs on a
+worker thread and reports through `Msg::SecureBootStatus`; the pump stores the
+result and drains the callbacks the widget registered. The write path resolves
+the attached record's sibling assignments, edits existing `imports`,
+`environment.systemPackages`, `boot.loader.*`, and `boot.lanzaboote.*` in
+place, inserts the remaining block after the attached option, adds the
+Lanzaboote flake input through `flake_inputs`, and applies the batch with
+`edit::apply`. Privileged commands go to `save::spawn_in_terminal`, so sudo
+prompts in the user's terminal, or to `pkexec` when no terminal is configured.
+

@@ -31,6 +31,9 @@
           git
           libxcrypt
           openssl
+          sbctl
+          systemd
+          polkit
         ]);
 
         nativeBuildInputs = with pkgs; [
@@ -114,6 +117,9 @@
               nix
               nixd
               nixfmt
+              sbctl
+              systemd
+              polkit
             ]);
 
           TINTED_SCHEMES_DIR = "${tinted-theming}";

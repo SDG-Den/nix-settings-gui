@@ -252,7 +252,7 @@ pub(crate) fn attr_key(raw: &str) -> String {
 pub fn literal_for_widget(widget: WidgetKind, value: &str) -> String {
     let t = value.trim();
     match widget {
-        WidgetKind::Switch => {
+        WidgetKind::Switch | WidgetKind::SecureBoot => {
             if matches!(t, "true" | "false") {
                 t.to_string()
             } else {

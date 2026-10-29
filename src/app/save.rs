@@ -363,7 +363,6 @@ pub(super) fn preview_changes(app: &Rc<App>, _tx: &Tx) {
 
 pub(super) fn run_rebuild(app: &Rc<App>) {
     let config = app.config.borrow();
-    let base = app.base.borrow().clone();
     let Some(command) = config.rebuild_command.clone() else {
         app.status.set_text("No rebuild command configured");
         return;
@@ -373,14 +372,31 @@ pub(super) fn run_rebuild(app: &Rc<App>) {
         config.reload_mango_on_rebuild,
         config.reload_dms_on_rebuild,
     );
+    drop(config);
+    match spawn_in_terminal(app, &command) {
+        Ok(()) => app.status.set_text("Rebuild started in terminal"),
+        Err(error) => app
+            .status
+            .set_text(&format!("Cannot start rebuild: {error}")),
+    }
+}
+
+/// Spawn `command` in the configured terminal, or through a shell when no
+/// terminal is configured. Shared by the rebuild flow and Secure Boot setup.
+pub(super) fn spawn_in_terminal(app: &Rc<App>, command: &str) -> Result<(), String> {
+    let config = app.config.borrow();
+    let base = app.base.borrow().clone();
     let terminal = config.terminal_command.clone();
     let mut process = match terminal {
         Some(prefix) if prefix.contains("{cmd}") => {
-            let full = prefix.replace("{cmd}", &command);
-            let mut parts = shell_words(&full);
+            let mut parts = shell_words(&prefix);
             if parts.is_empty() {
-                app.status.set_text("Empty terminal command");
-                return;
+                return Err("empty terminal command".to_string());
+            }
+            for part in &mut parts {
+                if part.contains("{cmd}") {
+                    *part = part.replace("{cmd}", command);
+                }
             }
             let program = parts.remove(0);
             let mut cmd = std::process::Command::new(program);
@@ -390,26 +406,25 @@ pub(super) fn run_rebuild(app: &Rc<App>) {
         Some(prefix) => {
             let parts = shell_words(&prefix);
             if parts.is_empty() {
-                app.status.set_text("Empty terminal command");
-                return;
+                return Err("empty terminal command".to_string());
             }
             let program = parts[0].clone();
             let mut cmd = std::process::Command::new(program);
             cmd.args(&parts[1..]);
-            cmd.arg(&command);
+            cmd.arg(command);
             cmd
         }
         None => {
             let mut cmd = std::process::Command::new("sh");
-            cmd.arg("-c").arg(&command);
+            cmd.arg("-c").arg(command);
             cmd
         }
     };
     process.current_dir(base);
-    match process.spawn() {
-        Ok(_) => app.status.set_text("Rebuild started in terminal"),
-        Err(e) => app.status.set_text(&format!("Cannot start rebuild: {e}")),
-    }
+    process
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("cannot start terminal: {error}"))
 }
 
 fn with_reloads(mut command: String, reload_mango: bool, reload_dms: bool) -> String {
@@ -422,12 +437,57 @@ fn with_reloads(mut command: String, reload_mango: bool, reload_dms: bool) -> St
     command
 }
 
+/// Split a shell command line into arguments, keeping quoted groups together.
+/// The terminal prefix uses this so a token such as `'{cmd}'` becomes one
+/// argument holding the whole command, not a word per space.
 fn shell_words(input: &str) -> Vec<String> {
-    input
-        .split_whitespace()
-        .map(|word| word.trim_matches('\'').trim_matches('"').to_string())
-        .filter(|word| !word.is_empty())
-        .collect()
+    let mut words = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    let mut started = false;
+    let mut chars = input.chars().peekable();
+    while let Some(c) = chars.next() {
+        match quote {
+            Some(q) => {
+                if c == q {
+                    quote = None;
+                } else if q == '"' && c == '\\' {
+                    if let Some(next) = chars.next() {
+                        current.push(next);
+                    }
+                } else {
+                    current.push(c);
+                }
+                started = true;
+            }
+            None => match c {
+                '\'' | '"' => {
+                    quote = Some(c);
+                    started = true;
+                }
+                '\\' => {
+                    if let Some(next) = chars.next() {
+                        current.push(next);
+                        started = true;
+                    }
+                }
+                c if c.is_whitespace() => {
+                    if started {
+                        words.push(std::mem::take(&mut current));
+                        started = false;
+                    }
+                }
+                c => {
+                    current.push(c);
+                    started = true;
+                }
+            },
+        }
+    }
+    if started {
+        words.push(current);
+    }
+    words
 }
 
 #[cfg(test)]
@@ -465,6 +525,22 @@ mod tests {
         assert_eq!(
             changes_action(gtk::ResponseType::DeleteEvent),
             ChangesAction::Cancel
+        );
+    }
+
+    #[test]
+    fn keeps_a_quoted_command_token_together() {
+        assert_eq!(
+            shell_words("ghostty -e zsh -c '{cmd}'"),
+            vec!["ghostty", "-e", "zsh", "-c", "{cmd}"]
+        );
+        assert_eq!(
+            shell_words("kitty --single-instance -e sh -c \"{cmd}\""),
+            vec!["kitty", "--single-instance", "-e", "sh", "-c", "{cmd}"]
+        );
+        assert_eq!(
+            shell_words("wezterm start -- sh -c '{cmd}'"),
+            vec!["wezterm", "start", "--", "sh", "-c", "{cmd}"]
         );
     }
 }

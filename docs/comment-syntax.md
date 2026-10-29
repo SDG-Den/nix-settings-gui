@@ -245,6 +245,7 @@ its own interface, such as a Dux Shell or mango IPC call.
 | `bar` | Bar widget configuration | bar-name-keyed attribute set |
 | `dock` | Dock configuration | dock-name-keyed attribute set |
 | `users` | User account list with passwords, groups, SSH keys, and extras | name-keyed attribute set of user options |
+| `secureboot` | Live firmware state, a Lanzaboote toggle, and a guided setup flow | `true` / `false` |
 | `raw`       | Monospace Nix editor | verbatim value |
 
 ### Submodules
@@ -337,6 +338,7 @@ in the application.
 | `bar` | `barConfigs` | a name-keyed attribute set with id-keyed `left`/`center`/`right` widget lists plus layout and appearance. |
 | `dock` | `dockConfigs` | the same shape as `bar`, in its own control. |
 | `users` | `users.users` | a name-keyed attribute set of accounts. Edits `description`, `hashedPassword`, `extraGroups`, `uid`, `shell`, `openssh.authorizedKeys.keys`, and an extra-options field. `wheel` is a separate sudo toggle. The add and remove actions keep at least one normal account with sudo and a password. |
+| `secureboot` | `boot.lanzaboote.enable` | Shows live UEFI state from `bootctl` and `sbctl`, edits the Lanzaboote toggle, and opens a guided setup flow. The flow adds the `lanzaboote` flake input, writes the remaining Lanzaboote options, and runs key setup. Existing keys are kept unless the user explicitly removes them. |
 
 The `users` widget expects the whole `users.users` attribute set, not a single
 account. Place the marker above that assignment:
@@ -366,6 +368,40 @@ the administrator invariant. With `homeManager = true` it keeps the
 `home-manager.users` keys in sync with the account rows, writes
 `home.stateVersion` and any extra home-manager options, and lets home-manager
 derive `home.username` and `home.homeDirectory` from the account.
+
+The `secureboot` widget attaches to the generic NixOS option
+`boot.lanzaboote.enable`. The assignment is enough on its own:
+
+```nix
+/* @option widget = "secureboot"; label = "Secure Boot"; */
+boot.lanzaboote.enable = false;
+```
+
+No custom namespace and no module declaration are needed. The scanner reads the
+assignment as text, so the control appears even before the Lanzaboote flake
+input is added. That avoids the chicken-and-egg problem of an option that only
+exists after its module is imported.
+
+When setup runs, the flow adds `github:nix-community/lanzaboote` to `flake.nix`,
+appends the module import to an existing `imports` list, disables systemd-boot
+and GRUB, adds `pkgs.sbctl` to `environment.systemPackages`, and writes
+`boot.lanzaboote.pkiBundle`. Existing assignments in the same module body are
+edited in place; the write is rejected if the result would not parse. The
+generated import assumes `inputs` is in scope, as it is in the dendritic flake
+layout this project targets. The attached `boot.lanzaboote.enable` assignment is
+written by the normal control edit, so the switch stays the source of truth.
+
+The steps are derived from live state, so the dialog can be reopened after a
+reboot: keys, configuration, rebuild, firmware setup mode, enrollment, and
+verification. Key generation is refused while `/var/lib/sbctl/keys` exists.
+Enrollment defaults to `--microsoft` so Windows and option ROM signatures keep
+working, and the card warns about BitLocker and Windows detection. Privileged
+commands run through the configured terminal command, so the app never handles
+the sudo password.
+
+Firmware Secure Boot is read-only from the operating system. When the flow
+reaches `FirmwareSetup` it offers to reboot into the firmware settings; the user
+still has to enable Secure Boot and reset to setup mode there.
 
 The `menu` provider `apps` is only valid on a top-level entry. A top-level
 entry with `provider = "apps"` cannot receive child options because the

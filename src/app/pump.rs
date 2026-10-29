@@ -311,6 +311,14 @@ pub(super) fn handle_msg(app: &Rc<App>, tx: &Tx, msg: Msg) {
             show_error(&app.window, &e);
         }
         Msg::ApplyFinished { path, result } => super::apply::finished(app, &path, result),
+        Msg::SecureBootStatus(result) => {
+            app.secureboot_loading.set(false);
+            *app.secureboot_state.borrow_mut() = Some(result.clone());
+            let pending: Vec<_> = app.secureboot_pending.borrow_mut().drain(..).collect();
+            for done in pending {
+                done(result.clone());
+            }
+        }
     }
 }
 

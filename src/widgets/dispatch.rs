@@ -15,6 +15,7 @@ use super::menu::build_menu;
 use super::module_list::build_module_list;
 use super::monitors::build_monitors;
 use super::nix::unwrap_modifiers;
+use super::secureboot::build_secureboot;
 use super::style_choice::PackageBinding;
 use super::submodule::{build_horizontal_submodule, build_submodule};
 use super::table::build_table;
@@ -122,6 +123,7 @@ fn build_editor(record: &Record, type_str: Option<&str>, ctx: &BuildContext) -> 
         WidgetKind::Bar => build_bar(record, ctx),
         WidgetKind::Dock => build_dock(record, ctx),
         WidgetKind::Users => build_users(record, ctx),
+        WidgetKind::SecureBoot => build_secureboot(record, ctx),
         WidgetKind::Raw => {
             let (view, root) = build_raw(value_text, spec);
             Editor::Raw { view, root }
@@ -354,6 +356,14 @@ mod tests {
         assert_eq!(
             WidgetKind::parse("cursor-theme"),
             Some(WidgetKind::CursorTheme)
+        );
+        assert_eq!(
+            WidgetKind::parse("secureboot"),
+            Some(WidgetKind::SecureBoot)
+        );
+        assert_eq!(
+            WidgetKind::parse("secure-boot"),
+            Some(WidgetKind::SecureBoot)
         );
         assert_eq!(WidgetKind::parse("nope"), None);
     }

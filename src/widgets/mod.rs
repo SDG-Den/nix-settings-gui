@@ -22,6 +22,8 @@ mod monitor_picker;
 mod monitors;
 mod names;
 pub(crate) mod nix;
+mod secureboot;
+mod secureboot_wizard;
 mod style_catalog;
 mod style_choice;
 mod submodule;
@@ -38,7 +40,8 @@ mod xcursor;
 pub(crate) use basic::{build_entry, build_spin, build_switch};
 pub(crate) use context::{
     ApplyHook, BuildContext, ChangeHook, IconActions, PackageSearch, PasswordPromptHook,
-    PluginRegistryHook, PluginSettingsHook, WallpaperActions, WallpaperSetHook,
+    PluginRegistryHook, PluginSettingsHook, SecureBootRebuild, SecureBootRun, SecureBootStatus,
+    SecureBootWrite, WallpaperActions, WallpaperSetHook,
 };
 pub(crate) use details::InfoDetails;
 pub(crate) use dispatch::{build, is_package};

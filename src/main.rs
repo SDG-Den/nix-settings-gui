@@ -26,6 +26,7 @@ mod plugin_list;
 mod plugin_schema;
 mod ref_suggest;
 mod scan;
+mod secureboot;
 #[allow(dead_code)]
 mod templates;
 #[allow(dead_code)]

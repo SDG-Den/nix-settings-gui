@@ -184,9 +184,9 @@ the graph, and the `hosts/<host>/` directory name is the fallback when no origin
 can be resolved. The special name `"all"` in a `systems` list matches every host.
 
 Bespoke controls (`keybinds`, `monitors`, `theme`, `wallpaper`, `font`,
-`icon-theme`, `cursor-theme`, `menu`, `plugins`, `bar`, `dock`, `users`) render a
-configuration-specific UI for a single option, with their own add, remove, and
-reorder actions. The style choosers share one inline search list and preview
+`icon-theme`, `cursor-theme`, `menu`, `plugins`, `bar`, `dock`, `users`,
+`secureboot`) render a configuration-specific UI for a single option, with
+their own add, remove, and reorder actions. The style choosers share one inline search list and preview
 pane, modelled on the palette control; each has an `Installed only` toggle.
 Installed entries preview live, while catalog entries that are not installed
 use embedded preview sheets. Selecting a
@@ -210,6 +210,29 @@ With
 `homeManager = true` on the option, each expander also shows
 `home.stateVersion` and an extra home-manager options field, and the sibling
 `home-manager.users` block follows account renames, additions, and removals.
+
+The `secureboot` control shows a status card, an enable switch, and a "Set up
+Secure Boot" action. The card reads `bootctl status`, `sbctl status`, and
+`sbctl verify` on a worker thread and caches the result until Refresh or the
+next setup action. Rows cover firmware mode, Secure Boot, setup mode, the key
+bundle, vendor keys, the boot loader, ESP free space, Windows, and BitLocker.
+Warnings appear when Windows is present without Microsoft keys, when BitLocker
+is detected, or when the configured state and the live state disagree.
+
+The setup dialog is stage-driven rather than a fixed sequence. It derives the
+next step from live state: keys, configuration, rebuild, firmware setup,
+enrollment, verification, and done. A reboot or a firmware change therefore
+resumes at the right step instead of restarting the flow. The keys stage keeps
+an existing `/var/lib/sbctl` bundle, offers migration from `/etc/secureboot`,
+and refuses to generate keys while a bundle exists.
+
+Writing the configuration is a direct edit, like Add file or Flake Inputs, not a
+staged control edit. It adds the Lanzaboote input to `flake.nix`, merges into an
+existing `imports` list and `environment.systemPackages` list, replaces existing
+`boot.loader.*` and `boot.lanzaboote.*` assignments in place, and inserts the
+rest after the attached option. The result is parse-checked and formatted by
+`edit.rs` before anything is written. Privileged steps run through the
+configured terminal command, so the app never sees the sudo password.
 
 Bar and dock editors load disabled entries and show an enable switch on each
 row. Bar sections support moving a widget between left, center, and right by

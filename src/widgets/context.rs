@@ -58,6 +58,20 @@ pub type ApplyHook = Rc<dyn Fn(ApplyRequest)>;
 /// prompt was cancelled.
 pub type PasswordPromptHook = Rc<dyn Fn(Box<dyn FnOnce(Option<String>)>)>;
 
+/// Fetches live Secure Boot state. `true` bypasses the cached result.
+pub type SecureBootStatus =
+    Rc<dyn Fn(bool, Box<dyn FnOnce(Result<crate::secureboot::SecureBootState, String>)>)>;
+
+/// Writes the Lanzaboote configuration for the attached option.
+pub type SecureBootWrite =
+    Rc<dyn Fn(crate::model::Record, crate::secureboot::SetupOptions) -> Result<String, String>>;
+
+/// Runs privileged setup commands in the configured terminal.
+pub type SecureBootRun = Rc<dyn Fn(&[String]) -> Result<(), String>>;
+
+/// Saves the configuration and starts the configured rebuild.
+pub type SecureBootRebuild = Rc<dyn Fn()>;
+
 /// Copies a wallpaper into the repository and stages it with git.
 pub type WallpaperAdd = Rc<dyn Fn(&Path, &Path) -> Result<PathBuf, String>>;
 
@@ -108,6 +122,14 @@ pub struct BuildContext {
     pub apply: Option<ApplyHook>,
     /// Prompts for a password and returns a hash for a user account.
     pub password_prompt: Option<PasswordPromptHook>,
+    /// Reads live Secure Boot state.
+    pub secureboot_status: Option<SecureBootStatus>,
+    /// Writes the Lanzaboote configuration for the attached option.
+    pub secureboot_write: Option<SecureBootWrite>,
+    /// Runs privileged Secure Boot commands.
+    pub secureboot_run: Option<SecureBootRun>,
+    /// Starts the configured rebuild.
+    pub secureboot_rebuild: Option<SecureBootRebuild>,
     /// The flake root, used by widgets that resolve repository paths.
     pub base: String,
     /// Wallpaper copy and remove operations.

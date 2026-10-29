@@ -125,4 +125,7 @@
       customDockThing = { enabled = true; _order = 30; };
     };
   };
+
+  /* @option widget = "secureboot"; label = "Secure Boot"; */
+  boot.lanzaboote.enable = false;
 }

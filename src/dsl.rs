@@ -289,6 +289,7 @@ pub enum WidgetKind {
     IconTheme,
     CursorTheme,
     Users,
+    SecureBoot,
     Raw,
 }
 
@@ -326,6 +327,7 @@ impl WidgetKind {
             "icon-theme" | "icontheme" | "icons" => Self::IconTheme,
             "cursor-theme" | "cursortheme" | "cursors" => Self::CursorTheme,
             "users" => Self::Users,
+            "secureboot" | "secure-boot" => Self::SecureBoot,
             "raw" => Self::Raw,
             _ => return None,
         })

@@ -1453,6 +1453,8 @@ in
         let zeta = find("features.zetaFirst");
         assert_eq!(zeta.spec.group.as_deref(), Some("Zeta"));
         assert_eq!(zeta.spec.group_order, None);
+        let secureboot = find("boot.lanzaboote.enable");
+        assert_eq!(secureboot.spec.widget, Some(WidgetKind::SecureBoot));
         let unordered = find("features.alphaUnordered");
         assert_eq!(unordered.spec.group_order, Some(5));
         assert_eq!(unordered.spec.order, None);

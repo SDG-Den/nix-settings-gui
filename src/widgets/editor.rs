@@ -136,6 +136,10 @@ pub enum Editor {
         home_manager: bool,
         home: Option<users::HomeUsers>,
     },
+    SecureBoot {
+        root: gtk::Box,
+        toggle: gtk::Switch,
+    },
     Raw {
         view: gtk::TextView,
         root: gtk::ScrolledWindow,
@@ -171,6 +175,7 @@ impl Editor {
             Editor::Dock { root, .. } => root.clone().upcast(),
             Editor::Grid { root, .. } => root.clone().upcast(),
             Editor::Users { root, .. } => root.clone().upcast(),
+            Editor::SecureBoot { root, .. } => root.clone().upcast(),
             Editor::Raw { root, .. } => root.clone().upcast(),
         }
     }
@@ -268,6 +273,9 @@ impl Editor {
             } => dock_nix(widgets, *widgets_present, extras),
             Editor::Grid { state, .. } => grid_nix(state),
             Editor::Users { .. } => users::users_nix(self),
+            Editor::SecureBoot { toggle, .. } => {
+                if toggle.is_active() { "true" } else { "false" }.to_string()
+            }
             Editor::Raw { view, .. } => {
                 let buffer = view.buffer();
                 buffer
@@ -380,6 +388,7 @@ impl Editor {
                 home,
                 ..
             } => users::users_unchanged(rows, *orig_count, *home_manager, home.as_ref()),
+            Editor::SecureBoot { toggle, .. } => toggle.is_active() == truthy(original),
             Editor::Grid { state, .. } => {
                 let tiles = state.tiles.borrow();
                 tiles.len() == state.orig_ids.len()
@@ -571,6 +580,10 @@ impl Editor {
             }
             Editor::Users { on_change, .. } => {
                 *on_change.borrow_mut() = Some(update.clone());
+            }
+            Editor::SecureBoot { toggle, .. } => {
+                let update = update.clone();
+                toggle.connect_active_notify(move |_| update());
             }
             Editor::Grid { state, .. } => {
                 *state.on_change.borrow_mut() = Some(update.clone());

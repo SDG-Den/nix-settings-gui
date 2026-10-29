@@ -42,9 +42,14 @@ pub(super) enum Msg {
         path: String,
         result: Result<(), String>,
     },
+    SecureBootStatus(Result<crate::secureboot::SecureBootState, String>),
 }
 
 pub(super) type Tx = async_channel::Sender<Msg>;
+
+/// A pending Secure Boot status callback, run when the worker result arrives.
+pub(super) type SecureBootCallback =
+    Box<dyn FnOnce(Result<crate::secureboot::SecureBootState, String>)>;
 
 /// A pending package-search result handler plus its request id, keyed in
 /// `PackageService::callbacks`.
@@ -216,6 +221,10 @@ pub(super) struct App {
     pub(super) plugin_registry: Rc<PluginRegistryState>,
     pub(super) wallpaper_set:
         RefCell<Option<(String, Result<crate::metadata::WallpaperSet, String>)>>,
+    pub(super) secureboot_state:
+        RefCell<Option<Result<crate::secureboot::SecureBootState, String>>>,
+    pub(super) secureboot_pending: RefCell<Vec<SecureBootCallback>>,
+    pub(super) secureboot_loading: Cell<bool>,
     pub(super) apply_state: Rc<ApplyState>,
     pub(super) tx: Tx,
     /// Descriptor sidecar entries, empty when no file was supplied.
