@@ -93,7 +93,13 @@ mod tests {
     }"#;
 
     fn lock() -> LockFile {
-        let dir = std::env::temp_dir().join(format!("nsg-lock-{}", std::process::id()));
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "nsg-lock-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("flake.lock");
         std::fs::write(&path, LOCK).unwrap();
