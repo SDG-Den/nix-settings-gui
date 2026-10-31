@@ -152,6 +152,56 @@ while the feature is disabled. Home-manager backends should be added
 conditionally through `home-manager.sharedModules` and should read the enable
 flag from `osConfig`.
 
+### Annotated assignments must not be nested inside lists
+
+`@option` binds to the assignment directly below it in the same attribute set.
+The scanner does not descend into a list of attribute sets. An annotation inside
+`lib.mkMerge [...]`, a list literal, `map`, `forEach` or `lib.optionalAttrs` is
+dropped, so the control is missing or renders without its label, group, order or
+gate.
+
+This is intentional. Do not add list support to the scanner, do not change
+`src/scan.rs` to accommodate it, and do not file it as a scanner bug. The
+supported fix is to change the module shape.
+
+This fails:
+
+```nix
+config = lib.mkMerge [
+  {
+    /* @option widget = "switch"; label = "Enable example"; */
+    ojuny.example.enable = true;
+  }
+];
+```
+
+This also fails, for the same reason:
+
+```nix
+config = map (name: {
+  /* @option widget = "switch"; label = name; */
+  ojuny.example.${name}.enable = true;
+}) names;
+```
+
+This works:
+
+```nix
+/* @option widget = "switch"; label = "Enable example"; */
+ojuny.example.enable = true;
+
+config = lib.mkIf active {
+  services.example.enable = true;
+};
+```
+
+`lib.mkIf` is supported. An annotation may sit directly inside a
+`lib.mkIf`-wrapped attribute set. Do not move options out of `lib.mkIf`.
+
+The rule applies to the annotated default as well as the option declaration.
+Keep both out of lists: declare options at the top level and put annotated
+defaults in a plain `config = { ... }` set or a `lib.mkIf`-wrapped set.
+
 ### Visibility dependencies
 
 `visibleWhen.path` names another option in the same menu. The control renders

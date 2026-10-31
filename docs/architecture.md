@@ -85,6 +85,14 @@ at its own top level and gates its `config` with `lib.mkIf`. Home-manager
 backends should be added conditionally through `home-manager.sharedModules` and
 should read the enable flag from `osConfig` instead of redeclaring it.
 
+`@option` metadata has the same shape requirement. The scanner binds a comment to
+the next assignment in the same container and does not descend into a list of
+attribute sets. An annotation inside `lib.mkMerge [...]`, a list literal, `map`,
+`forEach` or `lib.optionalAttrs` is ignored. This is intentional, not a scanner
+TODO. Do not add list or apply-node descent to `scan.rs` to support it. The fix
+belongs in the module: move the assignment into a plain attribute set or a
+`lib.mkIf`-wrapped attribute set and keep lists for gated install logic only.
+
 ## 5. Widgets
 
 `widgets.rs` maps a record and its type string to one of the `Editor` variants.

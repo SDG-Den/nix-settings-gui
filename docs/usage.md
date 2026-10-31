@@ -122,7 +122,12 @@ and options with no type data render as `raw`.
 Options are discovered from the module system's option tree, not from `@option`
 comments alone. An option declared inside `lib.mkMerge`, a list of attribute
 sets, or another config-level expression may not be enumerated, so its control
-can be missing or untyped. The recommended module structure is described in
-`architecture.md`, section 4, "Option discovery and module shape", with a short
-example in `comment-syntax.md`, section 2, "Options must exist in the option
-tree".
+can be missing or untyped. The `@option` annotation has the same restriction: the
+scanner does not descend into a list of attribute sets, so an annotation inside
+`lib.mkMerge`, a list literal, `map`, `forEach` or `lib.optionalAttrs` is
+dropped. This is intentional and must not be fixed in the scanner; change the
+module shape instead. `lib.mkIf` is supported. The recommended module structure
+is described in `architecture.md`, section 4, "Option discovery and module
+shape", with examples in `comment-syntax.md`, section 2, "Options must exist in
+the option tree", and section "Annotated assignments must not be nested inside
+lists".
