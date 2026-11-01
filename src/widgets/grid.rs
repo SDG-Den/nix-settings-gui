@@ -185,7 +185,7 @@ pub(crate) struct GridLayoutState {
     pub(crate) drop_preview: gtk::Box,
     pub(crate) details: gtk::Box,
     pub(crate) adder_slot: gtk::Box,
-    pub(crate) footer_flow: Option<gtk::FlowBox>,
+    pub(crate) footer_flow: Option<gtk::Box>,
     pub(crate) size_caption: gtk::Label,
     pub(crate) status: gtk::Label,
     pub(crate) advanced: bool,
@@ -235,11 +235,9 @@ pub(crate) fn build_grid_configuration(record: &Record, ctx: &BuildContext) -> E
         .css_classes(["dim-label", "error"])
         .build();
     let footer_flow = profile.has_footer.then(|| {
-        let flow = gtk::FlowBox::new();
-        flow.set_selection_mode(gtk::SelectionMode::None);
-        flow.set_max_children_per_line(8);
-        flow.set_column_spacing(8);
-        flow.set_row_spacing(8);
+        let flow = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        flow.set_halign(gtk::Align::Start);
+        flow.set_valign(gtk::Align::Start);
         flow
     });
 
@@ -1023,11 +1021,6 @@ pub(crate) fn grid_reattach(state: &Rc<GridLayoutState>) {
     }
     if let Some(flow) = &state.footer_flow {
         while let Some(child) = flow.first_child() {
-            if let Ok(box_child) = child.clone().downcast::<gtk::FlowBoxChild>() {
-                if let Some(inner) = box_child.child() {
-                    inner.unparent();
-                }
-            }
             flow.remove(&child);
         }
     }
@@ -1047,6 +1040,10 @@ pub(crate) fn grid_reattach(state: &Rc<GridLayoutState>) {
     for tile in tiles.iter() {
         if state.profile.has_footer && grid_tile_is_footer(tile) {
             if let Some(flow) = &state.footer_flow {
+                tile.tile.set_hexpand(false);
+                tile.tile.set_vexpand(false);
+                tile.overlay.set_hexpand(false);
+                tile.overlay.set_vexpand(false);
                 if tile.overlay.parent().is_some() {
                     tile.overlay.unparent();
                 }
@@ -1054,6 +1051,10 @@ pub(crate) fn grid_reattach(state: &Rc<GridLayoutState>) {
             }
             continue;
         }
+        tile.tile.set_hexpand(true);
+        tile.tile.set_vexpand(true);
+        tile.overlay.set_hexpand(true);
+        tile.overlay.set_vexpand(true);
         state.canvas.attach(
             &tile.overlay,
             tile.cell.col as i32,
