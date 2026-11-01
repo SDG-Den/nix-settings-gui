@@ -95,6 +95,27 @@ pub(crate) const MENU_ICON_CHOICES: &[&str] = &[
     "display_settings",
 ];
 pub(crate) const POPOUT_CONDITION_FIELDS: &[&str] = &["checked", "when", "disabled"];
+
+/// Load the Material Symbols family for menu icon previews. The menu itself
+/// uses the QML font loader, which GTK cannot see, so the system font package
+/// is the shared source.
+fn install_menu_css() {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        let provider = gtk::CssProvider::new();
+        provider.load_from_data(
+            ".menu-material-icon { font-family: \"Material Symbols Rounded\"; font-size: 20px; }",
+        );
+        if let Some(display) = gtk::gdk::Display::default() {
+            gtk::style_context_add_provider_for_display(
+                &display,
+                &provider,
+                gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+            );
+        }
+    });
+}
 /// The values a pop-out held when it opened, so Cancel can write them back
 /// into the live row widgets.
 pub(crate) struct PopoutSnapshot {
@@ -506,7 +527,7 @@ pub(crate) fn make_menu_row(
             let label = gtk::Label::builder()
                 .label(&icon)
                 .tooltip_text(&icon)
-                .css_classes(["dim-label", "caption"])
+                .css_classes(["menu-material-icon"])
                 .build();
             label.upcast()
         }
@@ -743,6 +764,7 @@ pub(crate) fn attach_menu_row(
     rows.borrow_mut().push(row);
 }
 pub(crate) fn build_menu(record: &Record, ctx: &BuildContext) -> Editor {
+    install_menu_css();
     let on_change: ChangeHook = Rc::new(RefCell::new(None));
     let root = gtk::Box::new(gtk::Orientation::Vertical, 12);
     root.set_hexpand(true);

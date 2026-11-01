@@ -342,6 +342,7 @@ pub(super) fn build_control_row(
     reset.set_tooltip_text(Some("Reset to default"));
     reset.set_valign(gtk::Align::Center);
     reset.set_halign(gtk::Align::End);
+    reset.set_visible(!record.spec.readonly);
 
     slot.append(&editor.root());
     slot.append(&reset);
@@ -384,7 +385,9 @@ pub(super) fn build_control_row(
         });
     }
 
-    connect_dirty(app, &control);
+    if !record.spec.readonly {
+        connect_dirty(app, &control);
+    }
     control
 }
 

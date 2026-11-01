@@ -1,7 +1,8 @@
 use super::grid::{
-    grid_hide_drop_preview, grid_index_of, grid_repack, grid_repack_drop, grid_repack_preview,
-    grid_restore_pinned, grid_schedule_refresh, grid_select, grid_set_status,
-    grid_show_drop_preview, grid_update_size_caption, GridLayoutState, GridTile,
+    grid_hide_drop_preview, grid_index_of, grid_reorder_footer, grid_repack, grid_repack_drop,
+    grid_repack_preview, grid_restore_pinned, grid_schedule_refresh, grid_select, grid_set_status,
+    grid_show_drop_preview, grid_tile_is_footer, grid_update_size_caption, GridLayoutState,
+    GridTile,
 };
 use super::grid_details::grid_delete;
 use super::grid_layout::GRID_GAP;
@@ -67,12 +68,34 @@ pub(crate) fn wire_grid_tile(state: &Rc<GridLayoutState>, tile: &GridTile) {
 pub(crate) fn wire_grid_move(state: &Rc<GridLayoutState>, tile: &GridTile) {
     let drag = gtk::GestureDrag::new();
     tile.tile.add_controller(drag.clone());
+    let footer_drag = Rc::new(std::cell::Cell::new(false));
+    let start_center = Rc::new(std::cell::Cell::new(0.0f32));
+    let overlay = tile.overlay.clone();
     let st = state.clone();
     let button = tile.tile.clone();
+    let footer_for_begin = footer_drag.clone();
+    let center_for_begin = start_center.clone();
+    let overlay_for_begin = overlay.clone();
     drag.connect_drag_begin(move |_, _, _| {
         let Some(index) = grid_index_of(&st, &button) else {
             return;
         };
+        let is_footer = {
+            let tiles = st.tiles.borrow();
+            st.profile.has_footer && tiles.get(index).is_some_and(|tile| grid_tile_is_footer(tile))
+        };
+        footer_for_begin.set(is_footer);
+        if is_footer {
+            if let Some(flow) = st.footer_flow.as_ref() {
+                if let Some(bounds) = overlay_for_begin.compute_bounds(flow) {
+                    center_for_begin.set(bounds.x() + bounds.width() / 2.0);
+                }
+            }
+            st.gesture_moved.set(false);
+            *st.drag_index.borrow_mut() = Some(index);
+            grid_select(&st, index);
+            return;
+        }
         *st.drag_index.borrow_mut() = Some(index);
         *st.size_index.borrow_mut() = None;
         st.cancelled.set(false);
@@ -95,8 +118,13 @@ pub(crate) fn wire_grid_move(state: &Rc<GridLayoutState>, tile: &GridTile) {
         grid_select(&st, index);
     });
     let st = state.clone();
+    let footer_for_update = footer_drag.clone();
     drag.connect_drag_update(move |_, dx, dy| {
         if st.cancelled.get() {
+            return;
+        }
+        if footer_for_update.get() {
+            st.gesture_moved.set(true);
             return;
         }
         let Some(index) = *st.drag_index.borrow() else {
@@ -135,9 +163,20 @@ pub(crate) fn wire_grid_move(state: &Rc<GridLayoutState>, tile: &GridTile) {
         grid_update_size_caption(&st);
     });
     let st = state.clone();
-    drag.connect_drag_end(move |_, _, _| {
+    let footer_for_end = footer_drag.clone();
+    let center_for_end = start_center.clone();
+    drag.connect_drag_end(move |_, dx, _| {
         let index = *st.drag_index.borrow();
         *st.drag_index.borrow_mut() = None;
+        if footer_for_end.get() {
+            footer_for_end.set(false);
+            if st.gesture_moved.get() {
+                if let Some(index) = index {
+                    grid_reorder_footer(&st, index, center_for_end.get() + dx as f32);
+                }
+            }
+            return;
+        }
         if !st.gesture_moved.get() {
             return;
         }

@@ -28,7 +28,7 @@ pub(super) fn query_current_page(app: &Rc<App>, tx: &Tx) {
         set_nixd_status(app, "nixd: no option target for this config");
         return;
     }
-    let paths: Vec<(String, Vec<String>)> = app
+    let paths: Vec<(String, Vec<String>, bool)> = app
         .pages
         .borrow()
         .iter()
@@ -36,7 +36,13 @@ pub(super) fn query_current_page(app: &Rc<App>, tx: &Tx) {
         .map(|page| {
             page.controls
                 .iter()
-                .map(|c| (c.record.path(), c.record.path_segments().to_vec()))
+                .map(|c| {
+                    (
+                        c.record.path(),
+                        c.record.path_segments().to_vec(),
+                        c.record.spec.readonly,
+                    )
+                })
                 .collect()
         })
         .unwrap_or_default();
@@ -45,12 +51,18 @@ pub(super) fn query_current_page(app: &Rc<App>, tx: &Tx) {
         let parsed = Target::parse(&target);
         let mut parents: HashMap<String, Vec<metadata::ChildOption>> = HashMap::new();
         let mut infos = Vec::new();
-        for (path, segments) in paths {
-            if let Ok(info) = crate::nixd::query_option(&base, &target, &path) {
-                if info.type_str.is_some() || !info.description.is_empty() {
-                    infos.push((path, info));
-                    continue;
-                }
+        for (path, segments, readonly) in paths {
+            let mut info = crate::nixd::query_option(&base, &target, &path).unwrap_or_default();
+            if readonly {
+                info.value = parsed.as_ref().and_then(|target| {
+                    crate::metadata::detail(&base, target, &segments)
+                        .ok()
+                        .and_then(|detail| detail.value)
+                });
+            }
+            if info.type_str.is_some() || !info.description.is_empty() || info.value.is_some() {
+                infos.push((path, info));
+                continue;
             }
             let (Some(target), Some((parent, name))) =
                 (parsed.as_ref(), parent_segments(&segments))
@@ -67,6 +79,7 @@ pub(super) fn query_current_page(app: &Rc<App>, tx: &Tx) {
                     OptionInfo {
                         type_str: Some(child.type_str.clone()),
                         description: child.description.clone(),
+                        value: None,
                     },
                 ));
             }
@@ -90,6 +103,9 @@ pub(super) fn apply_infos(app: &Rc<App>, file: &str, infos: &[(String, OptionInf
             };
             if !info.description.is_empty() {
                 control.details.set_description(&info.description);
+            }
+            if let Some(value) = &info.value {
+                control.editor.borrow().set_display_value(value);
             }
             if let Some(type_str) = &info.type_str {
                 if let Some(widget) = type_widget(type_str) {

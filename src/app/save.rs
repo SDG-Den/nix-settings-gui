@@ -25,6 +25,9 @@ pub(super) fn collect_edits(app: &Rc<App>) -> Vec<edit::PendingEdit> {
             if !control.dep_visible.get() {
                 continue;
             }
+            if control.record.spec.readonly {
+                continue;
+            }
             let editor = control.editor.borrow();
             edits.extend(editor.edits(&control.record));
         }
@@ -38,6 +41,9 @@ fn validation_error(app: &Rc<App>) -> Option<String> {
     for page in app.pages.borrow().iter() {
         for control in &page.controls {
             if !control.dep_visible.get() {
+                continue;
+            }
+            if control.record.spec.readonly {
                 continue;
             }
             if let Some(error) = control.editor.borrow().validation_error() {
@@ -55,6 +61,9 @@ fn collect_package_checks(app: &Rc<App>) -> Vec<(String, String)> {
     for page in app.pages.borrow().iter() {
         for control in &page.controls {
             if !control.dep_visible.get() {
+                continue;
+            }
+            if control.record.spec.readonly {
                 continue;
             }
             if !widgets::is_package(&control.record) {

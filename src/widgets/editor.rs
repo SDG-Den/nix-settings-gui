@@ -186,6 +186,15 @@ impl Editor {
         }
     }
 
+    /// Replace the displayed value of a control that is not meant to be
+    /// edited, such as a computed read-only field.
+    pub fn set_display_value(&self, value: &str) {
+        match self {
+            Editor::Text(widget) | Editor::Path(widget) => widget.set_text(value),
+            _ => {}
+        }
+    }
+
     /// Render the editor's current state back to Nix source.
     pub fn to_nix(&self) -> String {
         match self {

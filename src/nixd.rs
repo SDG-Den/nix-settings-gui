@@ -52,6 +52,9 @@ pub fn options_expr(flake_path: &str, target: &str) -> Option<String> {
 pub struct OptionInfo {
     pub type_str: Option<String>,
     pub description: String,
+    /// Evaluated value, filled for read-only controls that show a computed
+    /// expression instead of a literal.
+    pub value: Option<String>,
 }
 
 /// Split nixd's hover markdown into a type line and the remaining description.
@@ -68,6 +71,7 @@ pub fn split_hover(hover: &str) -> OptionInfo {
     OptionInfo {
         type_str,
         description,
+        value: None,
     }
 }
 

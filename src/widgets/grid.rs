@@ -35,6 +35,7 @@ pub(crate) struct GridTile {
     pub(crate) id: String,
     pub(crate) added: bool,
     pub(crate) order: i64,
+    pub(crate) orig_order: i64,
     pub(crate) cell: CellRect,
     pub(crate) orig: CellRect,
     pub(crate) enabled: Option<gtk::Switch>,
@@ -759,6 +760,7 @@ pub(crate) fn make_grid_tile(
         id: id.to_string(),
         added: false,
         order,
+        orig_order: order,
         cell,
         orig: cell,
         enabled,
@@ -961,6 +963,59 @@ pub(crate) fn grid_hide_drop_preview(state: &Rc<GridLayoutState>) {
     state.drop_preview.set_visible(false);
 }
 
+pub(crate) fn grid_reorder_footer(state: &Rc<GridLayoutState>, index: usize, pointer_x: f32) {
+    let Some(flow) = state.footer_flow.as_ref() else {
+        return;
+    };
+    let mut tiles = state.tiles.borrow_mut();
+    let Some(tile) = tiles.get(index).cloned() else {
+        return;
+    };
+    if !grid_tile_is_footer(&tile) {
+        return;
+    }
+    let mut centers: Vec<(usize, f32)> = Vec::new();
+    for (position, other) in tiles.iter().enumerate() {
+        if position == index || !grid_tile_is_footer(other) {
+            continue;
+        }
+        if let Some(bounds) = other.overlay.compute_bounds(flow) {
+            centers.push((position, bounds.x() + bounds.width() / 2.0));
+        }
+    }
+    let target = centers
+        .iter()
+        .position(|(_, center)| pointer_x < *center)
+        .unwrap_or(centers.len());
+    tiles.remove(index);
+    let footer_indices: Vec<usize> = tiles
+        .iter()
+        .enumerate()
+        .filter(|(_, tile)| grid_tile_is_footer(tile))
+        .map(|(position, _)| position)
+        .collect();
+    let insert_at = footer_indices
+        .get(target)
+        .copied()
+        .unwrap_or_else(|| footer_indices.last().map(|position| position + 1).unwrap_or(tiles.len()));
+    tiles.insert(insert_at, tile);
+    let mut next = tiles
+        .iter()
+        .filter(|tile| !grid_tile_is_footer(tile))
+        .map(|tile| tile.order)
+        .max()
+        .unwrap_or(0)
+        + 10;
+    for tile in tiles.iter_mut().filter(|tile| grid_tile_is_footer(tile)) {
+        tile.order = next;
+        next += 10;
+    }
+    drop(tiles);
+    grid_reattach(state);
+    grid_set_status(state, "");
+    state.notify();
+}
+
 pub(crate) fn grid_reattach(state: &Rc<GridLayoutState>) {
     grid_hide_drop_preview(state);
     while let Some(child) = state.canvas.first_child() {
@@ -968,6 +1023,11 @@ pub(crate) fn grid_reattach(state: &Rc<GridLayoutState>) {
     }
     if let Some(flow) = &state.footer_flow {
         while let Some(child) = flow.first_child() {
+            if let Ok(box_child) = child.clone().downcast::<gtk::FlowBoxChild>() {
+                if let Some(inner) = box_child.child() {
+                    inner.unparent();
+                }
+            }
             flow.remove(&child);
         }
     }
@@ -987,6 +1047,9 @@ pub(crate) fn grid_reattach(state: &Rc<GridLayoutState>) {
     for tile in tiles.iter() {
         if state.profile.has_footer && grid_tile_is_footer(tile) {
             if let Some(flow) = &state.footer_flow {
+                if tile.overlay.parent().is_some() {
+                    tile.overlay.unparent();
+                }
                 flow.append(&tile.overlay);
             }
             continue;
@@ -1087,6 +1150,7 @@ pub(crate) fn grid_unchanged(state: &GridLayoutState) -> bool {
         && tiles.iter().zip(state.orig_ids.iter()).all(|(tile, id)| {
             tile.id == *id
                 && !tile.added
+                && tile.order == tile.orig_order
                 && tile.cell == tile.orig
                 && tile.enabled.as_ref().map(|switch| switch.is_active()) == tile.orig_enabled
                 && tile
