@@ -26,6 +26,7 @@ use std::rc::Rc;
 pub(crate) struct GridField {
     pub(crate) record: Record,
     pub(crate) editor: Editor,
+    pub(crate) orig_value: String,
 }
 
 /// A tile on the fixed-width placement grid of a `grid-configuration` control.
@@ -39,6 +40,10 @@ pub(crate) struct GridTile {
     pub(crate) enabled: Option<gtk::Switch>,
     pub(crate) orig_enabled: Option<bool>,
     pub(crate) fields: Vec<GridField>,
+    /// Settings that live outside the card's own attrset (dashboard
+    /// `dashOptions.<id>`), shown in the card's settings cog but written back
+    /// to their original assignment.
+    pub(crate) externals: Vec<GridField>,
     pub(crate) tile: gtk::ToggleButton,
     pub(crate) label: gtk::Label,
     pub(crate) overlay: gtk::Overlay,
@@ -174,6 +179,7 @@ pub(crate) struct GridLayoutState {
     pub(crate) selected: Rc<RefCell<Option<usize>>>,
     pub(crate) extras: Vec<(Record, Editor)>,
     pub(crate) on_change: ChangeHook,
+    pub(crate) ctx: BuildContext,
     pub(crate) canvas: gtk::Grid,
     pub(crate) drop_preview: gtk::Box,
     pub(crate) details: gtk::Box,
@@ -292,6 +298,7 @@ pub(crate) fn build_grid_configuration(record: &Record, ctx: &BuildContext) -> E
         selected: Rc::new(RefCell::new(None)),
         extras,
         on_change: on_change.clone(),
+        ctx: ctx.clone(),
         canvas: canvas.clone(),
         drop_preview: drop_preview.clone(),
         details: details.clone(),
@@ -407,6 +414,7 @@ pub(crate) fn grid_set_footer(tile: &mut GridTile, on: bool) {
             ..Record::default()
         },
         editor: Editor::Switch(super::basic::build_switch(value)),
+        orig_value: "false".to_string(),
     });
 }
 
@@ -559,6 +567,56 @@ fn build_grid_popout(fields: &[GridField]) -> gtk::Popover {
 /// Build one on-canvas tile: parse the grid fields out of its value, keep every
 /// other field as a child editor, and wrap the surface in an overlay that
 /// carries the resize strips.
+pub(crate) fn is_dashboard_card_id(id: &str) -> bool {
+    DASH_GRID_REGISTRY.contains(&id)
+}
+
+/// The dashboard card settings that live under `dashOptions.<id>` rather than
+/// inside the `dashCards.<id>` placement entry. They are shown in the card's
+/// settings cog and written back to their own assignments.
+fn dashboard_option_fields(
+    id: &str,
+    existing: &[GridField],
+    ctx: &BuildContext,
+) -> Vec<GridField> {
+    if ctx.records.is_empty() {
+        return Vec::new();
+    }
+    let mut fields: Vec<GridField> = Vec::new();
+    for (path, record) in ctx.records.iter() {
+        let Some(position) = path.find("dashOptions.") else {
+            continue;
+        };
+        let rest = &path[position + "dashOptions.".len()..];
+        let mut parts = rest.split('.');
+        let (Some(card), Some(key), None) = (parts.next(), parts.next(), parts.next()) else {
+            continue;
+        };
+        if card != id || key == "widgets" {
+            continue;
+        }
+        let already_present = existing
+            .iter()
+            .chain(fields.iter())
+            .any(|field| field.record.segments.last().map(String::as_str) == Some(key));
+        if already_present {
+            continue;
+        }
+        fields.push(GridField {
+            record: record.clone(),
+            editor: build_bespoke_child(record, ctx),
+            orig_value: record.value.clone(),
+        });
+    }
+    fields.sort_by(|left, right| {
+        left.record
+            .segments
+            .last()
+            .cmp(&right.record.segments.last())
+    });
+    fields
+}
+
 pub(crate) fn make_grid_tile(
     id: &str,
     value_text: &str,
@@ -589,6 +647,7 @@ pub(crate) fn make_grid_tile(
                 present.push(name);
                 let editor = build_bespoke_child(&child, ctx);
                 fields.push(GridField {
+                    orig_value: child.value.clone(),
                     record: child,
                     editor,
                 });
@@ -605,8 +664,17 @@ pub(crate) fn make_grid_tile(
             ..Record::default()
         };
         let editor = build_bespoke_child(&record, ctx);
-        fields.push(GridField { record, editor });
+        fields.push(GridField {
+            record,
+            editor,
+            orig_value: literal.to_string(),
+        });
     }
+    let externals = if profile.surface == GridSurface::Dashboard {
+        dashboard_option_fields(id, &fields, ctx)
+    } else {
+        Vec::new()
+    };
     cell.w = cell.w.clamp(1, profile.columns.max(1));
     cell.h = cell.h.max(1);
     cell.col = cell.col.clamp(0, (profile.columns - cell.w).max(0));
@@ -671,7 +739,9 @@ pub(crate) fn make_grid_tile(
     chrome.append(&remove_button);
     chrome.set_visible(false);
     overlay.add_overlay(&chrome);
-    let popout = build_grid_popout(&fields);
+    let mut cog_fields = fields.clone();
+    cog_fields.extend(externals.iter().cloned());
+    let popout = build_grid_popout(&cog_fields);
     popout.set_parent(&options_button);
     let for_options = popout;
     options_button.connect_clicked(move |_| for_options.popup());
@@ -694,6 +764,7 @@ pub(crate) fn make_grid_tile(
         enabled,
         orig_enabled: profile.has_enabled.then_some(enabled_value),
         fields,
+        externals,
         tile: button,
         label,
         overlay,
@@ -1008,6 +1079,25 @@ pub(crate) fn grid_tile_nix(tile: &GridTile, profile: GridProfile) -> String {
         None
     };
     grid_tile_fields_nix(&tile.id, tile.order, tile.cell, enabled, &fields)
+}
+
+pub(crate) fn grid_unchanged(state: &GridLayoutState) -> bool {
+    let tiles = state.tiles.borrow();
+    tiles.len() == state.orig_ids.len()
+        && tiles.iter().zip(state.orig_ids.iter()).all(|(tile, id)| {
+            tile.id == *id
+                && !tile.added
+                && tile.cell == tile.orig
+                && tile.enabled.as_ref().map(|switch| switch.is_active()) == tile.orig_enabled
+                && tile
+                    .fields
+                    .iter()
+                    .all(|field| field.editor.unchanged(&field.orig_value))
+        })
+        && state
+            .extras
+            .iter()
+            .all(|(record, editor)| editor.unchanged(&record.value))
 }
 
 pub(crate) fn grid_nix(state: &GridLayoutState) -> String {

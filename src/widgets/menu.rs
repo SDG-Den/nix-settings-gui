@@ -19,7 +19,81 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 pub(crate) const POPOUT_MAIN_FIELDS: &[&str] =
-    &["provider", "target", "action", "title", "iconFont"];
+    &["provider", "target", "action", "title", "icon", "iconFont"];
+
+pub(crate) const MENU_ICON_CHOICES: &[&str] = &[
+    "Common icons…",
+    "apps",
+    "school",
+    "bolt",
+    "settings",
+    "power_settings_new",
+    "keyboard",
+    "menu_book",
+    "home",
+    "search",
+    "screenshot_region",
+    "edit",
+    "document_scanner",
+    "qr_code_scanner",
+    "emoji_emotions",
+    "content_paste",
+    "edit_note",
+    "toggle_on",
+    "coffee",
+    "nightlight",
+    "battery_std",
+    "lock",
+    "bedtime",
+    "logout",
+    "restart_alt",
+    "wifi",
+    "tune",
+    "science",
+    "volume_up",
+    "volume_down",
+    "mic",
+    "headphones",
+    "music_note",
+    "movie",
+    "folder",
+    "terminal",
+    "code",
+    "build",
+    "download",
+    "upload",
+    "delete",
+    "refresh",
+    "star",
+    "favorite",
+    "info",
+    "help",
+    "warning",
+    "check_circle",
+    "cancel",
+    "close",
+    "add",
+    "remove",
+    "arrow_back",
+    "arrow_forward",
+    "chevron_right",
+    "expand_more",
+    "more_vert",
+    "open_in_new",
+    "link",
+    "image",
+    "palette",
+    "dark_mode",
+    "light_mode",
+    "schedule",
+    "calendar_month",
+    "notifications",
+    "do_not_disturb_on",
+    "bluetooth",
+    "vpn_key",
+    "print",
+    "display_settings",
+];
 pub(crate) const POPOUT_CONDITION_FIELDS: &[&str] = &["checked", "when", "disabled"];
 /// The values a pop-out held when it opened, so Cancel can write them back
 /// into the live row widgets.
@@ -125,6 +199,23 @@ pub(crate) fn menu_popup_fields(fields: &[AttrsetField], on_resize: Rc<dyn Fn()>
             menu_field_help(&field.name),
             &field.editor.root(),
         );
+        if field.name == "icon" {
+            if let Editor::Text(entry) = &field.editor {
+                let picker = gtk::DropDown::from_strings(MENU_ICON_CHOICES);
+                picker.set_selected(0);
+                picker.set_halign(gtk::Align::Start);
+                let entry = entry.clone();
+                picker.connect_selected_notify(move |picker| {
+                    let index = picker.selected() as usize;
+                    if let Some(name) = MENU_ICON_CHOICES.get(index) {
+                        if index > 0 {
+                            entry.set_text(name);
+                        }
+                    }
+                });
+                block.append(&picker);
+            }
+        }
         blocks.push((field.name.clone(), block.clone()));
         vbox.append(&block);
     }
@@ -249,7 +340,8 @@ pub(crate) fn connect_menu_edit(
             popup.set_transient_for(Some(&win));
         }
         popup_content.append(&popout.popup_box);
-        popup.set_default_size(440, -1);
+        let (_, natural, _, _) = popup_content.measure(gtk::Orientation::Vertical, 440);
+        popup.set_default_size(440, natural.max(1));
         popup.present();
     });
 }
@@ -319,7 +411,12 @@ pub(crate) fn make_menu_row(
     ));
     let on_resize: Rc<dyn Fn()> = {
         let popup = popup.clone();
-        Rc::new(move || popup.set_default_size(440, -1))
+        let content = popup_content.clone();
+        Rc::new(move || {
+            let (_, natural, _, _) = content.measure(gtk::Orientation::Vertical, 440);
+            popup.set_default_size(440, natural.max(1));
+            popup.queue_resize();
+        })
     };
     let layout = menu_popup_fields(&popup_fields.borrow(), on_resize.clone());
     let popup_box = layout.root.clone();
@@ -398,7 +495,21 @@ pub(crate) fn make_menu_row(
     let icon_widget: gtk::Widget = if icon.is_empty() {
         gtk::Label::new(Some(&orig_label.chars().next().unwrap_or(' ').to_string())).upcast()
     } else {
-        gtk::Image::from_icon_name(&icon).upcast()
+        let has_theme_icon = gtk::gdk::Display::default()
+            .map(|display| gtk::IconTheme::for_display(&display).has_icon(&icon))
+            .unwrap_or(false);
+        if has_theme_icon {
+            let image = gtk::Image::from_icon_name(&icon);
+            image.set_tooltip_text(Some(&icon));
+            image.upcast()
+        } else {
+            let label = gtk::Label::builder()
+                .label(&icon)
+                .tooltip_text(&icon)
+                .css_classes(["dim-label", "caption"])
+                .build();
+            label.upcast()
+        }
     };
     let action = raw_of("action");
     let target = raw_of("target");

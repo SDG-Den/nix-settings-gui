@@ -27,6 +27,7 @@ use crate::apply::ApplyRequest;
 use crate::dsl::{OptionSpec, WidgetKind};
 use crate::model::Record;
 use crate::value;
+use gtk::prelude::*;
 use std::cell::RefCell;
 use std::rc::Rc;
 /// Build the appropriate control for a record. `type_str` is the nixd type when
@@ -34,6 +35,9 @@ use std::rc::Rc;
 /// shape of the current value.
 pub fn build(record: &Record, type_str: Option<&str>, ctx: &BuildContext) -> Editor {
     let editor = build_editor(record, type_str, ctx);
+    if record.spec.readonly {
+        editor.root().set_sensitive(false);
+    }
     connect_apply(record, &editor, ctx);
     editor
 }

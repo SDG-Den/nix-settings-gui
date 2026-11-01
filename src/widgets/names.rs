@@ -180,6 +180,7 @@ pub(crate) const MENU_FIELD_HELP: &[(&str, &str)] = &[
     ("target", "URL or path opened when the entry is activated."),
     ("action", "Shell command run when the entry is activated."),
     ("title", "Header text while this submenu is open; defaults to the label."),
+    ("icon", "Material Symbols name, for example school, wifi or power_settings_new."),
     ("iconFont", "Font family for the icon glyph when it is not the menu font."),
     (
         "checked",
@@ -328,7 +329,7 @@ mod tests {
     #[test]
     fn popout_help_covers_every_field() {
         for name in [
-            "provider", "target", "action", "title", "iconFont", "checked", "when", "disabled",
+            "icon", "provider", "target", "action", "title", "iconFont", "checked", "when", "disabled",
         ] {
             assert!(
                 menu_field_help(name).is_some(),

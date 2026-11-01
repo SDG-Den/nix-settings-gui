@@ -1,6 +1,6 @@
 use super::bar::{bar_nix, dock_nix};
 use super::context::ChangeHook;
-use super::grid::{grid_nix, GridLayoutState};
+use super::grid::{grid_nix, grid_unchanged, GridLayoutState};
 use super::keybinds::{connect_keybind_row, csv_matches_list_source, keybinds_nix, KeybindRow};
 use super::menu::{connect_menu_row, menu_rows_nix, menu_rows_unchanged, MenuRow};
 use super::monitors::{connect_monitor_row, monitor_row_unchanged, monitors_nix, MonitorRow};
@@ -397,23 +397,12 @@ impl Editor {
             } => users::users_unchanged(rows, *orig_count, *home_manager, home.as_ref()),
             Editor::SecureBoot { toggle, .. } => toggle.is_active() == truthy(original),
             Editor::Grid { state, .. } => {
-                let tiles = state.tiles.borrow();
-                tiles.len() == state.orig_ids.len()
-                    && tiles.iter().zip(state.orig_ids.iter()).all(|(tile, id)| {
-                        tile.id == *id
-                            && !tile.added
-                            && tile.cell == tile.orig
-                            && tile.enabled.as_ref().map(|switch| switch.is_active())
-                                == tile.orig_enabled
-                            && tile
-                                .fields
-                                .iter()
-                                .all(|field| field.editor.unchanged(&field.record.value))
+                grid_unchanged(state)
+                    && state.tiles.borrow().iter().all(|tile| {
+                        tile.externals
+                            .iter()
+                            .all(|field| field.editor.unchanged(&field.record.value))
                     })
-                    && state
-                        .extras
-                        .iter()
-                        .all(|(record, editor)| editor.unchanged(&record.value))
             }
             _ => self.to_nix().trim() == original.trim(),
         }
@@ -457,6 +446,23 @@ impl Editor {
             let mut out = Vec::new();
             for (child, editor) in children {
                 out.extend(editor.edits(child));
+            }
+            return out;
+        }
+        if let Editor::Grid { state, .. } = self {
+            let mut out = Vec::new();
+            if !grid_unchanged(state) {
+                out.push(PendingEdit {
+                    file: record.file.clone(),
+                    start: record.byte_start,
+                    end: record.byte_end,
+                    value: grid_nix(state),
+                });
+            }
+            for tile in state.tiles.borrow().iter() {
+                for field in &tile.externals {
+                    out.extend(field.editor.edits(&field.record));
+                }
             }
             return out;
         }

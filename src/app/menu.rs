@@ -229,6 +229,18 @@ fn rebuild_pages(app: &Rc<App>) {
     super::enrich::query_current_page(app, &app.tx);
 }
 
+fn dashboard_card_option(path: &str) -> bool {
+    let Some(position) = path.find("dashOptions.") else {
+        return false;
+    };
+    let rest = &path[position + "dashOptions.".len()..];
+    let mut parts = rest.split('.');
+    let (Some(card), Some(key), None) = (parts.next(), parts.next(), parts.next()) else {
+        return false;
+    };
+    key != "widgets" && crate::widgets::is_dashboard_card_id(card)
+}
+
 fn build_page(app: &Rc<App>, menu: &crate::model::MenuModel) -> MenuPage {
     let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
     content.set_margin_top(12);
@@ -267,6 +279,9 @@ fn build_page(app: &Rc<App>, menu: &crate::model::MenuModel) -> MenuPage {
     let ranks = crate::model::group_ranks(&menu.records);
     for (src_index, record) in menu.records.iter().enumerate() {
         if record.spec.hidden && !app.advanced.get() {
+            continue;
+        }
+        if dashboard_card_option(&record.path()) {
             continue;
         }
         let row = build_control_row(app, record, src_index, records.clone());

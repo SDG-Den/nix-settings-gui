@@ -324,7 +324,8 @@ pub(crate) fn build_secureboot(record: &Record, ctx: &BuildContext) -> Editor {
         let update = update.clone();
         let last_state = last_state.clone();
         toggle.connect_active_notify(move |_| {
-            if let Some(result) = last_state.borrow().clone() {
+            let cached = last_state.borrow().clone();
+            if let Some(result) = cached {
                 update(result);
             }
         });

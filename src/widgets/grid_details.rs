@@ -1,4 +1,3 @@
-use super::context::BuildContext;
 use super::dms_catalog::{card_defaults, card_size, widget_description, widget_icon};
 use super::fields::{dim_line, dim_line_with_help};
 use super::grid::{
@@ -357,7 +356,7 @@ pub(crate) fn grid_add_tile(state: &Rc<GridLayoutState>, id: &str, footer: bool)
         grid_first_fit(&taken, profile.columns, w, h)
     };
     let value = grid_scaffold_value(profile, id, order, cell);
-    let mut tile = make_grid_tile(id, &value, profile, &BuildContext::default());
+    let mut tile = make_grid_tile(id, &value, profile, &state.ctx);
     if footer {
         tile.cell = cell;
         tile.fields
