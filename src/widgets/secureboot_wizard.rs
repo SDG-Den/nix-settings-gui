@@ -127,14 +127,6 @@ pub(crate) fn open(
     firmware_row.add_suffix(&firmware_builtin);
     options_group.add(&firmware_row);
 
-    let disable_grub = gtk::Switch::new();
-    disable_grub.set_active(true);
-    let grub_row = adw::ActionRow::new();
-    grub_row.set_title("Disable GRUB");
-    grub_row.set_subtitle("Lanzaboote replaces systemd-boot; GRUB must not stay enabled");
-    grub_row.add_suffix(&disable_grub);
-    options_group.add(&grub_row);
-
     content.append(&options_group);
 
     let log = gtk::Label::builder()
@@ -164,12 +156,10 @@ pub(crate) fn open(
         let key_drop = key_drop.clone();
         let microsoft = microsoft.clone();
         let firmware_builtin = firmware_builtin.clone();
-        let disable_grub = disable_grub.clone();
         Rc::new(move || SetupOptions {
             key_action: key_action(key_drop.selected()),
             include_microsoft: microsoft.is_active(),
             include_firmware_builtin: firmware_builtin.is_active(),
-            disable_grub: disable_grub.is_active(),
         })
     };
 

@@ -329,7 +329,8 @@ mod tests {
     #[test]
     fn popout_help_covers_every_field() {
         for name in [
-            "icon", "provider", "target", "action", "title", "iconFont", "checked", "when", "disabled",
+            "icon", "provider", "target", "action", "title", "iconFont", "checked", "when",
+            "disabled",
         ] {
             assert!(
                 menu_field_help(name).is_some(),

@@ -573,11 +573,7 @@ pub(crate) fn is_dashboard_card_id(id: &str) -> bool {
 /// The dashboard card settings that live under `dashOptions.<id>` rather than
 /// inside the `dashCards.<id>` placement entry. They are shown in the card's
 /// settings cog and written back to their own assignments.
-fn dashboard_option_fields(
-    id: &str,
-    existing: &[GridField],
-    ctx: &BuildContext,
-) -> Vec<GridField> {
+fn dashboard_option_fields(id: &str, existing: &[GridField], ctx: &BuildContext) -> Vec<GridField> {
     if ctx.records.is_empty() {
         return Vec::new();
     }
@@ -992,10 +988,12 @@ pub(crate) fn grid_reorder_footer(state: &Rc<GridLayoutState>, index: usize, poi
         .filter(|(_, tile)| grid_tile_is_footer(tile))
         .map(|(position, _)| position)
         .collect();
-    let insert_at = footer_indices
-        .get(target)
-        .copied()
-        .unwrap_or_else(|| footer_indices.last().map(|position| position + 1).unwrap_or(tiles.len()));
+    let insert_at = footer_indices.get(target).copied().unwrap_or_else(|| {
+        footer_indices
+            .last()
+            .map(|position| position + 1)
+            .unwrap_or(tiles.len())
+    });
     tiles.insert(insert_at, tile);
     let mut next = tiles
         .iter()

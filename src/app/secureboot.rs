@@ -11,7 +11,7 @@ use crate::edit::{self, PendingEdit};
 use crate::flake_inputs::{self, FlakeInput};
 use crate::model::Record;
 use crate::scan;
-use crate::secureboot::{self, SetupOptions};
+use crate::secureboot;
 use crate::value;
 use crate::widgets;
 
@@ -38,8 +38,8 @@ pub(super) fn status_hook(app: &Rc<App>) -> widgets::SecureBootStatus {
 
 pub(super) fn write_hook(app: &Rc<App>) -> widgets::SecureBootWrite {
     let app = app.clone();
-    Rc::new(move |record, options| {
-        let summary = write_config(&app, &record, &options)?;
+    Rc::new(move |record, _options| {
+        let summary = write_config(&app, &record)?;
         let tx = app.tx.clone();
         save::rescan(&app, &tx);
         Ok(summary)
@@ -136,7 +136,7 @@ fn list_span(text: &str) -> Option<(usize, usize, Vec<String>)> {
     Some((start, end, items))
 }
 
-fn write_config(app: &Rc<App>, record: &Record, options: &SetupOptions) -> Result<String, String> {
+fn write_config(app: &Rc<App>, record: &Record) -> Result<String, String> {
     if record.path() != "boot.lanzaboote.enable" {
         return Err("Attach the Secure Boot widget to boot.lanzaboote.enable".to_string());
     }
@@ -225,42 +225,41 @@ fn write_config(app: &Rc<App>, record: &Record, options: &SetupOptions) -> Resul
         .iter()
         .find(|assignment| has_path(assignment, &systemd_boot))
     {
-        if assignment.value.trim() != "lib.mkForce false" {
+        if assignment.value.trim() != secureboot::BOOTLOADER_OFF {
             replace(
                 &mut edits,
                 &record.file,
                 assignment.value_start,
                 assignment.value_end,
-                "lib.mkForce false".to_string(),
+                secureboot::BOOTLOADER_OFF.to_string(),
             );
         }
     } else {
-        block.push("boot.loader.systemd-boot.enable = lib.mkForce false;".to_string());
+        block.push(format!(
+            "boot.loader.systemd-boot.enable = {};",
+            secureboot::BOOTLOADER_OFF
+        ));
     }
 
-    if options.disable_grub {
-        let grub_enable = ["boot", "loader", "grub", "enable"];
-        if let Some(assignment) = siblings
-            .iter()
-            .find(|assignment| has_path(assignment, &grub_enable))
-        {
-            if !crate::widgets::nix::truthy(&assignment.value) {
-                // GRUB is already disabled.
-            } else {
-                replace(
-                    &mut edits,
-                    &record.file,
-                    assignment.value_start,
-                    assignment.value_end,
-                    "lib.mkForce false".to_string(),
-                );
-            }
-        } else if siblings
-            .iter()
-            .any(|assignment| starts_with_path(assignment, &["boot", "loader", "grub"]))
-        {
-            block.push("boot.loader.grub.enable = lib.mkForce false;".to_string());
+    let grub_enable = ["boot", "loader", "grub", "enable"];
+    if let Some(assignment) = siblings
+        .iter()
+        .find(|assignment| has_path(assignment, &grub_enable))
+    {
+        if assignment.value.trim() != secureboot::BOOTLOADER_OFF {
+            replace(
+                &mut edits,
+                &record.file,
+                assignment.value_start,
+                assignment.value_end,
+                secureboot::BOOTLOADER_OFF.to_string(),
+            );
         }
+    } else {
+        block.push(format!(
+            "boot.loader.grub.enable = {};",
+            secureboot::BOOTLOADER_OFF
+        ));
     }
 
     write_lanzaboote(&siblings, &record.file, &mut edits, &mut block);

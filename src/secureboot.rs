@@ -377,12 +377,16 @@ impl KeyAction {
 /// dendritic flakes, so `inputs` is always in scope for the generated import.
 pub const LANZABOOTE_IMPORT: &str = "inputs.lanzaboote.nixosModules.lanzaboote";
 
+/// Both bootloaders are disabled only while Lanzaboote is enabled. The
+/// condition reads the Lanzaboote toggle and nothing else, so it cannot recurse
+/// through systemd-boot's own default that disables GRUB.
+pub const BOOTLOADER_OFF: &str = "lib.mkIf config.boot.lanzaboote.enable (lib.mkForce false)";
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SetupOptions {
     pub key_action: KeyAction,
     pub include_microsoft: bool,
     pub include_firmware_builtin: bool,
-    pub disable_grub: bool,
 }
 
 impl Default for SetupOptions {
@@ -391,7 +395,6 @@ impl Default for SetupOptions {
             key_action: KeyAction::Keep,
             include_microsoft: true,
             include_firmware_builtin: false,
-            disable_grub: true,
         }
     }
 }
@@ -534,7 +537,10 @@ pub fn nix_string(value: &str) -> String {
 pub fn config_lines() -> Vec<String> {
     let mut lines = Vec::new();
     lines.push(format!("imports = [ {LANZABOOTE_IMPORT} ];"));
-    lines.push("boot.loader.systemd-boot.enable = lib.mkForce false;".to_string());
+    lines.push(format!(
+        "boot.loader.systemd-boot.enable = {BOOTLOADER_OFF};"
+    ));
+    lines.push(format!("boot.loader.grub.enable = {BOOTLOADER_OFF};"));
     lines.push(format!(
         "boot.lanzaboote.pkiBundle = {};",
         nix_string(DEFAULT_PKI_BUNDLE)
@@ -667,6 +673,16 @@ mod tests {
         assert!(rnix::Root::parse(&wrapped).ok().is_ok());
         assert!(block.contains("boot.lanzaboote.pkiBundle = \"/var/lib/sbctl\";"));
         assert!(block.contains("inputs.lanzaboote.nixosModules.lanzaboote"));
+    }
+
+    #[test]
+    fn forces_both_bootloaders_off_only_while_lanzaboote_is_enabled() {
+        let block = config_block();
+        assert!(block.contains(&format!(
+            "boot.loader.systemd-boot.enable = {BOOTLOADER_OFF};"
+        )));
+        assert!(block.contains(&format!("boot.loader.grub.enable = {BOOTLOADER_OFF};")));
+        assert!(!block.contains("!config.boot.loader.grub.enable"));
     }
 
     #[test]

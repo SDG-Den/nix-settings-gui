@@ -82,7 +82,10 @@ pub(crate) fn wire_grid_move(state: &Rc<GridLayoutState>, tile: &GridTile) {
         };
         let is_footer = {
             let tiles = st.tiles.borrow();
-            st.profile.has_footer && tiles.get(index).is_some_and(|tile| grid_tile_is_footer(tile))
+            st.profile.has_footer
+                && tiles
+                    .get(index)
+                    .is_some_and(|tile| grid_tile_is_footer(tile))
         };
         footer_for_begin.set(is_footer);
         if is_footer {

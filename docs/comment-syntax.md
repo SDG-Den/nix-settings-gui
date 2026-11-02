@@ -444,6 +444,24 @@ generated import assumes `inputs` is in scope, as it is in the dendritic flake
 layout this project targets. The attached `boot.lanzaboote.enable` assignment is
 written by the normal control edit, so the switch stays the source of truth.
 
+Both bootloaders are disabled only while Lanzaboote is enabled:
+
+```nix
+boot.loader.systemd-boot.enable =
+  lib.mkIf config.boot.lanzaboote.enable (lib.mkForce false);
+boot.loader.grub.enable =
+  lib.mkIf config.boot.lanzaboote.enable (lib.mkForce false);
+```
+
+The condition reads `boot.lanzaboote.enable` and nothing else. Do not add
+`!config.boot.loader.grub.enable` to the systemd-boot condition. Enabling
+systemd-boot contributes `boot.loader.grub.enable = lib.mkDefault false;` inside
+`lib.mkIf config.boot.loader.systemd-boot.enable`, so a condition that reads
+GRUB while defining systemd-boot waits on itself and Nix reports infinite
+recursion. With the `mkIf` form above, disabling Lanzaboote restores the
+systemd-boot settings from the hardware module; enabling it forces both
+bootloaders off.
+
 The steps are derived from live state, so the dialog can be reopened after a
 reboot: keys, configuration, rebuild, firmware setup mode, enrollment, and
 verification. Key generation is refused while `/var/lib/sbctl/keys` exists.

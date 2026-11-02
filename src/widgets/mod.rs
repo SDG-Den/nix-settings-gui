@@ -45,8 +45,8 @@ pub(crate) use context::{
     SecureBootStatus, SecureBootWrite, WallpaperActions, WallpaperSetHook,
 };
 pub(crate) use details::InfoDetails;
-pub(crate) use grid::is_dashboard_card_id;
 pub(crate) use dispatch::{build, is_package};
 pub(crate) use editor::Editor;
+pub(crate) use grid::is_dashboard_card_id;
 pub(crate) use nix::{attr_key, literal_for_widget};
 pub(crate) use submodule::{build_bespoke_child, hook_notify, scan_children};
