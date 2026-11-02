@@ -1,5 +1,5 @@
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
@@ -361,9 +361,13 @@ fn build_ui(
         field_scrim,
         saving: Cell::new(false),
         scans_in_flight: Cell::new(0),
+        scan_epoch: Cell::new(0),
         package_service: PackageService::new(),
         plugin_registry: Rc::new(PluginRegistryState::new()),
         wallpaper_set: RefCell::new(None),
+        wallpaper_pending: RefCell::new(HashMap::new()),
+        wallpaper_loading: RefCell::new(HashSet::new()),
+        wallpaper_generation: Cell::new(0),
         secureboot_state: RefCell::new(None),
         secureboot_pending: RefCell::new(Vec::new()),
         secureboot_loading: Cell::new(false),

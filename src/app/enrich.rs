@@ -77,6 +77,7 @@ pub(super) fn query_current_page(app: &Rc<App>, tx: &Tx) {
 
 pub(super) fn apply_infos(app: &Rc<App>, file: &str, infos: &[(String, OptionInfo)]) {
     let mut updated = 0;
+    let ctx = build_context(app);
     for page in app.pages.borrow().iter() {
         if page.file != file {
             continue;
@@ -98,8 +99,7 @@ pub(super) fn apply_infos(app: &Rc<App>, file: &str, infos: &[(String, OptionInf
                         _ => false,
                     };
                     if needs_rebuild && control.editor.borrow().unchanged(&control.record.value) {
-                        let editor =
-                            widgets::build(&control.record, Some(type_str), &build_context(app));
+                        let editor = widgets::build(&control.record, Some(type_str), &ctx);
                         control.set_editor(editor);
                         connect_dirty(app, control);
                     }

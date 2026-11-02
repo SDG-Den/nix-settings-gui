@@ -122,7 +122,20 @@ fn locate_descriptor(
 
 pub(super) fn handle_msg(app: &Rc<App>, tx: &Tx, msg: Msg) {
     match msg {
-        Msg::Scanned(Ok(result)) => {
+        Msg::Scanned { epoch, result } => {
+            if epoch != app.scan_epoch.get() {
+                scan_finished(app);
+                return;
+            }
+            let result = match result {
+                Ok(result) => result,
+                Err(e) => {
+                    app.status.set_text("Scan failed");
+                    show_error(&app.window, &e);
+                    scan_finished(app);
+                    return;
+                }
+            };
             *app.targets.borrow_mut() = result.targets.clone();
             let hosts = scan::hosts_from_targets(&result.targets);
             if !app.manual_host.get() {
@@ -198,14 +211,40 @@ pub(super) fn handle_msg(app: &Rc<App>, tx: &Tx, msg: Msg) {
                 let report = crate::scan::merge_descriptors(&mut result, &descriptors, &|path| {
                     locate_descriptor(&cache, &base, &target, path)
                 });
-                let _ = tx.send_blocking(Msg::DescriptorsMerged(result, report));
+                let _ = tx.send_blocking(Msg::DescriptorsMerged {
+                    epoch,
+                    result,
+                    report,
+                });
             });
         }
-        Msg::DescriptorsMerged(result, report) => finish_scan(app, result, report, None),
-        Msg::Scanned(Err(e)) => {
-            app.status.set_text("Scan failed");
-            show_error(&app.window, &e);
-            scan_finished(app);
+        Msg::DescriptorsMerged {
+            epoch,
+            result,
+            report,
+        } => {
+            if epoch != app.scan_epoch.get() {
+                scan_finished(app);
+                return;
+            }
+            finish_scan(app, result, report, None);
+        }
+        Msg::WallpaperSet { key, result } => {
+            app.wallpaper_loading.borrow_mut().remove(&key);
+            if let Ok(set) = &result {
+                *app.wallpaper_set.borrow_mut() = Some((key.clone(), Ok(set.clone())));
+            }
+            let pending = app
+                .wallpaper_pending
+                .borrow_mut()
+                .remove(&key)
+                .unwrap_or_default();
+            for callback in pending {
+                callback(result.clone());
+            }
+        }
+        Msg::DefaultResolved { file, path, result } => {
+            super::controls::apply_default(app, &file, &path, result);
         }
         Msg::SaveProgress(fraction, label) => {
             set_busy(app, &label, fraction);
@@ -216,6 +255,7 @@ pub(super) fn handle_msg(app: &Rc<App>, tx: &Tx, msg: Msg) {
             if pending {
                 run_rebuild(app);
             }
+            app.invalidate_wallpaper();
             rescan(app, tx);
             clear_busy(app);
         }
@@ -233,6 +273,7 @@ pub(super) fn handle_msg(app: &Rc<App>, tx: &Tx, msg: Msg) {
         }
         Msg::Inserted(Ok(())) => {
             app.status.set_text("Option added");
+            app.invalidate_wallpaper();
             rescan(app, tx);
         }
         Msg::Inserted(Err(e)) => {
@@ -241,6 +282,7 @@ pub(super) fn handle_msg(app: &Rc<App>, tx: &Tx, msg: Msg) {
         }
         Msg::SnippetInserted(Ok(())) => {
             app.status.set_text("Snippet added");
+            app.invalidate_wallpaper();
             rescan(app, tx);
         }
         Msg::SnippetInserted(Err(e)) => {
@@ -304,6 +346,7 @@ pub(super) fn handle_msg(app: &Rc<App>, tx: &Tx, msg: Msg) {
         }
         Msg::InputsSaved(Ok(())) => {
             app.status.set_text("Flake inputs saved");
+            app.invalidate_wallpaper();
             rescan(app, tx);
         }
         Msg::InputsSaved(Err(e)) => {

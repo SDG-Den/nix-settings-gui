@@ -473,7 +473,9 @@ impl SetupStage {
             Self::NotUefi => "Secure Boot needs UEFI. Switch the firmware from legacy boot first.",
             Self::Keys => "Create a key bundle in /var/lib/sbctl, or migrate /etc/secureboot.",
             Self::Config => "Add the Lanzaboote input and write the NixOS configuration.",
-            Self::Rebuild => "Apply the configuration so Lanzaboote installs signed boot files.",
+            Self::Rebuild => {
+                "Apply the configuration so Lanzaboote installs signed boot files, then reboot to activate the new generation."
+            }
             Self::FirmwareSetup => {
                 "Reboot into firmware settings, enable Secure Boot, and reset to setup mode."
             }

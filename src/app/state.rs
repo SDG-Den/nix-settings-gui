@@ -1,5 +1,5 @@
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -17,8 +17,24 @@ use crate::widgets::{Editor, InfoDetails};
 use super::apply::ApplyState;
 
 pub(super) enum Msg {
-    Scanned(Result<ScanResult, String>),
-    DescriptorsMerged(ScanResult, crate::descriptors::MergeReport),
+    Scanned {
+        epoch: u64,
+        result: Result<ScanResult, String>,
+    },
+    DescriptorsMerged {
+        epoch: u64,
+        result: ScanResult,
+        report: crate::descriptors::MergeReport,
+    },
+    WallpaperSet {
+        key: String,
+        result: Result<crate::metadata::WallpaperSet, String>,
+    },
+    DefaultResolved {
+        file: String,
+        path: String,
+        result: Result<String, String>,
+    },
     Saved(Result<usize, String>),
     SaveProgress(f64, String),
     Inserted(Result<(), String>),
@@ -157,6 +173,7 @@ impl PackageService {
 
 type RegistryCallback = Box<dyn FnOnce(Result<Vec<crate::metadata::RegistryPlugin>, String>)>;
 type PluginSettingsCallback = Box<dyn FnOnce(Result<Option<String>, String>)>;
+pub(super) type WallpaperCallback = Box<dyn FnOnce(Result<crate::metadata::WallpaperSet, String>)>;
 
 /// The DMS plugin registry id list, fetched at most once per flake open.
 /// `pending` holds picker callbacks waiting on an in-flight fetch.
@@ -217,10 +234,14 @@ pub(super) struct App {
     pub(super) field_scrim: gtk::Box,
     pub(super) saving: Cell<bool>,
     pub(super) scans_in_flight: Cell<u32>,
+    pub(super) scan_epoch: Cell<u64>,
     pub(super) package_service: Rc<PackageService>,
     pub(super) plugin_registry: Rc<PluginRegistryState>,
     pub(super) wallpaper_set:
         RefCell<Option<(String, Result<crate::metadata::WallpaperSet, String>)>>,
+    pub(super) wallpaper_pending: RefCell<HashMap<String, Vec<WallpaperCallback>>>,
+    pub(super) wallpaper_loading: RefCell<HashSet<String>>,
+    pub(super) wallpaper_generation: Cell<u64>,
     pub(super) secureboot_state:
         RefCell<Option<Result<crate::secureboot::SecureBootState, String>>>,
     pub(super) secureboot_pending: RefCell<Vec<SecureBootCallback>>,
@@ -258,6 +279,16 @@ pub(super) struct App {
     pub(super) manual_host: Cell<bool>,
     pub(super) pending_rebuild: Cell<bool>,
     pub(super) watchers: RefCell<Vec<gio::FileMonitor>>,
+}
+
+impl App {
+    /// Drop the wallpaper preset result so the next picker rebuild fetches a
+    /// fresh set. The generation keeps an older in-flight result from matching.
+    pub(super) fn invalidate_wallpaper(&self) {
+        self.wallpaper_generation
+            .set(self.wallpaper_generation.get() + 1);
+        *self.wallpaper_set.borrow_mut() = None;
+    }
 }
 
 #[cfg(test)]

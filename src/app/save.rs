@@ -270,6 +270,7 @@ pub(super) fn run_changes_prompt(app: &Rc<App>, on_save: Box<dyn Fn()>) {
                 match result {
                     Ok(Ok(count)) => {
                         state.status.set_text(&format!("Saved {count} file(s)"));
+                        state.invalidate_wallpaper();
                         dialog.close();
                         on_save();
                     }
@@ -315,12 +316,15 @@ pub(super) fn reload(app: &Rc<App>, tx: &Tx) {
 /// Re-read every file under the current root, exactly like `open_flake`.
 pub(super) fn rescan(app: &Rc<App>, tx: &Tx) {
     let base = app.base.borrow().clone();
-    *app.wallpaper_set.borrow_mut() = None;
+    let epoch = app.scan_epoch.get() + 1;
+    app.scan_epoch.set(epoch);
     app.status.set_text("reloading from disk...");
     scan_started(app);
     spawn(tx, move |tx| {
+        let started = crate::timing::start();
         let result = scan::scan_root(&base);
-        let _ = tx.send_blocking(Msg::Scanned(result));
+        crate::timing::report("scan_root", started);
+        let _ = tx.send_blocking(Msg::Scanned { epoch, result });
     });
 }
 

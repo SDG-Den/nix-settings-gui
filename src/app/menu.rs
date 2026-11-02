@@ -5,7 +5,7 @@ use gtk::prelude::*;
 
 use crate::model::MenuModel;
 
-use super::controls::{build_control_row, control_cmp, evaluate_dependencies};
+use super::controls::{build_context, build_control_row, control_cmp, evaluate_dependencies};
 use super::dialogs::{open_add_option, open_snippet_dialog};
 use super::save::rescan;
 use super::state::{App, ControlRow, InsertButton, MenuPage, Tx};
@@ -17,7 +17,7 @@ use super::state::{App, ControlRow, InsertButton, MenuPage, Tx};
 pub(super) fn open_flake(app: &Rc<App>, tx: &Tx, path: &str) {
     *app.base.borrow_mut() = path.to_string();
     app.plugin_registry.reset();
-    *app.wallpaper_set.borrow_mut() = None;
+    app.invalidate_wallpaper();
     app.config.borrow_mut().remember(path);
     let _ = app.config.borrow().save();
     crate::nixd::warm(Some(path));
@@ -202,6 +202,7 @@ fn select_file(app: &Rc<App>, file: &str) {
 }
 
 fn rebuild_pages(app: &Rc<App>) {
+    let started = crate::timing::start();
     let old_pages = app.pages.take();
     for page in &old_pages {
         app.stack.remove(&page.root);
@@ -226,6 +227,7 @@ fn rebuild_pages(app: &Rc<App>) {
         }
     }
     super::controls::apply_control_filter(app);
+    crate::timing::report("rebuild_pages", started);
     super::enrich::query_current_page(app, &app.tx);
 }
 
@@ -274,6 +276,8 @@ fn build_page(app: &Rc<App>, menu: &crate::model::MenuModel) -> MenuPage {
             .map(|record| (record.path(), record.clone()))
             .collect(),
     );
+    let mut base_ctx = build_context(app);
+    base_ctx.records = records.clone();
     let mut ordinary = Vec::new();
     let mut advanced = Vec::new();
     let ranks = crate::model::group_ranks(&menu.records);
@@ -284,7 +288,7 @@ fn build_page(app: &Rc<App>, menu: &crate::model::MenuModel) -> MenuPage {
         if dashboard_card_option(&record.path()) {
             continue;
         }
-        let row = build_control_row(app, record, src_index, records.clone());
+        let row = build_control_row(app, record, src_index, base_ctx.clone());
         if record.spec.advanced {
             advanced.push(row);
         } else {

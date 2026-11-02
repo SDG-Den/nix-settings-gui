@@ -9,6 +9,7 @@ use crate::metadata::{self, Target};
 use crate::model::Record;
 use crate::widgets::{self, Editor};
 
+use super::pump::spawn;
 use super::state::{App, ControlRow, MenuPage, Msg};
 /// Bolt shown beside an option's label when its applyCommand runs on change.
 fn live_marker(record: &Record) -> gtk::Image {
@@ -172,7 +173,8 @@ fn plugin_registry_hook(app: &Rc<App>) -> widgets::PluginRegistryHook {
     })
 }
 
-/// Wallpaper set hook: evaluate once per flake and target and cache the result.
+/// Wallpaper set hook: serve a cached set instantly, or fetch it on a worker
+/// thread so the `nix eval` never blocks the main loop.
 fn wallpaper_set_hook(app: &Rc<App>) -> widgets::WallpaperSetHook {
     let app = app.clone();
     Rc::new(move |done| {
@@ -184,16 +186,31 @@ fn wallpaper_set_hook(app: &Rc<App>) -> widgets::WallpaperSetHook {
                 _ => raw,
             }
         };
-        let key = format!("{base}\u{0}{target}");
+        let key = format!("{base}\u{0}{target}\u{0}{}", app.wallpaper_generation.get());
         if let Some((cached_key, cached)) = app.wallpaper_set.borrow().clone() {
             if cached_key == key {
                 done(cached);
                 return;
             }
         }
-        let result = crate::metadata::wallpaper_set(&base, &target);
-        *app.wallpaper_set.borrow_mut() = Some((key, result.clone()));
-        done(result);
+        {
+            let mut pending = app.wallpaper_pending.borrow_mut();
+            pending.entry(key.clone()).or_default().push(done);
+            if !app.wallpaper_loading.borrow_mut().insert(key.clone()) {
+                return;
+            }
+        }
+        let tx = app.tx.clone();
+        let worker_key = key.clone();
+        std::thread::spawn(move || {
+            let started = crate::timing::start();
+            let result = crate::metadata::wallpaper_set(&base, &target);
+            crate::timing::report("wallpaper_set", started);
+            let _ = tx.send_blocking(Msg::WallpaperSet {
+                key: worker_key,
+                result,
+            });
+        });
     })
 }
 
@@ -264,11 +281,9 @@ pub(super) fn build_control_row(
     app: &Rc<App>,
     record: &Record,
     src_index: usize,
-    records: Rc<HashMap<String, Record>>,
+    mut ctx: widgets::BuildContext,
 ) -> Rc<ControlRow> {
-    let mut ctx = build_context(app);
     ctx.advanced = app.advanced.get();
-    ctx.records = records;
     let editor = widgets::build(record, None, &ctx);
     let inline = INLINE_LAYOUT_ENABLED
         && control_is_inline(&editor)
@@ -603,7 +618,7 @@ fn scroll_offset(bounds_y: f64) -> f64 {
     bounds_y - 12.0
 }
 
-/// Rebuild one control's editor from the option registry's default value.
+/// Resolve one control's default value on a worker thread.
 fn reset_to_default(app: &Rc<App>, control: &ControlRow) {
     let Some(target) = Target::parse(&app.target.borrow()) else {
         app.status.set_text("No option target for this config");
@@ -611,7 +626,33 @@ fn reset_to_default(app: &Rc<App>, control: &ControlRow) {
     };
     let base = app.base.borrow().clone();
     let path = control.record.path_segments().to_vec();
-    match metadata::default_expression(&base, &target, &path) {
+    let file = control.record.file.clone();
+    let full_path = control.record.path();
+    app.status.set_text("Resolving default...");
+    let tx = app.tx.clone();
+    spawn(&tx, move |tx| {
+        let result = metadata::default_expression(&base, &target, &path);
+        let _ = tx.send_blocking(Msg::DefaultResolved {
+            file,
+            path: full_path,
+            result,
+        });
+    });
+}
+
+/// Apply a worker-resolved default to the control it belongs to.
+pub(super) fn apply_default(app: &Rc<App>, file: &str, path: &str, result: Result<String, String>) {
+    let control = app
+        .pages
+        .borrow()
+        .iter()
+        .flat_map(|page| page.controls.iter())
+        .find(|control| control.record.file == file && control.record.path() == path)
+        .cloned();
+    let Some(control) = control else {
+        return;
+    };
+    match result {
         Ok(default) if !default.trim().is_empty() => {
             let mut record = control.record.clone();
             record.value = default;
@@ -619,9 +660,9 @@ fn reset_to_default(app: &Rc<App>, control: &ControlRow) {
             ctx.records = records_for_file(app, &control.record.file);
             let editor = widgets::build(&record, None, &ctx);
             control.set_editor(editor);
-            connect_dirty(app, control);
+            connect_dirty(app, &control);
             app.status.set_text("Reset to default");
-            apply_reset(app, control);
+            apply_reset(app, &control);
         }
         Ok(_) => app.status.set_text("No default available"),
         Err(e) => app.status.set_text(&format!("Cannot resolve default: {e}")),

@@ -95,7 +95,6 @@ pub(crate) fn open(
     content.append(&checklist);
 
     let status = StatusView::new();
-    content.append(&status.group);
 
     let options_group = adw::PreferencesGroup::new();
     options_group.set_title("Setup options");
@@ -138,12 +137,16 @@ pub(crate) fn open(
     buttons.set_halign(gtk::Align::End);
     let refresh_btn = gtk::Button::with_label("Refresh");
     let apply_btn = gtk::Button::with_label("Write configuration");
+    let reboot_btn = gtk::Button::with_label("Reboot now");
     let next_btn = gtk::Button::with_label("Next step");
     next_btn.add_css_class("suggested-action");
     buttons.append(&refresh_btn);
     buttons.append(&apply_btn);
+    buttons.append(&reboot_btn);
     buttons.append(&next_btn);
     content.append(&buttons);
+
+    content.append(&status.group);
 
     let state: Rc<RefCell<Option<SecureBootState>>> = Rc::new(RefCell::new(None));
     let configured = Rc::new(Cell::new(configured));
@@ -167,6 +170,8 @@ pub(crate) fn open(
         let stage_detail = stage_detail.clone();
         let stage_rows = stage_rows.clone();
         let key_drop = key_drop.clone();
+        let apply_btn = apply_btn.clone();
+        let reboot_btn = reboot_btn.clone();
         let next_btn = next_btn.clone();
         let log = log.clone();
         let options_for = options_for.clone();
@@ -212,7 +217,10 @@ pub(crate) fn open(
                 SetupStage::Done => "Close",
             };
             next_btn.set_label(label);
+            next_btn.set_visible(current != SetupStage::Done);
             next_btn.set_sensitive(current != SetupStage::NotUefi);
+            apply_btn.set_visible(current != SetupStage::Config && current != SetupStage::Done);
+            reboot_btn.set_visible(current == SetupStage::Rebuild);
             log.set_text(&format!(
                 "{} · {}",
                 badge(&state, configured.get()),
@@ -302,6 +310,13 @@ pub(crate) fn open(
     }
     {
         let ctx = ctx.clone();
+        let log = log.clone();
+        let on_done = on_done.clone();
+        let dialog = dialog.clone();
+        reboot_btn.connect_clicked(move |_| confirm_reboot(&dialog, &ctx, &log, &on_done));
+    }
+    {
+        let ctx = ctx.clone();
         let state = state.clone();
         let configured = configured.clone();
         let options_for = options_for.clone();
@@ -328,7 +343,9 @@ pub(crate) fn open(
                 SetupStage::Rebuild => {
                     if let Some(rebuild) = &ctx.secureboot_rebuild {
                         rebuild();
-                        log.set_text("Rebuild started in the terminal.");
+                        log.set_text(
+                            "Rebuild started in the terminal. Use Reboot now when it finishes.",
+                        );
                         on_done();
                     } else {
                         log.set_text("No rebuild command is configured");
@@ -361,6 +378,39 @@ pub(crate) fn open(
 
     dialog.connect_response(|dialog, _| dialog.close());
     refresh();
+    dialog.present();
+}
+
+fn confirm_reboot(
+    parent: &gtk::Dialog,
+    ctx: &BuildContext,
+    log: &gtk::Label,
+    on_done: &Rc<dyn Fn()>,
+) {
+    let dialog = adw::MessageDialog::builder()
+        .transient_for(parent)
+        .modal(true)
+        .heading("Reboot to activate the new generation")
+        .body(
+            "The rebuild uses nixos-rebuild boot, so the Lanzaboote generation is only \
+             active after a reboot.",
+        )
+        .build();
+    dialog.add_response("cancel", "Cancel");
+    dialog.add_response("reboot", "Reboot");
+    dialog.set_response_appearance("reboot", adw::ResponseAppearance::Destructive);
+    dialog.set_default_response(Some("cancel"));
+    dialog.set_close_response("cancel");
+    let ctx = ctx.clone();
+    let log = log.clone();
+    let on_done = on_done.clone();
+    dialog.connect_response(None, move |dialog, response| {
+        if response == "reboot" {
+            let commands = vec!["systemctl reboot".to_string()];
+            run_commands(&ctx, &commands, &log, &on_done);
+        }
+        dialog.close();
+    });
     dialog.present();
 }
 

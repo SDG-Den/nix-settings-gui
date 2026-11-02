@@ -29,6 +29,7 @@ mod scan;
 mod secureboot;
 #[allow(dead_code)]
 mod templates;
+mod timing;
 #[allow(dead_code)]
 mod value;
 mod widgets;

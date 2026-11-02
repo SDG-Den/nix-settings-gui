@@ -9,7 +9,6 @@ use crate::dsl::{SnippetSpec, WidgetKind};
 use crate::edit;
 use crate::metadata::{self, Target};
 use crate::model::InsertMarker;
-use crate::scan;
 use crate::widgets;
 
 use super::menu::{open_flake, strip_add_prefix};
@@ -364,14 +363,10 @@ pub(super) fn open_add_file(app: &Rc<App>, tx: &Tx) {
                     Ok(()) => {
                         app.status.set_text(&format!("Created {}", path.display()));
                         let base = app.base.borrow().clone();
-                        let path_clone = base.clone();
-                        spawn(&tx, move |tx| {
-                            let result = scan::scan_root(&path_clone);
-                            let _ = tx.send_blocking(Msg::Scanned(result));
-                        });
                         if !Path::new(&base).join("flake.nix").is_file() {
                             app.status.set_text("Created; add it to the flake imports");
                         }
+                        super::save::rescan(&app, &tx);
                     }
                     Err(e) => app.status.set_text(&format!("Cannot create file: {e}")),
                 }
