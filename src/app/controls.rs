@@ -283,8 +283,14 @@ pub(super) fn build_control_row(
     src_index: usize,
     mut ctx: widgets::BuildContext,
 ) -> Rc<ControlRow> {
+    let started = crate::timing::start();
     ctx.advanced = app.advanced.get();
     let editor = widgets::build(record, None, &ctx);
+    crate::timing::report_slow(
+        &format!("control {}", record.path()),
+        started,
+        std::time::Duration::from_millis(50),
+    );
     let inline = INLINE_LAYOUT_ENABLED
         && control_is_inline(&editor)
         && record

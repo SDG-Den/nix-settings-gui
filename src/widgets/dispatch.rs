@@ -34,7 +34,13 @@ use std::rc::Rc;
 /// it is known; the `@option widget` takes precedence, then the type, then the
 /// shape of the current value.
 pub fn build(record: &Record, type_str: Option<&str>, ctx: &BuildContext) -> Editor {
+    let started = crate::timing::start();
     let editor = build_editor(record, type_str, ctx);
+    crate::timing::report_slow(
+        &format!("widget {}", full_path(record, ctx)),
+        started,
+        std::time::Duration::from_millis(20),
+    );
     if record.spec.readonly {
         editor.root().set_sensitive(false);
     }

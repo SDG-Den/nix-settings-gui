@@ -244,6 +244,7 @@ fn dashboard_card_option(path: &str) -> bool {
 }
 
 fn build_page(app: &Rc<App>, menu: &crate::model::MenuModel) -> MenuPage {
+    let started = crate::timing::start();
     let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
     content.set_margin_top(12);
     content.set_margin_bottom(12);
@@ -363,6 +364,7 @@ fn build_page(app: &Rc<App>, menu: &crate::model::MenuModel) -> MenuPage {
     controls.extend(advanced);
     evaluate_dependencies(&controls);
 
+    crate::timing::report(&format!("build_page {}", menu.display_name()), started);
     MenuPage {
         file: menu.file.clone(),
         controls,
