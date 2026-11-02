@@ -18,7 +18,7 @@ use crate::edit::PendingEdit;
 use crate::model::Record;
 use crate::value;
 use gtk::prelude::*;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 /// The editing control backing one option. Each variant knows how to render
 /// its current state back to Nix and whether it still holds the original value.
@@ -144,6 +144,7 @@ pub enum Editor {
     SecureBoot {
         root: gtk::Box,
         toggle: gtk::Switch,
+        keys_present: Rc<Cell<Option<bool>>>,
     },
     Raw {
         view: gtk::TextView,
@@ -414,6 +415,20 @@ impl Editor {
             Editor::Users {
                 rows, home_manager, ..
             } => users::users_validation_error(rows, *home_manager),
+            Editor::SecureBoot {
+                toggle,
+                keys_present,
+                ..
+            } => {
+                if toggle.is_active() && keys_present.get() == Some(false) {
+                    Some(
+                        "No Secure Boot keys exist yet. Open Set up Secure Boot and create keys before enabling Lanzaboote."
+                            .to_string(),
+                    )
+                } else {
+                    None
+                }
+            }
             _ => None,
         }
     }

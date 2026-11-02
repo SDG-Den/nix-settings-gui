@@ -132,7 +132,7 @@ impl StatusView {
                 self.loader.set_visible(true);
                 self.loader.set_subtitle(&if state.lanzaboote_active {
                     if state.signed_files == 0 && state.unsigned_files == 0 {
-                        "Lanzaboote detected on the ESP".to_string()
+                        "Lanzaboote detected in the running system".to_string()
                     } else {
                         format!(
                             "Lanzaboote · {} signed, {} unsigned",
@@ -140,7 +140,7 @@ impl StatusView {
                         )
                     }
                 } else {
-                    "Lanzaboote not detected on the ESP".to_string()
+                    "Lanzaboote not detected in the running system".to_string()
                 });
                 self.esp.set_visible(true);
                 self.esp.set_subtitle(&esp_label(state));
@@ -297,14 +297,17 @@ pub(crate) fn build_secureboot(record: &Record, ctx: &BuildContext) -> Editor {
 
     let last_state: Rc<std::cell::RefCell<Option<Result<SecureBootState, String>>>> =
         Rc::new(std::cell::RefCell::new(None));
+    let keys_present = Rc::new(std::cell::Cell::new(None::<bool>));
     let update: Rc<dyn Fn(Result<SecureBootState, String>)> = {
         let status = status.clone();
         let warnings = warnings.clone();
         let toggle = toggle.clone();
         let last_state = last_state.clone();
+        let keys_present = keys_present.clone();
         Rc::new(move |result| {
             *last_state.borrow_mut() = Some(result.clone());
             let active = toggle.is_active();
+            keys_present.set(result.as_ref().ok().map(|state| state.keys_present));
             if let Ok(state) = &result {
                 fill_warnings(&warnings, state, active);
             }
@@ -374,7 +377,11 @@ pub(crate) fn build_secureboot(record: &Record, ctx: &BuildContext) -> Editor {
         });
     }
 
-    Editor::SecureBoot { root, toggle }
+    Editor::SecureBoot {
+        root,
+        toggle,
+        keys_present,
+    }
 }
 
 fn fill_warnings(warnings: &gtk::Box, state: &SecureBootState, configured: bool) {
@@ -382,6 +389,11 @@ fn fill_warnings(warnings: &gtk::Box, state: &SecureBootState, configured: bool)
         warnings.remove(&child);
     }
     let mut messages = Vec::new();
+    if configured && !state.keys_present {
+        messages.push(
+            "No Secure Boot key bundle exists. Open Set up Secure Boot and create keys before saving or rebuilding.",
+        );
+    }
     if configured && state.secure_boot_enabled() && !state.lanzaboote_active {
         messages.push(
             "Secure Boot is enforced but Lanzaboote is not installed yet. Do not reboot before the rebuild completes.",

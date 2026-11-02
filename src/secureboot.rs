@@ -226,15 +226,21 @@ fn run(tool: &str, args: &[&str]) -> Result<String, String> {
                 .output()
         })
         .map_err(|error| format!("cannot run {tool}: {error}"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(if stderr.is_empty() {
-            format!("{tool} exited with {}", output.status)
-        } else {
-            stderr
-        });
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    if !stdout.trim().is_empty() {
+        // `bootctl status` exits non-zero when it cannot read the ESP, but it
+        // still prints the firmware state. Use whatever was printed.
+        return Ok(stdout);
     }
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    if output.status.success() {
+        return Ok(String::new());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    Err(if stderr.is_empty() {
+        format!("{tool} exited with {}", output.status)
+    } else {
+        stderr
+    })
 }
 
 fn tool_exists(tool: &str) -> bool {
@@ -272,6 +278,14 @@ fn lanzaboote_on_esp(esp: &Path) -> bool {
     })
 }
 
+/// The running generation's bootspec is world-readable even when `/boot` is
+/// mounted root-only. Lanzaboote adds its extension to that document.
+fn lanzaboote_in_running_system() -> bool {
+    std::fs::read_to_string("/run/current-system/boot.json")
+        .map(|text| text.contains("org.nix-community.lanzaboote"))
+        .unwrap_or(false)
+}
+
 fn bitlocker_present() -> bool {
     let Ok(output) = Command::new("lsblk").args(["-pno", "FSTYPE"]).output() else {
         return false;
@@ -290,14 +304,15 @@ pub fn collect_state() -> SecureBootState {
         ..SecureBootState::default()
     };
 
-    if let Ok(text) = run("bootctl", &["status"]) {
-        let status = parse_bootctl_status(&text);
-        state.firmware = status.firmware;
-        state.firmware_mode = status.secure_boot;
-        state.boot_into_firmware = status.boot_into_firmware;
-        state.efi = state.efi && status.uefi;
-    } else {
-        state.errors.push("bootctl is not available".to_string());
+    match run("bootctl", &["status"]) {
+        Ok(text) => {
+            let status = parse_bootctl_status(&text);
+            state.firmware = status.firmware;
+            state.firmware_mode = status.secure_boot;
+            state.boot_into_firmware = status.boot_into_firmware;
+            state.efi = state.efi && status.uefi;
+        }
+        Err(error) => state.errors.push(format!("bootctl: {error}")),
     }
 
     state.sbctl_installed = tool_exists("sbctl");
@@ -330,7 +345,7 @@ pub fn collect_state() -> SecureBootState {
         .unwrap_or_else(|| PathBuf::from("/boot"));
     state.esp_free_bytes = esp_free_bytes(&esp);
     state.esp_path = Some(esp.display().to_string());
-    state.lanzaboote_active = lanzaboote_on_esp(&esp);
+    state.lanzaboote_active = lanzaboote_in_running_system() || lanzaboote_on_esp(&esp);
     state.windows_present = esp
         .join("EFI")
         .join("Microsoft")
@@ -565,6 +580,17 @@ mod tests {
         assert!(status.uefi);
         assert_eq!(status.secure_boot, FirmwareMode::User);
         assert!(status.boot_into_firmware);
+    }
+
+    #[test]
+    fn keeps_output_from_a_nonzero_exit() {
+        let output = run("sh", &["-c", "echo hello; exit 1"]).unwrap();
+        assert_eq!(output.trim(), "hello");
+    }
+
+    #[test]
+    fn reports_a_missing_tool() {
+        assert!(run("nix-settings-gui-no-such-tool", &[]).is_err());
     }
 
     #[test]

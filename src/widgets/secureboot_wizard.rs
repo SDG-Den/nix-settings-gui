@@ -109,23 +109,20 @@ pub(crate) fn open(
     let key_row = adw::ActionRow::new();
     key_row.set_title("Keys");
     key_row.set_subtitle("Existing keys are never overwritten");
+    key_drop.set_valign(gtk::Align::Center);
     key_row.add_suffix(&key_drop);
     options_group.add(&key_row);
 
-    let microsoft = gtk::Switch::new();
+    let microsoft = adw::SwitchRow::new();
+    microsoft.set_title("Include Microsoft keys");
+    microsoft.set_subtitle("Keeps Windows and vendor option ROMs bootable");
     microsoft.set_active(true);
-    let microsoft_row = adw::ActionRow::new();
-    microsoft_row.set_title("Include Microsoft keys");
-    microsoft_row.set_subtitle("Keeps Windows and vendor option ROMs bootable");
-    microsoft_row.add_suffix(&microsoft);
-    options_group.add(&microsoft_row);
+    options_group.add(&microsoft);
 
-    let firmware_builtin = gtk::Switch::new();
-    let firmware_row = adw::ActionRow::new();
-    firmware_row.set_title("Include firmware built-in keys");
-    firmware_row.set_subtitle("Framework and other vendors that need their own certificates");
-    firmware_row.add_suffix(&firmware_builtin);
-    options_group.add(&firmware_row);
+    let firmware_builtin = adw::SwitchRow::new();
+    firmware_builtin.set_title("Include firmware built-in keys");
+    firmware_builtin.set_subtitle("Framework and other vendors that need their own certificates");
+    options_group.add(&firmware_builtin);
 
     content.append(&options_group);
 
