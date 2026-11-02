@@ -41,6 +41,7 @@ pub(crate) struct GridTile {
     pub(crate) enabled: Option<gtk::Switch>,
     pub(crate) orig_enabled: Option<bool>,
     pub(crate) fields: Vec<GridField>,
+    pub(crate) orig_field_names: Vec<String>,
     /// Settings that live outside the card's own attrset (dashboard
     /// `dashOptions.<id>`), shown in the card's settings cog but written back
     /// to their original assignment.
@@ -54,6 +55,8 @@ pub(crate) struct GridTile {
     pub(crate) chrome: gtk::Box,
     pub(crate) remove_button: gtk::Button,
     pub(crate) size_badge: gtk::Label,
+    pub(crate) members_row: gtk::Box,
+    pub(crate) locked: bool,
 }
 
 /// The per-page shape of a grid control, derived from the record path.
@@ -63,7 +66,6 @@ pub(crate) struct GridProfile {
     pub(crate) columns: i64,
     pub(crate) max_rows: i64,
     pub(crate) has_enabled: bool,
-    pub(crate) has_footer: bool,
     pub(crate) registry: &'static [&'static str],
 }
 
@@ -132,7 +134,6 @@ impl GridProfile {
                 columns: 8,
                 max_rows: 64,
                 has_enabled: true,
-                has_footer: true,
                 registry: CC_GRID_REGISTRY,
             })
         } else if path.contains("dashCards") {
@@ -141,7 +142,6 @@ impl GridProfile {
                 columns: 6,
                 max_rows: 64,
                 has_enabled: false,
-                has_footer: false,
                 registry: DASH_GRID_REGISTRY,
             })
         } else if path.contains("weather.widgets") {
@@ -150,7 +150,6 @@ impl GridProfile {
                 columns: 4,
                 max_rows: 64,
                 has_enabled: false,
-                has_footer: false,
                 registry: WEATHER_GRID_REGISTRY,
             })
         } else {
@@ -164,7 +163,6 @@ impl GridProfile {
             columns: 6,
             max_rows: 64,
             has_enabled: false,
-            has_footer: false,
             registry: &[],
         }
     }
@@ -185,7 +183,6 @@ pub(crate) struct GridLayoutState {
     pub(crate) drop_preview: gtk::Box,
     pub(crate) details: gtk::Box,
     pub(crate) adder_slot: gtk::Box,
-    pub(crate) footer_flow: Option<gtk::Box>,
     pub(crate) size_caption: gtk::Label,
     pub(crate) status: gtk::Label,
     pub(crate) advanced: bool,
@@ -234,12 +231,6 @@ pub(crate) fn build_grid_configuration(record: &Record, ctx: &BuildContext) -> E
         .xalign(0.0)
         .css_classes(["dim-label", "error"])
         .build();
-    let footer_flow = profile.has_footer.then(|| {
-        let flow = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        flow.set_halign(gtk::Align::Start);
-        flow.set_valign(gtk::Align::Start);
-        flow
-    });
 
     let extras_expander = gtk::Expander::new(Some("More settings"));
     extras_expander.set_expanded(false);
@@ -247,15 +238,6 @@ pub(crate) fn build_grid_configuration(record: &Record, ctx: &BuildContext) -> E
     extras_expander.set_child(Some(&extras_box));
 
     root.append(&canvas);
-    if let Some(flow) = &footer_flow {
-        let heading = gtk::Label::builder()
-            .xalign(0.0)
-            .label("Footer")
-            .css_classes(["heading"])
-            .build();
-        root.append(&heading);
-        root.append(flow);
-    }
 
     let mut orig_ids = Vec::new();
     let mut extras = Vec::new();
@@ -263,14 +245,17 @@ pub(crate) fn build_grid_configuration(record: &Record, ctx: &BuildContext) -> E
     for child in scan_direct_children(record, ctx.advanced) {
         if value::classify(&child.value) == value::ValueKind::AttrSet {
             let id = child.segments.last().cloned().unwrap_or_default();
-            if profile.surface == GridSurface::ControlCenter && id == "edit" {
-                continue;
-            }
             orig_ids.push(id.clone());
             built.push(make_grid_tile(&id, &child.value, profile, ctx));
         } else {
             extras.push(child);
         }
+    }
+    for tile in built
+        .iter_mut()
+        .filter(|tile| grid_tile_is_quick_tiles(tile))
+    {
+        grid_ensure_group_id(tile);
     }
 
     let extras: Vec<(Record, Editor)> = extras
@@ -302,7 +287,6 @@ pub(crate) fn build_grid_configuration(record: &Record, ctx: &BuildContext) -> E
         drop_preview: drop_preview.clone(),
         details: details.clone(),
         adder_slot: adder_slot.clone(),
-        footer_flow,
         size_caption: size_caption.clone(),
         status: status.clone(),
         advanced: ctx.advanced,
@@ -386,35 +370,156 @@ impl GridLayoutState {
         }
     }
 }
-/// Whether a tile belongs to the footer strip rather than the canvas.
-pub(crate) fn grid_tile_is_footer(tile: &GridTile) -> bool {
-    tile.fields.iter().any(|field| {
-        field.record.segments.last().map(String::as_str) == Some("footer")
-            && field.editor.to_nix().trim() == "true"
+/// The control-center widget that holds a row of grouped quick tiles.
+pub(crate) const QUICK_TILES_ID: &str = "quickTiles";
+
+fn grid_tile_field(tile: &GridTile, name: &str) -> Option<String> {
+    tile.fields
+        .iter()
+        .find(|field| field.record.segments.last().map(String::as_str) == Some(name))
+        .map(|field| field.editor.to_nix())
+}
+
+fn grid_tile_string(tile: &GridTile, name: &str) -> Option<String> {
+    grid_tile_field(tile, name)
+        .map(|value| super::nix::parse_string_literal(&value))
+        .filter(|value| !value.is_empty())
+}
+
+pub(crate) fn grid_tile_group(tile: &GridTile) -> Option<String> {
+    grid_tile_string(tile, "group")
+}
+
+pub(crate) fn grid_tile_instance_id(tile: &GridTile) -> Option<String> {
+    grid_tile_string(tile, "instanceId")
+}
+
+pub(crate) fn grid_tile_is_quick_tiles(tile: &GridTile) -> bool {
+    tile.id == QUICK_TILES_ID
+}
+
+/// A group member is only hidden when its parent quick-tiles instance exists.
+/// Orphaned members fall back to the canvas, matching dux-shell.
+pub(crate) fn grid_tile_is_grouped(tiles: &[GridTile], index: usize) -> bool {
+    let Some(group) = tiles.get(index).and_then(grid_tile_group) else {
+        return false;
+    };
+    tiles
+        .iter()
+        .filter(|tile| grid_tile_is_quick_tiles(tile))
+        .filter_map(grid_tile_instance_id)
+        .any(|id| id == group)
+}
+
+pub(crate) fn grid_group_ids(tiles: &[GridTile]) -> Vec<String> {
+    let mut ids: Vec<String> = tiles
+        .iter()
+        .filter(|tile| grid_tile_is_quick_tiles(tile))
+        .filter_map(grid_tile_instance_id)
+        .collect();
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
+pub(crate) fn grid_group_members(tiles: &[GridTile], group_id: &str) -> Vec<usize> {
+    let mut members: Vec<usize> = tiles
+        .iter()
+        .enumerate()
+        .filter(|(_, tile)| grid_tile_group(tile).as_deref() == Some(group_id))
+        .filter(|(_, tile)| !tile.locked)
+        .map(|(index, _)| index)
+        .collect();
+    members.sort_by_key(|&index| (tiles[index].order, index));
+    members
+}
+
+pub(crate) fn grid_find_group_parent(tiles: &[GridTile], group_id: &str) -> Option<usize> {
+    tiles.iter().position(|tile| {
+        grid_tile_is_quick_tiles(tile) && grid_tile_instance_id(tile).as_deref() == Some(group_id)
     })
 }
 
-/// Add, replace or remove the `footer` field of a tile.
-pub(crate) fn grid_set_footer(tile: &mut GridTile, on: bool) {
-    let value = if on { "true" } else { "false" };
+/// Drop group links whose quick-tiles parent no longer exists.
+pub(crate) fn grid_prune_orphan_groups(state: &Rc<GridLayoutState>) {
+    let ids = grid_group_ids(&state.tiles.borrow());
+    let mut tiles = state.tiles.borrow_mut();
+    for tile in tiles.iter_mut() {
+        if grid_tile_group(tile).is_some_and(|group| !ids.contains(&group)) {
+            grid_remove_field(tile, "group");
+        }
+    }
+}
+
+pub(crate) fn grid_id_can_group(id: &str) -> bool {
+    id != "user"
+        && id != QUICK_TILES_ID
+        && !matches!(
+            id,
+            "brightnessSlider" | "volumeSlider" | "inputVolumeSlider"
+        )
+}
+
+pub(crate) fn grid_can_group(tile: &GridTile) -> bool {
+    !tile.locked && grid_id_can_group(&tile.id)
+}
+
+fn text_editor(value: &str) -> Editor {
+    let entry = gtk::Entry::new();
+    entry.set_text(&super::nix::parse_string_literal(value));
+    Editor::Text(entry)
+}
+
+pub(crate) fn grid_set_field(tile: &mut GridTile, name: &str, value: &str) {
     if let Some(field) = tile
         .fields
         .iter_mut()
-        .find(|field| field.record.segments.last().map(String::as_str) == Some("footer"))
+        .find(|field| field.record.segments.last().map(String::as_str) == Some(name))
     {
         field.record.value = value.to_string();
-        field.editor = Editor::Switch(super::basic::build_switch(value));
+        field.editor = text_editor(value);
         return;
     }
     tile.fields.push(GridField {
         record: Record {
-            segments: vec!["footer".to_string()],
+            segments: vec![name.to_string()],
             value: value.to_string(),
             ..Record::default()
         },
-        editor: Editor::Switch(super::basic::build_switch(value)),
-        orig_value: "false".to_string(),
+        editor: text_editor(value),
+        orig_value: String::new(),
     });
+}
+
+pub(crate) fn grid_remove_field(tile: &mut GridTile, name: &str) {
+    tile.fields
+        .retain(|field| field.record.segments.last().map(String::as_str) != Some(name));
+}
+
+pub(crate) fn grid_new_instance_id() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    format!("quickTiles{nanos:x}")
+}
+
+/// Ensure a quick-tiles parent has the group id its members reference.
+pub(crate) fn grid_ensure_group_id(tile: &mut GridTile) -> String {
+    if let Some(id) = grid_tile_instance_id(tile) {
+        return id;
+    }
+    let id = grid_new_instance_id();
+    let value = super::nix::quote(&id);
+    grid_set_field(tile, "instanceId", &value);
+    if let Some(field) = tile
+        .fields
+        .iter_mut()
+        .find(|field| field.record.segments.last().map(String::as_str) == Some("instanceId"))
+    {
+        field.orig_value = value;
+    }
+    id
 }
 
 pub(crate) fn grid_index_of(
@@ -426,6 +531,10 @@ pub(crate) fn grid_index_of(
         .borrow()
         .iter()
         .position(|tile| tile.tile == *button)
+}
+
+pub(crate) fn grid_index_of_id(state: &Rc<GridLayoutState>, id: &str) -> Option<usize> {
+    state.tiles.borrow().iter().position(|tile| tile.id == id)
 }
 
 /// One-time stylesheet that makes the invisible resize strips visible.
@@ -518,8 +627,7 @@ pub(crate) fn grid_update_tile_visual(tile: &GridTile) {
 
 fn field_default(surface: GridSurface, id: &str, name: &str) -> Option<&'static str> {
     match name {
-        "small" | "footer" | "footerEnd" | "footerFill" => Some("false"),
-        "footerW" => Some("1"),
+        "small" => Some("false"),
         _ => card_defaults(surface, id)
             .into_iter()
             .find(|(key, _)| key.eq_ignore_ascii_case(name))
@@ -626,6 +734,7 @@ pub(crate) fn make_grid_tile(
     };
     let mut order = GRID_DEFAULT_ORDER;
     let mut enabled_value = true;
+    let locked = profile.surface == GridSurface::ControlCenter && id == "edit";
     let mut fields: Vec<GridField> = Vec::new();
     let mut present = Vec::new();
     for child in scan::scan_value(value_text) {
@@ -638,6 +747,8 @@ pub(crate) fn make_grid_tile(
             "h" => cell.h = text.parse().unwrap_or(1),
             "_order" => order = text.parse().unwrap_or(GRID_DEFAULT_ORDER),
             "enabled" if profile.has_enabled => enabled_value = text == "true",
+            "footer" | "footerEnd" | "footerW" | "footerFill" => {}
+            "tiles" if id == QUICK_TILES_ID => {}
             _ => {
                 present.push(name);
                 let editor = build_bespoke_child(&child, ctx);
@@ -675,6 +786,10 @@ pub(crate) fn make_grid_tile(
     cell.col = cell.col.clamp(0, (profile.columns - cell.w).max(0));
     cell.row = cell.row.max(0);
 
+    let orig_enabled_value = enabled_value;
+    if locked {
+        enabled_value = false;
+    }
     let enabled = profile.has_enabled.then(|| {
         let switch = gtk::Switch::new();
         switch.set_active(enabled_value);
@@ -702,6 +817,12 @@ pub(crate) fn make_grid_tile(
     card.append(&icon);
     card.append(&label);
     card.append(&subtitle);
+    let members_row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    members_row.set_halign(gtk::Align::Center);
+    members_row.set_visible(false);
+    if id == QUICK_TILES_ID {
+        card.append(&members_row);
+    }
     let button = gtk::ToggleButton::new();
     button.add_css_class("dms-card");
     button.set_hexpand(true);
@@ -750,6 +871,11 @@ pub(crate) fn make_grid_tile(
     size_badge.set_visible(false);
     overlay.add_overlay(&size_badge);
 
+    let orig_field_names = fields
+        .iter()
+        .filter_map(|field| field.record.segments.last().cloned())
+        .collect();
+
     let tile = GridTile {
         id: id.to_string(),
         added: false,
@@ -758,8 +884,9 @@ pub(crate) fn make_grid_tile(
         cell,
         orig: cell,
         enabled,
-        orig_enabled: profile.has_enabled.then_some(enabled_value),
+        orig_enabled: profile.has_enabled.then_some(orig_enabled_value),
         fields,
+        orig_field_names,
         externals,
         tile: button,
         label,
@@ -770,6 +897,8 @@ pub(crate) fn make_grid_tile(
         chrome,
         remove_button,
         size_badge,
+        members_row,
+        locked,
     };
     grid_update_tile_visual(&tile);
     tile
@@ -822,7 +951,7 @@ pub(crate) fn grid_schedule_refresh(state: &Rc<GridLayoutState>) {
     });
 }
 
-/// Recompute the committed cells of every non-footer tile. `interacting` is
+/// Recompute the committed cells of every visible, non-grouped tile. `interacting` is
 /// forced first in the placement order. Returns false when the layout would
 /// exceed `max_rows`, in which case no cell is changed.
 type RepackInputs = (Vec<usize>, Vec<usize>, Vec<TileInput>);
@@ -835,7 +964,7 @@ fn grid_repack_inputs(
     let tiles = state.tiles.borrow();
     let pinned_cells = pinned.then(|| state.pinned.borrow().clone());
     let indices: Vec<usize> = (0..tiles.len())
-        .filter(|&i| !(state.profile.has_footer && grid_tile_is_footer(&tiles[i])))
+        .filter(|&i| !tiles[i].locked && !grid_tile_is_grouped(&tiles, i))
         .collect();
     let mut order = indices.clone();
     order.sort_by_key(|&i| (tiles[i].order, i));
@@ -957,58 +1086,104 @@ pub(crate) fn grid_hide_drop_preview(state: &Rc<GridLayoutState>) {
     state.drop_preview.set_visible(false);
 }
 
-pub(crate) fn grid_reorder_footer(state: &Rc<GridLayoutState>, index: usize, pointer_x: f32) {
-    let Some(flow) = state.footer_flow.as_ref() else {
-        return;
+/// Move a tile into an existing quick-tiles group. The parent keeps its
+/// placement; the member keeps its width and height but loses `col`/`row`.
+pub(crate) fn grid_group_tile(state: &Rc<GridLayoutState>, index: usize, group_id: &str) -> bool {
+    let Some(parent) = grid_find_group_parent(&state.tiles.borrow(), group_id) else {
+        return false;
     };
-    let mut tiles = state.tiles.borrow_mut();
-    let Some(tile) = tiles.get(index).cloned() else {
-        return;
-    };
-    if !grid_tile_is_footer(&tile) {
-        return;
+    if parent == index {
+        return false;
     }
-    let mut centers: Vec<(usize, f32)> = Vec::new();
-    for (position, other) in tiles.iter().enumerate() {
-        if position == index || !grid_tile_is_footer(other) {
-            continue;
+    {
+        let mut tiles = state.tiles.borrow_mut();
+        let Some(tile) = tiles.get(index) else {
+            return false;
+        };
+        if !grid_can_group(tile) {
+            return false;
         }
-        if let Some(bounds) = other.overlay.compute_bounds(flow) {
-            centers.push((position, bounds.x() + bounds.width() / 2.0));
-        }
+        let group_value = super::nix::quote(group_id);
+        grid_set_field(&mut tiles[index], "group", &group_value);
     }
-    let target = centers
-        .iter()
-        .position(|(_, center)| pointer_x < *center)
-        .unwrap_or(centers.len());
-    tiles.remove(index);
-    let footer_indices: Vec<usize> = tiles
-        .iter()
-        .enumerate()
-        .filter(|(_, tile)| grid_tile_is_footer(tile))
-        .map(|(position, _)| position)
-        .collect();
-    let insert_at = footer_indices.get(target).copied().unwrap_or_else(|| {
-        footer_indices
-            .last()
-            .map(|position| position + 1)
-            .unwrap_or(tiles.len())
-    });
-    tiles.insert(insert_at, tile);
-    let mut next = tiles
-        .iter()
-        .filter(|tile| !grid_tile_is_footer(tile))
-        .map(|tile| tile.order)
-        .max()
-        .unwrap_or(0)
-        + 10;
-    for tile in tiles.iter_mut().filter(|tile| grid_tile_is_footer(tile)) {
-        tile.order = next;
-        next += 10;
-    }
-    drop(tiles);
+    grid_repack(state, None, true);
     grid_reattach(state);
-    grid_set_status(state, "");
+    grid_refresh_details(state);
+    state.notify();
+    true
+}
+
+/// Return a grouped tile to the canvas, giving it the next free cell.
+pub(crate) fn grid_ungroup_tile(state: &Rc<GridLayoutState>, index: usize) -> bool {
+    let cell = {
+        let tiles = state.tiles.borrow();
+        let Some(tile) = tiles.get(index) else {
+            return false;
+        };
+        if !grid_tile_is_grouped(&tiles, index) {
+            return false;
+        }
+        let taken: Vec<CellRect> = tiles
+            .iter()
+            .enumerate()
+            .filter(|(other, _)| *other != index)
+            .filter(|(other, _)| !tiles[*other].locked && !grid_tile_is_grouped(&tiles, *other))
+            .map(|(_, tile)| tile.cell)
+            .collect();
+        super::grid_layout::grid_first_fit(&taken, state.profile.columns, tile.cell.w, tile.cell.h)
+    };
+    {
+        let mut tiles = state.tiles.borrow_mut();
+        let next = tiles
+            .iter()
+            .enumerate()
+            .filter(|(index, tile)| !tile.locked && !grid_tile_is_grouped(&tiles, *index))
+            .map(|(_, tile)| tile.order)
+            .max()
+            .unwrap_or(0)
+            + 10;
+        if let Some(tile) = tiles.get_mut(index) {
+            grid_remove_field(tile, "group");
+            tile.cell = cell;
+            tile.order = next;
+        }
+    }
+    grid_repack(state, None, false);
+    grid_reattach(state);
+    grid_refresh_details(state);
+    state.notify();
+    true
+}
+
+/// Reorder a member inside its quick-tiles row by swapping placement order.
+pub(crate) fn grid_move_member(state: &Rc<GridLayoutState>, index: usize, delta: i32) {
+    let tiles = state.tiles.borrow();
+    let Some(group) = tiles.get(index).and_then(grid_tile_group) else {
+        return;
+    };
+    let members = grid_group_members(&tiles, &group);
+    let Some(position) = members.iter().position(|&member| member == index) else {
+        return;
+    };
+    let target_position = position as i32 + delta;
+    if target_position < 0 || target_position >= members.len() as i32 {
+        return;
+    }
+    let target = members[target_position as usize];
+    let current_order = tiles[index].order;
+    let target_order = tiles[target].order;
+    drop(tiles);
+    {
+        let mut tiles = state.tiles.borrow_mut();
+        tiles[index].order = if current_order == target_order {
+            target_order + delta.signum() as i64
+        } else {
+            target_order
+        };
+        tiles[target].order = current_order;
+    }
+    grid_reattach(state);
+    grid_refresh_details(state);
     state.notify();
 }
 
@@ -1017,13 +1192,30 @@ pub(crate) fn grid_reattach(state: &Rc<GridLayoutState>) {
     while let Some(child) = state.canvas.first_child() {
         state.canvas.remove(&child);
     }
-    if let Some(flow) = &state.footer_flow {
-        while let Some(child) = flow.first_child() {
-            flow.remove(&child);
+    let mut rows = 1i64;
+    let mut visible = 0;
+    {
+        let tiles = state.tiles.borrow();
+        for (index, tile) in tiles.iter().enumerate() {
+            if tile.locked || grid_tile_is_grouped(&tiles, index) {
+                continue;
+            }
+            visible += 1;
+            tile.tile.set_hexpand(true);
+            tile.tile.set_vexpand(true);
+            tile.overlay.set_hexpand(true);
+            tile.overlay.set_vexpand(true);
+            state.canvas.attach(
+                &tile.overlay,
+                tile.cell.col as i32,
+                tile.cell.row as i32,
+                tile.cell.w as i32,
+                tile.cell.h as i32,
+            );
+            rows = rows.max(tile.cell.row + tile.cell.h);
         }
     }
-    let tiles = state.tiles.borrow();
-    if tiles.is_empty() {
+    if visible == 0 {
         let empty = gtk::Label::builder()
             .label("No cards yet. Use Add widget to start.")
             .css_classes(["dim-label"])
@@ -1034,38 +1226,94 @@ pub(crate) fn grid_reattach(state: &Rc<GridLayoutState>) {
             .canvas
             .attach(&empty, 0, 0, state.profile.columns as i32, 2);
     }
-    let mut rows = 1i64;
-    for tile in tiles.iter() {
-        if state.profile.has_footer && grid_tile_is_footer(tile) {
-            if let Some(flow) = &state.footer_flow {
-                tile.tile.set_hexpand(false);
-                tile.tile.set_vexpand(false);
-                tile.overlay.set_hexpand(false);
-                tile.overlay.set_vexpand(false);
-                if tile.overlay.parent().is_some() {
-                    tile.overlay.unparent();
-                }
-                flow.append(&tile.overlay);
-            }
-            continue;
-        }
-        tile.tile.set_hexpand(true);
-        tile.tile.set_vexpand(true);
-        tile.overlay.set_hexpand(true);
-        tile.overlay.set_vexpand(true);
-        state.canvas.attach(
-            &tile.overlay,
-            tile.cell.col as i32,
-            tile.cell.row as i32,
-            tile.cell.w as i32,
-            tile.cell.h as i32,
-        );
-        rows = rows.max(tile.cell.row + tile.cell.h);
-    }
-    drop(tiles);
     state
         .canvas
         .set_size_request(-1, rows as i32 * GRID_ROW_UNIT);
+    grid_render_groups(state);
+}
+
+/// Draw the small tile chips inside every quick-tiles card.
+fn grid_render_groups(state: &Rc<GridLayoutState>) {
+    let groups: Vec<(usize, String, Vec<GridTile>)> = {
+        let tiles = state.tiles.borrow();
+        tiles
+            .iter()
+            .enumerate()
+            .filter(|(_, tile)| grid_tile_is_quick_tiles(tile))
+            .filter_map(|(index, tile)| {
+                let group_id = grid_tile_instance_id(tile)?;
+                let members = grid_group_members(&tiles, &group_id)
+                    .into_iter()
+                    .filter_map(|member| tiles.get(member).cloned())
+                    .collect();
+                Some((index, group_id, members))
+            })
+            .collect()
+    };
+    for (parent, _group_id, members) in groups {
+        let row = state.tiles.borrow()[parent].members_row.clone();
+        while let Some(child) = row.first_child() {
+            row.remove(&child);
+        }
+        if members.is_empty() {
+            let hint = gtk::Label::builder()
+                .label("No quick tiles")
+                .css_classes(["dim-label", "caption"])
+                .build();
+            row.append(&hint);
+            row.set_visible(true);
+            continue;
+        }
+        for member in members {
+            let chip = gtk::Button::new();
+            chip.add_css_class("flat");
+            chip.set_tooltip_text(Some(&widget_display_name(&member.id)));
+            let line = gtk::Box::new(gtk::Orientation::Horizontal, 3);
+            let icon = gtk::Image::from_icon_name(widget_icon(&member.id));
+            icon.set_pixel_size(16);
+            let label = gtk::Label::builder()
+                .label(widget_display_name(&member.id))
+                .css_classes(["caption"])
+                .build();
+            line.append(&icon);
+            line.append(&label);
+            chip.set_child(Some(&line));
+            {
+                let st = state.clone();
+                let id = member.id.clone();
+                chip.connect_clicked(move |_| {
+                    if let Some(index) = grid_index_of_id(&st, &id) {
+                        grid_select(&st, index);
+                    }
+                });
+            }
+            {
+                let drag = gtk::GestureDrag::new();
+                chip.add_controller(drag.clone());
+                let st = state.clone();
+                let id = member.id.clone();
+                let moved = Rc::new(Cell::new(false));
+                let moved_begin = moved.clone();
+                drag.connect_drag_begin(move |_, _, _| moved_begin.set(false));
+                let moved_update = moved.clone();
+                drag.connect_drag_update(move |_, dx, dy| {
+                    if dx.abs() + dy.abs() > 24.0 {
+                        moved_update.set(true);
+                    }
+                });
+                drag.connect_drag_end(move |_, _, _| {
+                    if !moved.get() {
+                        return;
+                    }
+                    if let Some(index) = grid_index_of_id(&st, &id) {
+                        grid_ungroup_tile(&st, index);
+                    }
+                });
+            }
+            row.append(&chip);
+        }
+        row.set_visible(true);
+    }
 }
 
 pub(crate) fn grid_update_size_caption(state: &Rc<GridLayoutState>) {
@@ -1102,19 +1350,19 @@ pub(crate) fn grid_update_strips(state: &Rc<GridLayoutState>) {
     let tiles = state.tiles.borrow();
     for (index, tile) in tiles.iter().enumerate() {
         let selected = selected == Some(index);
-        let footer = state.profile.has_footer && grid_tile_is_footer(tile);
-        tile.right_strip.set_visible(selected && !footer);
-        tile.bottom_strip.set_visible(selected && !footer);
-        tile.corner_strip.set_visible(selected && !footer);
-        tile.chrome.set_visible(selected);
-        tile.size_badge.set_visible(selected && !footer);
-        if selected && !footer {
+        let hidden = tile.locked || grid_tile_is_grouped(&tiles, index);
+        tile.right_strip.set_visible(selected && !hidden);
+        tile.bottom_strip.set_visible(selected && !hidden);
+        tile.corner_strip.set_visible(selected && !hidden);
+        tile.chrome.set_visible(selected && !hidden);
+        tile.size_badge.set_visible(selected && !hidden);
+        if selected && !hidden {
             tile.size_badge
                 .set_text(&format!("{} x {}", tile.cell.w, tile.cell.h));
         }
     }
 }
-pub(crate) fn grid_tile_nix(tile: &GridTile, profile: GridProfile) -> String {
+pub(crate) fn grid_tile_nix(tile: &GridTile, profile: GridProfile, positioned: bool) -> String {
     let tile_surface = profile.surface;
     let fields: Vec<(String, String)> = tile
         .fields
@@ -1130,7 +1378,9 @@ pub(crate) fn grid_tile_nix(tile: &GridTile, profile: GridProfile) -> String {
             Some((name, value))
         })
         .collect();
-    let enabled = if profile.has_enabled {
+    let enabled = if tile.locked {
+        Some(false)
+    } else if profile.has_enabled {
         Some(
             tile.enabled
                 .as_ref()
@@ -1140,7 +1390,9 @@ pub(crate) fn grid_tile_nix(tile: &GridTile, profile: GridProfile) -> String {
     } else {
         None
     };
-    grid_tile_fields_nix(&tile.id, tile.order, tile.cell, enabled, &fields)
+    grid_tile_fields_nix(
+        &tile.id, tile.order, tile.cell, positioned, enabled, &fields,
+    )
 }
 
 pub(crate) fn grid_unchanged(state: &GridLayoutState) -> bool {
@@ -1156,6 +1408,14 @@ pub(crate) fn grid_unchanged(state: &GridLayoutState) -> bool {
                     .fields
                     .iter()
                     .all(|field| field.editor.unchanged(&field.orig_value))
+                && tile.fields.len() == tile.orig_field_names.len()
+                && tile.fields.iter().all(|field| {
+                    field
+                        .record
+                        .segments
+                        .last()
+                        .is_some_and(|name| tile.orig_field_names.contains(name))
+                })
         })
         && state
             .extras
@@ -1168,7 +1428,10 @@ pub(crate) fn grid_nix(state: &GridLayoutState) -> String {
         let tiles = state.tiles.borrow();
         tiles
             .iter()
-            .map(|tile| grid_tile_nix(tile, state.profile))
+            .enumerate()
+            .map(|(index, tile)| {
+                grid_tile_nix(tile, state.profile, !grid_tile_is_grouped(&tiles, index))
+            })
             .collect()
     };
     for (record, editor) in &state.extras {
@@ -1272,12 +1535,9 @@ mod tests {
     #[test]
     fn grid_profiles_resolve_by_path() {
         let cc = GridProfile::for_path("programs.ojuny.dux.controlCenterWidgets").unwrap();
-        assert_eq!((cc.columns, cc.has_enabled, cc.has_footer), (8, true, true));
+        assert_eq!((cc.columns, cc.has_enabled), (8, true));
         let dash = GridProfile::for_path("desktop.ojuny.dux.dashCards").unwrap();
-        assert_eq!(
-            (dash.columns, dash.has_enabled, dash.has_footer),
-            (6, false, false)
-        );
+        assert_eq!((dash.columns, dash.has_enabled), (6, false));
         let weather = GridProfile::for_path("programs.ojuny.dux.weather.widgets").unwrap();
         assert_eq!((weather.columns, weather.has_enabled), (4, false));
         assert!(GridProfile::for_path("a.b").is_none());

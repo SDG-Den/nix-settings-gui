@@ -19,13 +19,17 @@ const SAMPLE_ICONS: &[&str] = &[
     "user-home",
 ];
 
-fn theme_icon(theme: &ThemeRoot, name: &str, size: i32) -> Option<gtk::Widget> {
+fn icon_theme_for(theme: &ThemeRoot) -> gtk::IconTheme {
     let icon_theme = gtk::IconTheme::new();
     if let Some(display) = gtk::gdk::Display::default() {
         icon_theme.set_display(Some(&display));
     }
     icon_theme.set_search_path(&[theme.parent.as_path()]);
     icon_theme.set_theme_name(Some(&theme.name));
+    icon_theme
+}
+
+fn theme_icon(icon_theme: &gtk::IconTheme, name: &str, size: i32) -> Option<gtk::Widget> {
     if !icon_theme.has_icon(name) {
         return None;
     }
@@ -50,8 +54,9 @@ fn icon_grid(theme: &ThemeRoot, size: i32, columns: u32) -> gtk::Widget {
     flow.set_row_spacing(8);
     flow.set_max_children_per_line(columns);
     flow.set_valign(gtk::Align::Start);
+    let icon_theme = icon_theme_for(theme);
     for name in SAMPLE_ICONS {
-        if let Some(icon) = theme_icon(theme, name, size) {
+        if let Some(icon) = theme_icon(&icon_theme, name, size) {
             flow.append(&icon);
         }
     }
@@ -79,17 +84,6 @@ fn asset_grid(previews: &'static [&'static [u8]], size: i32, columns: u32) -> gt
         flow.append(&style_catalog::texture_widget(bytes, size, size));
     }
     flow.upcast()
-}
-
-fn thumbnail(theme: Option<ThemeRoot>, previews: &'static [&'static [u8]]) -> gtk::Widget {
-    if let Some(theme) = theme {
-        for name in ["folder", "system-file-manager", "computer"] {
-            if let Some(icon) = theme_icon(&theme, name, 24) {
-                return icon;
-            }
-        }
-    }
-    style_catalog::preview_widget(previews, 120, 40)
 }
 
 fn preview(
@@ -141,25 +135,26 @@ pub(crate) fn build_icon_theme(
     package: Option<PackageBinding>,
 ) -> Editor {
     let mut items = Vec::new();
+    let roots = theme_catalog::roots();
     for entry in style_catalog::icon_themes() {
         if let Some(variant) = spec.variant.as_deref() {
             if entry.variant != variant {
                 continue;
             }
         }
-        let theme = theme_catalog::find(entry.value);
+        let theme = theme_catalog::find_in(&roots, entry.value);
         let installed = theme.is_some();
         let label = entry.label.to_string();
         let package = entry.package.to_string();
         let previews = entry.previews;
-        let thumbnail_theme = theme.clone();
+        let thumbnail_previews = entry.previews;
         items.push(style_choice::entry(
             label.clone(),
             entry.value,
             Some(entry.package),
             installed,
             entry.variant,
-            Rc::new(move || thumbnail(thumbnail_theme.clone(), previews)),
+            Rc::new(move || style_catalog::preview_widget(thumbnail_previews, 120, 40)),
             Rc::new(move || preview(&label, &package, theme.clone(), installed, previews)),
         ));
     }

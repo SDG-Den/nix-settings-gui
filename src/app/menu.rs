@@ -25,9 +25,15 @@ pub(super) fn open_flake(app: &Rc<App>, tx: &Tx, path: &str) {
 }
 
 pub(super) fn rebuild_view(app: &Rc<App>) {
+    app.pages_ready.set(false);
     choose_current_page(app);
     rebuild_menu_list(app);
     rebuild_pages(app);
+    app.pages_ready.set(true);
+    let current = app.current_file.borrow().clone();
+    if !current.is_empty() {
+        select_file(app, &current);
+    }
 }
 
 fn choose_current_page(app: &Rc<App>) {
@@ -211,24 +217,38 @@ fn rebuild_pages(app: &Rc<App>) {
 
     let menus = sorted_menus(app);
     let mut pages = Vec::new();
-    for menu in &menus {
-        let page = build_page(app, menu);
-        app.stack.add_named(&page.root, Some(&menu.file));
-        pages.push(page);
+    let current = app.current_file.borrow().clone();
+    if let Some(file) = select_menu_file(&menus, &current, None) {
+        if let Some(menu) = menus.iter().find(|menu| menu.file == file) {
+            let page = build_page(app, menu);
+            app.stack.add_named(&page.root, Some(&menu.file));
+            pages.push(page);
+        }
+        if !app.showing_inputs.get() {
+            app.stack.set_visible_child_name(&file);
+        }
+        *app.current_file.borrow_mut() = file.clone();
+        select_file(app, &file);
     }
     app.pages.replace(pages);
 
-    if !app.showing_inputs.get() {
-        let current = app.current_file.borrow().clone();
-        if let Some(file) = select_menu_file(&menus, &current, None) {
-            app.stack.set_visible_child_name(&file);
-            *app.current_file.borrow_mut() = file.clone();
-            select_file(app, &file);
-        }
-    }
     super::controls::apply_control_filter(app);
     crate::timing::report("rebuild_pages", started);
     super::enrich::query_current_page(app, &app.tx);
+}
+
+/// Build the page for `file` when the sidebar selects it for the first time.
+pub(super) fn ensure_page(app: &Rc<App>, file: &str) {
+    if app.pages.borrow().iter().any(|page| page.file == file) {
+        return;
+    }
+    let menu = sorted_menus(app).into_iter().find(|menu| menu.file == file);
+    let Some(menu) = menu else {
+        return;
+    };
+    let page = build_page(app, &menu);
+    app.stack.add_named(&page.root, Some(&menu.file));
+    app.pages.borrow_mut().push(page);
 }
 
 fn dashboard_card_option(path: &str) -> bool {

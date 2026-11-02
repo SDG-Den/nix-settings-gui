@@ -6,10 +6,11 @@ use super::nix::{
 use crate::dsl::OptionSpec;
 use crate::model::Record;
 use gtk::prelude::*;
+use gtk::{gdk, glib};
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::Once;
+use std::sync::{Once, OnceLock};
 
 pub(crate) const DEFAULT_WALLPAPER_DIR: &str = "./wallpapers";
 
@@ -574,17 +575,95 @@ impl WallpaperView {
     }
 }
 
-fn append_preview(host: &gtk::Box, path: &Path, fallback: &impl Fn() -> gtk::Image) {
-    match gtk::gdk_pixbuf::Pixbuf::from_file_at_scale(path, TILE_WIDTH, PREVIEW_HEIGHT, true) {
-        Ok(pixbuf) => {
-            let picture = gtk::Picture::for_pixbuf(&pixbuf);
-            picture.set_content_fit(gtk::ContentFit::Cover);
-            picture.set_can_shrink(true);
-            picture.set_size_request(TILE_WIDTH, PREVIEW_HEIGHT);
-            host.append(&picture);
+struct PreviewData {
+    width: i32,
+    height: i32,
+    format: gdk::MemoryFormat,
+    bytes: glib::Bytes,
+    stride: usize,
+}
+
+struct PreviewJob {
+    path: PathBuf,
+    done: async_channel::Sender<Option<PreviewData>>,
+}
+
+/// Four shared workers decode wallpaper thumbnails so the main loop never
+/// blocks on a large image. The queue is process-wide and lives as long as the
+/// app.
+fn preview_queue() -> &'static async_channel::Sender<PreviewJob> {
+    static QUEUE: OnceLock<async_channel::Sender<PreviewJob>> = OnceLock::new();
+    QUEUE.get_or_init(|| {
+        let (sender, receiver) = async_channel::unbounded::<PreviewJob>();
+        for _ in 0..4 {
+            let receiver = receiver.clone();
+            std::thread::spawn(move || {
+                while let Ok(job) = receiver.recv_blocking() {
+                    let _ = job.done.send_blocking(decode_preview(&job.path));
+                }
+            });
         }
-        Err(_) => host.append(&fallback()),
+        sender
+    })
+}
+
+fn decode_preview(path: &Path) -> Option<PreviewData> {
+    let pixbuf =
+        gtk::gdk_pixbuf::Pixbuf::from_file_at_scale(path, TILE_WIDTH, PREVIEW_HEIGHT, true).ok()?;
+    let format = if pixbuf.n_channels() == 4 {
+        gdk::MemoryFormat::R8g8b8a8
+    } else {
+        gdk::MemoryFormat::R8g8b8
+    };
+    Some(PreviewData {
+        width: pixbuf.width(),
+        height: pixbuf.height(),
+        format,
+        bytes: pixbuf.read_pixel_bytes(),
+        stride: pixbuf.rowstride() as usize,
+    })
+}
+
+fn load_preview(path: PathBuf, done: impl FnOnce(Option<gdk::Texture>) + 'static) {
+    let (sender, receiver) = async_channel::bounded(1);
+    if preview_queue()
+        .send_blocking(PreviewJob { path, done: sender })
+        .is_err()
+    {
+        return;
     }
+    glib::MainContext::default().spawn_local(async move {
+        let data = receiver.recv().await.ok().flatten();
+        let texture = data.map(|data| {
+            gdk::MemoryTexture::new(
+                data.width,
+                data.height,
+                data.format,
+                &data.bytes,
+                data.stride,
+            )
+            .upcast::<gdk::Texture>()
+        });
+        done(texture);
+    });
+}
+
+fn append_preview(host: &gtk::Box, path: &Path, fallback: &impl Fn() -> gtk::Image) {
+    host.append(&fallback());
+    let host = host.clone();
+    load_preview(path.to_path_buf(), move |texture| {
+        let Some(texture) = texture else {
+            return;
+        };
+        while let Some(child) = host.first_child() {
+            host.remove(&child);
+        }
+        let picture = gtk::Picture::for_paintable(&texture);
+        picture.set_content_fit(gtk::ContentFit::Cover);
+        picture.set_can_shrink(true);
+        picture.set_size_request(TILE_WIDTH, PREVIEW_HEIGHT);
+        host.append(&picture);
+    });
 }
 
 fn show_error(parent: Option<&gtk::Window>, message: &str) {

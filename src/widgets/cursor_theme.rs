@@ -85,17 +85,6 @@ fn asset_grid(previews: &'static [&'static [u8]], size: i32) -> gtk::Widget {
     flow.upcast()
 }
 
-fn thumbnail(theme: Option<ThemeRoot>, previews: &'static [&'static [u8]]) -> gtk::Widget {
-    if let Some(theme) = theme {
-        if let Some(path) = sample_path(&theme, &["default", "left_ptr"]) {
-            if let Some(widget) = cursor_widget(&path, 28) {
-                return widget;
-            }
-        }
-    }
-    style_catalog::preview_widget(previews, 120, 40)
-}
-
 fn preview(
     label: &str,
     package: &str,
@@ -145,20 +134,21 @@ pub(crate) fn build_cursor_theme(
     package: Option<PackageBinding>,
 ) -> Editor {
     let mut items = Vec::new();
+    let roots = theme_catalog::roots();
     for entry in style_catalog::cursor_themes() {
-        let theme = theme_catalog::find_cursor(entry.value);
+        let theme = theme_catalog::find_cursor_in(&roots, entry.value);
         let installed = theme.is_some();
         let label = entry.label.to_string();
         let package = entry.package.to_string();
         let previews = entry.previews;
-        let thumbnail_theme = theme.clone();
+        let thumbnail_previews = entry.previews;
         items.push(style_choice::entry(
             label.clone(),
             entry.value,
             Some(entry.package),
             installed,
             "",
-            Rc::new(move || thumbnail(thumbnail_theme.clone(), previews)),
+            Rc::new(move || style_catalog::preview_widget(thumbnail_previews, 120, 40)),
             Rc::new(move || preview(&label, &package, theme.clone(), installed, previews)),
         ));
     }

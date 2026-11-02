@@ -32,7 +32,7 @@ use controls::apply_control_filter;
 use dialogs::{open_add_file, open_configure};
 use enrich::query_current_page;
 use git::start_git_sync;
-use menu::{open_flake, rebuild_menu_list, rebuild_view};
+use menu::{ensure_page, open_flake, rebuild_menu_list, rebuild_view};
 use pump::{handle_msg, populate_flakes};
 use save::{collect_edits, discard_changes, preview_changes, reload, run_changes_prompt, save_all};
 use state::{App, Msg, PackageService, PluginRegistryState, Tx};
@@ -388,6 +388,7 @@ fn build_ui(
         page_pattern,
         flakes: RefCell::new(Vec::new()),
         pages: RefCell::new(Vec::new()),
+        pages_ready: Cell::new(false),
         suggest_store: RefCell::new(None),
         suggest_parent: RefCell::new(None),
         suggest_cache: RefCell::new(HashMap::new()),
@@ -536,8 +537,12 @@ fn wire(
             if name.is_empty() {
                 return;
             }
+            if !app.pages_ready.get() {
+                return;
+            }
             app.showing_inputs.set(false);
             app.inputs_list.unselect_all();
+            ensure_page(&app, name.as_str());
             app.stack.set_visible_child_name(name.as_str());
             *app.current_file.borrow_mut() = name.to_string();
             apply_control_filter(&app);

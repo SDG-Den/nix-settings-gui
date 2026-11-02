@@ -204,11 +204,13 @@ pub(crate) fn drop_repack(
 }
 
 /// Serialize one tile's fields, placement and `_order`, keeping every field the
-/// tile had. `enabled` is written only for profiles that carry it.
+/// tile had. `enabled` is written only for profiles that carry it. Grouped
+/// quick tiles keep `w`/`h` but have no committed `col`/`row`.
 pub(crate) fn grid_tile_fields_nix(
     id: &str,
     order: i64,
     cell: CellRect,
+    positioned: bool,
     enabled: Option<bool>,
     fields: &[(String, String)],
 ) -> String {
@@ -220,10 +222,10 @@ pub(crate) fn grid_tile_fields_nix(
         parts.push(format!("enabled = {};", active));
     }
     parts.push(format!("_order = {};", order));
-    parts.push(format!(
-        "col = {}; row = {}; w = {}; h = {};",
-        cell.col, cell.row, cell.w, cell.h
-    ));
+    if positioned {
+        parts.push(format!("col = {}; row = {};", cell.col, cell.row));
+    }
+    parts.push(format!("w = {}; h = {};", cell.w, cell.h));
     format!("{} = {{ {} }};", attr_key(id), parts.join(" "))
 }
 #[cfg(test)]
@@ -359,17 +361,24 @@ mod tests {
     }
     #[test]
     fn grid_tile_nix_writes_fields_then_placement() {
-        let fields = vec![("footer".to_string(), "true".to_string())];
-        let out = grid_tile_fields_nix("nightMode", 1000, rect(2, 1, 2, 1), Some(true), &fields);
+        let fields = vec![("small".to_string(), "true".to_string())];
+        let out = grid_tile_fields_nix(
+            "nightMode",
+            1000,
+            rect(2, 1, 2, 1),
+            true,
+            Some(true),
+            &fields,
+        );
         assert_eq!(
             out,
-            "nightMode = { footer = true; enabled = true; _order = 1000; col = 2; row = 1; w = 2; h = 1; };"
+            "nightMode = { small = true; enabled = true; _order = 1000; col = 2; row = 1; w = 2; h = 1; };"
         );
     }
 
     #[test]
     fn grid_tile_nix_omits_enabled_when_absent() {
-        let out = grid_tile_fields_nix("clock", 10, rect(0, 0, 3, 2), None, &[]);
+        let out = grid_tile_fields_nix("clock", 10, rect(0, 0, 3, 2), true, None, &[]);
         assert_eq!(
             out,
             "clock = { _order = 10; col = 0; row = 0; w = 3; h = 2; };"
@@ -377,9 +386,26 @@ mod tests {
     }
 
     #[test]
+    fn grid_tile_nix_omits_placement_for_grouped_tiles() {
+        let fields = vec![("group".to_string(), "\"quickTiles\"".to_string())];
+        let out = grid_tile_fields_nix(
+            "nightMode",
+            140,
+            rect(0, 0, 1, 1),
+            false,
+            Some(true),
+            &fields,
+        );
+        assert_eq!(
+            out,
+            "nightMode = { group = \"quickTiles\"; enabled = true; _order = 140; w = 1; h = 1; };"
+        );
+    }
+
+    #[test]
     fn grid_tile_nix_quotes_awkward_field_keys() {
         let fields = vec![("daily ".to_string(), "true".to_string())];
-        let out = grid_tile_fields_nix("daily ", 1000, rect(0, 0, 1, 1), None, &fields);
+        let out = grid_tile_fields_nix("daily ", 1000, rect(0, 0, 1, 1), true, None, &fields);
         assert_eq!(
             out,
             "\"daily \" = { \"daily \" = true; _order = 1000; col = 0; row = 0; w = 1; h = 1; };"

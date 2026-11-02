@@ -245,13 +245,13 @@ otherwise a generic entry is created.
 
 Grid controls (`grid-configuration`) render a card canvas plus a side details
 pane. Cards can be added through a searchable picker, dragged, resized, enabled
-or footer-pinned where the profile supports it, and edited field by field. New
-cards use DMS default sizes for known ids. "Reset sizes" reapplies catalog
-sizes to every card, "Reset card size" restores the selected card, and "Clear
-all" requires a second click. Weather, dashboard, and control center are
-profiles over the same editor. The number of grid columns remains fixed by the
-`gridColumns` directive on the `@option`; column and row counts are not stored
-inside the card collection.
+or grouped into a quick-tiles row, and edited field by field. New cards use DMS
+default sizes for known ids. "Reset sizes" reapplies catalog sizes to every
+card, "Reset card size" restores the selected card, and "Clear all" requires a
+second click. Weather, dashboard, and control center are profiles over the same
+editor. The number of grid columns remains fixed by the `gridColumns` directive
+on the `@option`; column and row counts are not stored inside the card
+collection.
 
 ## 7. Settings submenu
 

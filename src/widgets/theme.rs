@@ -252,15 +252,7 @@ fn build_theme_list(list: &gtk::ListBox, metas: &[SchemeMeta], current: &str) ->
         content.set_margin_bottom(4);
         content.set_margin_start(6);
         content.set_margin_end(6);
-        let swatches = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        for ci in 0..16 {
-            let swatch = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-            swatch.set_size_request(14, 14);
-            swatch.add_css_class("theme-swatch");
-            swatch.add_css_class(&format!("s{}-c{ci}", meta.index));
-            swatches.append(&swatch);
-        }
-        content.append(&swatches);
+        content.append(&palette_strip(meta.index, 14));
         content.append(
             &gtk::Label::builder()
                 .label(row_label(meta))
@@ -512,18 +504,42 @@ fn code_line_markup(tokens: &[(&str, usize)], palette: &[&str; 16]) -> String {
     out
 }
 
+/// A single drawing area that paints the scheme's sixteen colors. This keeps
+/// the theme list to one widget per row instead of sixteen CSS-styled boxes.
+fn palette_strip(index: usize, height: i32) -> gtk::DrawingArea {
+    let (_, palette) = schemes::SCHEMES[index];
+    let colors: Vec<gtk::gdk::RGBA> = palette
+        .iter()
+        .map(|color| {
+            gtk::gdk::RGBA::parse(*color)
+                .unwrap_or_else(|_| gtk::gdk::RGBA::new(0.0, 0.0, 0.0, 1.0))
+        })
+        .collect();
+    let area = gtk::DrawingArea::builder().content_height(height).build();
+    area.set_size_request(16 * 14, height);
+    area.set_draw_func(move |_, cr, width, height| {
+        let step = width as f64 / 16.0;
+        for (index, color) in colors.iter().enumerate() {
+            cr.set_source_rgba(
+                color.red() as f64,
+                color.green() as f64,
+                color.blue() as f64,
+                color.alpha() as f64,
+            );
+            cr.rectangle(index as f64 * step, 0.0, step, height as f64);
+            let _ = cr.fill();
+        }
+    });
+    area
+}
+
 fn raw_strip(index: usize) -> gtk::Box {
     let strip = gtk::Box::new(gtk::Orientation::Horizontal, 2);
     strip.add_css_class("theme-raw");
     strip.add_css_class(&format!("s{index}"));
-    for ci in 0..16 {
-        let swatch = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        swatch.set_size_request(-1, 28);
-        swatch.set_hexpand(true);
-        swatch.add_css_class("theme-swatch");
-        swatch.add_css_class(&format!("s{index}-c{ci}"));
-        strip.append(&swatch);
-    }
+    let swatches = palette_strip(index, 28);
+    swatches.set_hexpand(true);
+    strip.append(&swatches);
     strip
 }
 
@@ -684,7 +700,6 @@ fn static_theme_css() -> String {
         ".theme-group-toggle { padding: 0; background-color: transparent; background-image: none; box-shadow: none; }\n",
     );
     css.push_str(".theme-raw { padding: 6px; border-radius: 6px; }\n");
-    css.push_str(".theme-raw .theme-swatch { border-radius: 3px; }\n");
     css.push_str(".theme-ui { padding: 10px; border-radius: 6px; }\n");
     css.push_str(
         ".theme-code { padding: 10px; border-radius: 6px; font-family: monospace; font-size: 13px; }\n",
@@ -694,11 +709,6 @@ fn static_theme_css() -> String {
 
 fn scheme_css(index: usize, palette: &[&str; 16]) -> String {
     let mut css = String::new();
-    for (ci, color) in palette.iter().enumerate() {
-        css.push_str(&format!(
-            ".theme-swatch.s{index}-c{ci} {{ background-color: {color}; }}\n"
-        ));
-    }
     let (c00, c01, c02, c03, c04, c05) = (
         palette[0], palette[1], palette[2], palette[3], palette[4], palette[5],
     );
@@ -951,14 +961,13 @@ mod tests {
     }
 
     #[test]
-    fn scheme_css_covers_swatches_ui_and_code() {
+    fn scheme_css_covers_ui_and_code() {
         let css = scheme_css(3, &stub_palette());
-        assert!(css.contains(".theme-swatch.s3-c0 "));
-        assert!(css.contains(".theme-swatch.s3-c15 "));
+        assert!(!css.contains(".theme-swatch"));
         assert!(css.contains(".theme-ui.s3 {"));
         assert!(css.contains(".theme-ui.s3 button "));
         assert!(css.contains(".theme-code.s3 {"));
-        assert!(css.contains("#aa00aa"));
+        assert!(css.contains("#111111"));
     }
 
     #[test]

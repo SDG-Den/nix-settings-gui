@@ -288,7 +288,6 @@ pub(super) fn run_changes_prompt(app: &Rc<App>, on_save: Box<dyn Fn()>) {
             });
         }
         ChangesAction::Discard => {
-            discard_changes(&state);
             on_save();
             dialog.close();
         }

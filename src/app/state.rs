@@ -271,6 +271,9 @@ pub(super) struct App {
 
     pub(super) flakes: RefCell<Vec<PathBuf>>,
     pub(super) pages: RefCell<Vec<MenuPage>>,
+    /// False while `rebuild_view` replaces the page list, so row selections
+    /// made during the sidebar rebuild do not build pages a second time.
+    pub(super) pages_ready: Cell<bool>,
     pub(super) suggest_store: RefCell<Option<gtk::ListStore>>,
     pub(super) suggest_parent: RefCell<Option<String>>,
     pub(super) suggest_cache: RefCell<HashMap<String, Vec<String>>>,

@@ -39,6 +39,7 @@ pub(crate) const WIDGET_NAMES: &[(&str, &str)] = &[
     ("wifi", "Wi-Fi"),
     ("builtin_vpn", "Built-in VPN"),
     ("builtinVpn", "Built-in VPN"),
+    ("quickTiles", "Quick tiles"),
     ("uv", "UV"),
 ];
 
@@ -92,6 +93,9 @@ pub(crate) fn bind_display_label(key: &str, label_override: Option<&str>) -> Str
 
 pub(crate) const WIDGET_FIELD_HELP: &[(&str, &str)] = &[
     ("enabled", "Whether this widget is shown."),
+    ("group", "Quick tiles group this tile belongs to."),
+    ("instanceId", "Unique id for this quick tiles group."),
+    ("small", "Use the compact half-row tile treatment."),
     (
         "_order",
         "Sort position among sibling widgets; lower comes first.",

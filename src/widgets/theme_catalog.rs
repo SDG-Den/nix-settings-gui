@@ -90,14 +90,17 @@ fn index_name(text: &str) -> Option<String> {
     })
 }
 
-pub(crate) fn find(name: &str) -> Option<ThemeRoot> {
-    roots().into_iter().find(|theme| theme.name == name)
+/// Look up a theme in an already-collected root list, so callers that need
+/// many entries do not rescan the icon directories for each one.
+pub(crate) fn find_in(roots: &[ThemeRoot], name: &str) -> Option<ThemeRoot> {
+    roots.iter().find(|theme| theme.name == name).cloned()
 }
 
-pub(crate) fn find_cursor(name: &str) -> Option<ThemeRoot> {
-    roots()
-        .into_iter()
+pub(crate) fn find_cursor_in(roots: &[ThemeRoot], name: &str) -> Option<ThemeRoot> {
+    roots
+        .iter()
         .find(|theme| theme.name == name && theme.has_cursors)
+        .cloned()
 }
 
 #[cfg(test)]

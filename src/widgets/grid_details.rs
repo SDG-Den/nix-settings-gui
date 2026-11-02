@@ -1,8 +1,11 @@
 use super::dms_catalog::{card_defaults, card_size, widget_description, widget_icon};
 use super::fields::{dim_line, dim_line_with_help};
 use super::grid::{
-    grid_reattach, grid_repack, grid_select, grid_set_footer, grid_set_status, grid_tile_is_footer,
-    grid_update_size_caption, grid_update_strips, make_grid_tile, GridLayoutState, GridProfile,
+    grid_can_group, grid_group_ids, grid_group_members, grid_group_tile, grid_id_can_group,
+    grid_move_member, grid_prune_orphan_groups, grid_reattach, grid_repack, grid_select,
+    grid_set_status, grid_tile_instance_id, grid_tile_is_grouped, grid_tile_is_quick_tiles,
+    grid_ungroup_tile, grid_update_size_caption, grid_update_strips, make_grid_tile,
+    GridLayoutState, GridProfile,
 };
 use super::grid_gestures::wire_grid_tile;
 use super::grid_layout::{grid_clamp_cell, grid_first_fit, CellRect};
@@ -16,11 +19,9 @@ use std::rc::Rc;
 pub(crate) fn build_grid_adder(
     advanced: bool,
     available: &[String],
-    has_footer: bool,
-    on_add: Rc<dyn Fn(&str, bool)>,
+    on_add: Rc<dyn Fn(&str)>,
 ) -> gtk::Box {
     let bar = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    let footer = Rc::new(std::cell::Cell::new(false));
     let button = gtk::MenuButton::builder()
         .label("Add widget")
         .halign(gtk::Align::Start)
@@ -107,21 +108,13 @@ pub(crate) fn build_grid_adder(
     {
         let on_add = on_add.clone();
         let popover = popover.clone();
-        let footer = footer.clone();
         list.connect_row_activated(move |_, row| {
             let id = row.widget_name().to_string();
             if !id.is_empty() {
-                on_add(&id, footer.get());
+                on_add(&id);
             }
             popover.popdown();
         });
-    }
-    if has_footer {
-        let check = gtk::CheckButton::with_label("Footer");
-        check.set_tooltip_text(Some("Add the next widget to the footer strip"));
-        let footer = footer.clone();
-        check.connect_toggled(move |check| footer.set(check.is_active()));
-        bar.append(&check);
     }
     if advanced {
         let entry = gtk::Entry::new();
@@ -131,11 +124,10 @@ pub(crate) fn build_grid_adder(
         let add = gtk::Button::with_label("Add custom");
         let entry_add = entry.clone();
         let on_add = on_add.clone();
-        let footer = footer.clone();
         add.connect_clicked(move |_| {
             let id = entry_add.text().trim().to_string();
             if !id.is_empty() {
-                on_add(&id, footer.get());
+                on_add(&id);
                 entry_add.set_text("");
             }
         });
@@ -145,7 +137,8 @@ pub(crate) fn build_grid_adder(
 }
 
 pub(crate) fn grid_clear_all(state: &Rc<GridLayoutState>) {
-    state.tiles.borrow_mut().clear();
+    state.tiles.borrow_mut().retain(|tile| tile.locked);
+    grid_prune_orphan_groups(state);
     *state.selected.borrow_mut() = None;
     grid_repack(state, None, true);
     grid_reattach(state);
@@ -161,8 +154,11 @@ pub(crate) fn grid_reset_layout(state: &Rc<GridLayoutState>) {
     let mut taken: Vec<CellRect> = Vec::new();
     {
         let mut tiles = state.tiles.borrow_mut();
-        for tile in tiles.iter_mut() {
-            if profile.has_footer && grid_tile_is_footer(tile) {
+        let grouped: Vec<bool> = (0..tiles.len())
+            .map(|index| grid_tile_is_grouped(&tiles, index))
+            .collect();
+        for (index, tile) in tiles.iter_mut().enumerate() {
+            if tile.locked || grouped[index] {
                 continue;
             }
             let spec = card_size(profile.surface, &tile.id);
@@ -266,6 +262,7 @@ pub(crate) fn grid_delete(state: &Rc<GridLayoutState>) {
         }
         tiles.remove(index);
     }
+    grid_prune_orphan_groups(state);
     *state.selected.borrow_mut() = None;
     grid_repack(state, None, true);
     grid_reattach(state);
@@ -292,14 +289,10 @@ pub(crate) fn grid_refresh_adder(state: &Rc<GridLayoutState>) {
         .map(|id| id.to_string())
         .collect();
     let add_state = state.clone();
-    let on_add: Rc<dyn Fn(&str, bool)> =
-        Rc::new(move |id, footer| grid_add_tile(&add_state, id, footer));
-    state.adder_slot.append(&build_grid_adder(
-        state.advanced,
-        &available,
-        state.profile.has_footer,
-        on_add,
-    ));
+    let on_add: Rc<dyn Fn(&str)> = Rc::new(move |id| grid_add_tile(&add_state, id));
+    state
+        .adder_slot
+        .append(&build_grid_adder(state.advanced, &available, on_add));
 }
 
 pub(crate) fn grid_scaffold_value(
@@ -323,7 +316,7 @@ pub(crate) fn grid_scaffold_value(
     format!("{{ {} }}", parts.join(" "))
 }
 
-pub(crate) fn grid_add_tile(state: &Rc<GridLayoutState>, id: &str, footer: bool) {
+pub(crate) fn grid_add_tile(state: &Rc<GridLayoutState>, id: &str) {
     if state.tiles.borrow().iter().any(|tile| tile.id == id) {
         return;
     }
@@ -339,29 +332,20 @@ pub(crate) fn grid_add_tile(state: &Rc<GridLayoutState>, id: &str, footer: bool)
     let spec = card_size(profile.surface, id);
     let w = spec.w.clamp(spec.min_w, spec.max_w.min(profile.columns));
     let h = spec.h.clamp(spec.min_h, spec.max_h);
-    let cell = if footer {
-        CellRect {
-            col: 0,
-            row: 0,
-            w: 1,
-            h: 1,
-        }
-    } else {
+    let cell = {
         let tiles = state.tiles.borrow();
         let taken: Vec<CellRect> = tiles
             .iter()
-            .filter(|tile| !(profile.has_footer && grid_tile_is_footer(tile)))
-            .map(|tile| tile.cell)
+            .enumerate()
+            .filter(|(index, tile)| !tile.locked && !grid_tile_is_grouped(&tiles, *index))
+            .map(|(_, tile)| tile.cell)
             .collect();
         grid_first_fit(&taken, profile.columns, w, h)
     };
     let value = grid_scaffold_value(profile, id, order, cell);
     let mut tile = make_grid_tile(id, &value, profile, &state.ctx);
-    if footer {
-        tile.cell = cell;
-        tile.fields
-            .retain(|field| field.record.segments.last().map(String::as_str) != Some("footer"));
-        grid_set_footer(&mut tile, true);
+    if grid_tile_is_quick_tiles(&tile) {
+        super::grid::grid_ensure_group_id(&mut tile);
     }
     tile.added = true;
     wire_grid_tile(state, &tile);
@@ -375,6 +359,57 @@ pub(crate) fn grid_add_tile(state: &Rc<GridLayoutState>, id: &str, footer: bool)
     } else {
         grid_set_status(state, "No room to add this widget — the grid is full.");
     }
+    grid_reattach(state);
+    grid_refresh_adder(state);
+    grid_select(state, index);
+    state.notify();
+}
+
+pub(crate) fn grid_add_member(state: &Rc<GridLayoutState>, parent_index: usize, id: &str) {
+    if state.tiles.borrow().iter().any(|tile| tile.id == id) {
+        return;
+    }
+    let profile = state.profile;
+    let group_id = {
+        let mut tiles = state.tiles.borrow_mut();
+        let Some(parent) = tiles.get_mut(parent_index) else {
+            return;
+        };
+        if !grid_tile_is_quick_tiles(parent) {
+            return;
+        }
+        super::grid::grid_ensure_group_id(parent)
+    };
+    let order = state
+        .tiles
+        .borrow()
+        .iter()
+        .map(|tile| tile.order)
+        .max()
+        .unwrap_or(0)
+        + 10;
+    let spec = card_size(profile.surface, id);
+    let w = spec.w.clamp(spec.min_w, spec.max_w.min(profile.columns));
+    let h = spec.h.clamp(spec.min_h, spec.max_h);
+    let mut parts = vec![
+        "enabled = true;".to_string(),
+        format!("_order = {};", order),
+        format!("group = {};", super::nix::quote(&group_id)),
+        format!("w = {}; h = {};", w, h),
+        "small = true;".to_string(),
+    ];
+    for (name, value) in card_defaults(profile.surface, id) {
+        parts.push(format!("{} = {};", attr_key(name), value));
+    }
+    let value = format!("{{ {} }}", parts.join(" "));
+    let mut tile = make_grid_tile(id, &value, profile, &state.ctx);
+    tile.added = true;
+    wire_grid_tile(state, &tile);
+    let index = {
+        let mut tiles = state.tiles.borrow_mut();
+        tiles.push(tile);
+        tiles.len() - 1
+    };
     grid_reattach(state);
     grid_refresh_adder(state);
     grid_select(state, index);
@@ -424,32 +459,140 @@ pub(crate) fn grid_refresh_details(state: &Rc<GridLayoutState>) {
             switch,
         ));
     }
-    if state.profile.has_footer {
-        let footer = grid_tile_is_footer(tile);
-        let toggle = gtk::Button::with_label(if footer {
-            "Move to canvas"
-        } else {
-            "Move to footer"
-        });
-        toggle.add_css_class("flat");
-        state.details.append(&toggle);
+    if grid_tile_is_quick_tiles(tile) {
+        let group_id = grid_tile_instance_id(tile).unwrap_or_default();
+        let members = grid_group_members(&tiles, &group_id);
+        let heading = gtk::Label::builder()
+            .xalign(0.0)
+            .label("Quick tiles")
+            .css_classes(["heading"])
+            .build();
+        state.details.append(&heading);
+        let hint = gtk::Label::builder()
+            .xalign(0.0)
+            .wrap(true)
+            .label("Grouped tiles share this card. Drag a canvas tile onto the card, or add one below.")
+            .css_classes(["dim-label", "caption"])
+            .build();
+        state.details.append(&hint);
+        for &member_index in &members {
+            let member = &tiles[member_index];
+            let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+            let name = gtk::Label::builder()
+                .xalign(0.0)
+                .hexpand(true)
+                .label(widget_display_name(&member.id))
+                .build();
+            row.append(&name);
+            let up = gtk::Button::from_icon_name("go-up-symbolic");
+            up.add_css_class("flat");
+            up.set_tooltip_text(Some("Move earlier in the quick tiles row"));
+            let down = gtk::Button::from_icon_name("go-down-symbolic");
+            down.add_css_class("flat");
+            down.set_tooltip_text(Some("Move later in the quick tiles row"));
+            let out = gtk::Button::with_label("Move out");
+            out.add_css_class("flat");
+            let remove = gtk::Button::from_icon_name("user-trash-symbolic");
+            remove.add_css_class("flat");
+            remove.set_tooltip_text(Some("Remove this tile"));
+            row.append(&up);
+            row.append(&down);
+            row.append(&out);
+            row.append(&remove);
+            state.details.append(&row);
+            {
+                let st = state.clone();
+                up.connect_clicked(move |_| grid_move_member(&st, member_index, -1));
+            }
+            {
+                let st = state.clone();
+                down.connect_clicked(move |_| grid_move_member(&st, member_index, 1));
+            }
+            {
+                let st = state.clone();
+                out.connect_clicked(move |_| {
+                    grid_ungroup_tile(&st, member_index);
+                });
+            }
+            {
+                let st = state.clone();
+                remove.connect_clicked(move |_| {
+                    grid_select(&st, member_index);
+                    grid_delete(&st);
+                });
+            }
+        }
+        let used: Vec<String> = tiles.iter().map(|tile| tile.id.clone()).collect();
+        let available: Vec<String> = state
+            .profile
+            .registry
+            .iter()
+            .filter(|id| !used.contains(&id.to_string()))
+            .filter(|id| grid_id_can_group(id))
+            .map(|id| id.to_string())
+            .collect();
+        let add = gtk::MenuButton::builder()
+            .label("Add tile")
+            .css_classes(["flat"])
+            .build();
+        let popover = gtk::Popover::new();
+        let list = gtk::ListBox::new();
+        list.set_selection_mode(gtk::SelectionMode::None);
+        for id in available {
+            let row = gtk::ListBoxRow::new();
+            row.set_widget_name(&id);
+            let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            line.set_margin_top(6);
+            line.set_margin_bottom(6);
+            line.set_margin_start(8);
+            line.set_margin_end(8);
+            let icon = gtk::Image::from_icon_name(widget_icon(&id));
+            icon.set_pixel_size(20);
+            line.append(&icon);
+            line.append(&gtk::Label::new(Some(&widget_display_name(&id))));
+            row.set_child(Some(&line));
+            list.append(&row);
+        }
+        popover.set_child(Some(&list));
+        add.set_popover(Some(&popover));
+        let parent = selected.unwrap_or(0);
         {
             let st = state.clone();
-            let index = selected.unwrap_or(0);
-            toggle.connect_clicked(move |_| {
-                {
-                    let mut tiles = st.tiles.borrow_mut();
-                    let Some(tile) = tiles.get_mut(index) else {
-                        return;
-                    };
-                    let footer = grid_tile_is_footer(tile);
-                    grid_set_footer(tile, !footer);
+            let popover = popover.clone();
+            list.connect_row_activated(move |_, row| {
+                let id = row.widget_name().to_string();
+                if !id.is_empty() {
+                    grid_add_member(&st, parent, &id);
                 }
-                grid_repack(&st, None, false);
-                grid_reattach(&st);
-                grid_refresh_details(&st);
-                st.notify();
+                popover.popdown();
             });
+        }
+        state.details.append(&add);
+    } else if grid_tile_is_grouped(&tiles, selected.unwrap_or(0)) {
+        let out = gtk::Button::with_label("Move to canvas");
+        out.add_css_class("flat");
+        let index = selected.unwrap_or(0);
+        {
+            let st = state.clone();
+            out.connect_clicked(move |_| {
+                grid_ungroup_tile(&st, index);
+            });
+        }
+        state.details.append(&out);
+    } else if grid_can_group(tile) {
+        let groups = grid_group_ids(&tiles);
+        for group_id in groups {
+            let button = gtk::Button::with_label("Add to quick tiles");
+            button.add_css_class("flat");
+            let index = selected.unwrap_or(0);
+            let target = group_id.clone();
+            {
+                let st = state.clone();
+                button.connect_clicked(move |_| {
+                    grid_group_tile(&st, index, &target);
+                });
+            }
+            state.details.append(&button);
         }
     }
 

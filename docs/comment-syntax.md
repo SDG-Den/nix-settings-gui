@@ -486,9 +486,9 @@ appears once because the convenience options are id-keyed attrsets.
 
 Grid controls for control center widgets, dashboard cards, and weather widgets
 use the same editor. New cards use the Dux Shell default size for their id, and the
-editor supports add, remove, move, resize, enable, footer, reset sizes, reset
-selected, and clear all. `gridColumns` fixes the column count for the control;
-panel column and row counts are not stored in the card collection.
+editor supports add, remove, move, resize, enable, quick-tile grouping, reset
+sizes, reset selected, and clear all. `gridColumns` fixes the column count for
+the control; panel column and row counts are not stored in the card collection.
 
 ## 4. Default type mapping
 
