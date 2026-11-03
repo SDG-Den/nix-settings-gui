@@ -234,7 +234,21 @@ pub(crate) fn build_dock(record: &Record, ctx: &BuildContext) -> Editor {
         }
     }
     let widgets_present = widgets_value.is_some();
-    let presets = ctx.presets.get(&record.file).cloned().unwrap_or_default();
+    let presets = {
+        let mut presets = ctx.presets.get(&record.file).cloned().unwrap_or_default();
+        for (file, file_presets) in ctx.presets.iter() {
+            if file.as_str() == record.file.as_str() {
+                continue;
+            }
+            presets.extend(
+                file_presets
+                    .iter()
+                    .filter(|(spec, _)| spec.sections.iter().any(|section| section.as_str() == "dock"))
+                    .cloned(),
+            );
+        }
+        presets
+    };
 
     let widgets = WidgetTileList::build(
         TileSection::Dock,
