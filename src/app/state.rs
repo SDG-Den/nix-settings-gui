@@ -54,6 +54,12 @@ pub(super) enum Msg {
     GitPulled(Result<bool, String>),
     GitSynced(Result<String, String>),
     InputsSaved(Result<(), String>),
+    InputCheckDone {
+        epoch: u64,
+        results: Vec<(String, Result<crate::flake_update::InputStatus, String>)>,
+    },
+    InputUpdated(Result<String, String>),
+    InputsUpdatedAll(Result<usize, String>),
     ApplyFinished {
         path: String,
         result: Result<(), String>,
@@ -246,6 +252,10 @@ pub(super) struct App {
         RefCell<Option<Result<crate::secureboot::SecureBootState, String>>>,
     pub(super) secureboot_pending: RefCell<Vec<SecureBootCallback>>,
     pub(super) secureboot_loading: Cell<bool>,
+    pub(super) input_checks:
+        RefCell<HashMap<String, Result<crate::flake_update::InputStatus, String>>>,
+    pub(super) input_checking: Cell<bool>,
+    pub(super) input_check_epoch: Cell<u64>,
     pub(super) apply_state: Rc<ApplyState>,
     pub(super) tx: Tx,
     /// Descriptor sidecar entries, empty when no file was supplied.

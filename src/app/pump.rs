@@ -353,6 +353,67 @@ pub(super) fn handle_msg(app: &Rc<App>, tx: &Tx, msg: Msg) {
             app.status.set_text("Flake input save failed");
             show_error(&app.window, &e);
         }
+        Msg::InputCheckDone { epoch, results } => {
+            if epoch != app.input_check_epoch.get() {
+                return;
+            }
+            app.input_checking.set(false);
+            {
+                let mut checks = app.input_checks.borrow_mut();
+                checks.clear();
+                for (name, result) in results {
+                    checks.insert(name, result);
+                }
+            }
+            let updates = app
+                .input_checks
+                .borrow()
+                .values()
+                .filter(|result| {
+                    matches!(
+                        result,
+                        Ok(status)
+                            if matches!(
+                                &status.state,
+                                crate::flake_update::InputState::UpdateAvailable
+                                    | crate::flake_update::InputState::NotLocked
+                            )
+                    )
+                })
+                .count();
+            if updates == 0 {
+                app.status.set_text("Flake inputs are up to date");
+            } else {
+                app.status
+                    .set_text(&format!("{updates} flake input update(s) available"));
+            }
+            if app.showing_inputs.get() {
+                inputs::refresh(app);
+            }
+        }
+        Msg::InputUpdated(Ok(name)) => {
+            inputs::refresh_locked_revisions(app);
+            app.status.set_text(&format!("Updated {name}"));
+            if app.showing_inputs.get() {
+                inputs::refresh(app);
+            }
+        }
+        Msg::InputUpdated(Err(e)) => {
+            app.status.set_text("Flake input update failed");
+            show_error(&app.window, &e);
+        }
+        Msg::InputsUpdatedAll(Ok(count)) => {
+            inputs::refresh_locked_revisions(app);
+            app.status
+                .set_text(&format!("Updated {count} flake input(s)"));
+            if app.showing_inputs.get() {
+                inputs::refresh(app);
+            }
+        }
+        Msg::InputsUpdatedAll(Err(e)) => {
+            app.status.set_text("Flake input update failed");
+            show_error(&app.window, &e);
+        }
         Msg::ApplyFinished { path, result } => super::apply::finished(app, &path, result),
         Msg::SecureBootStatus(result) => {
             app.secureboot_loading.set(false);

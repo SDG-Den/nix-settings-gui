@@ -13,7 +13,7 @@ use crate::flake_ref::{self, FlakeRef, Query};
 use crate::nixpkgs as nixpkgs_model;
 use crate::ref_suggest;
 
-use super::inputs::{flake_file, save_edits};
+use super::inputs::{flake_file, save_edits, update_button, update_summary};
 use super::pump::show_error;
 use super::state::App;
 
@@ -31,6 +31,7 @@ pub(super) fn section(app: &Rc<App>, document: &InputDocument) -> adw::Preferenc
     let button = gtk::Button::new();
     button.set_valign(gtk::Align::Center);
     let mut lock_row = None;
+    let mut updates_row = None;
 
     match &input {
         Some(input) => {
@@ -54,6 +55,21 @@ pub(super) fn section(app: &Rc<App>, document: &InputDocument) -> adw::Preferenc
                 None => pinned.set_subtitle("Not present in flake.lock"),
             }
             lock_row = Some(pinned);
+            if let Some(status) = app
+                .input_checks
+                .borrow()
+                .get(nixpkgs_model::INPUT_NAME)
+                .cloned()
+            {
+                let (summary, has_update) = update_summary(&status);
+                let updates = adw::ActionRow::new();
+                updates.set_title("Updates");
+                updates.set_subtitle(&summary);
+                if has_update {
+                    updates.add_suffix(&update_button(app, nixpkgs_model::INPUT_NAME));
+                }
+                updates_row = Some(updates);
+            }
         }
         None => {
             row.set_subtitle("No nixpkgs input is declared in flake.nix");
@@ -66,6 +82,9 @@ pub(super) fn section(app: &Rc<App>, document: &InputDocument) -> adw::Preferenc
     if let Some(lock_row) = lock_row {
         group.add(&lock_row);
     }
+    if let Some(updates_row) = updates_row {
+        group.add(&updates_row);
+    }
     {
         let app = app.clone();
         button.connect_clicked(move |_| open_dialog(&app, input.clone()));
@@ -73,11 +92,11 @@ pub(super) fn section(app: &Rc<App>, document: &InputDocument) -> adw::Preferenc
     group
 }
 
-fn short_rev(rev: &str) -> String {
-    rev.chars().take(12).collect()
+pub(super) fn short_rev(rev: &str) -> String {
+    rev.chars().take(8).collect()
 }
 
-fn format_time(seconds: i64) -> String {
+pub(super) fn format_time(seconds: i64) -> String {
     glib::DateTime::from_unix_local(seconds)
         .ok()
         .and_then(|date| date.format("%Y-%m-%d").ok())

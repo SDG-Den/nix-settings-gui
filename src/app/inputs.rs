@@ -8,8 +8,11 @@ use adw::prelude::*;
 use gtk::glib;
 
 use crate::edit;
-use crate::flake_inputs::{self, DeclaredInput, FlakeInput};
+use crate::flake_inputs::{self, DeclaredInput, FlakeInput, InputDocument};
+use crate::flake_lock;
+use crate::flake_update::{self, InputState, InputStatus};
 
+use super::nixpkgs::{format_time, short_rev};
 use super::pump::{show_error, spawn};
 use super::state::{App, Msg};
 use crate::nixpkgs as nixpkgs_model;
@@ -74,6 +77,148 @@ fn declared_inputs(app: &Rc<App>) -> Vec<DeclaredInput> {
         .as_ref()
         .map(|scan| scan.declared_inputs.clone())
         .unwrap_or_default()
+}
+
+pub(super) fn update_summary(status: &Result<InputStatus, String>) -> (String, bool) {
+    let status = match status {
+        Ok(status) => status,
+        Err(error) => return (format!("Check failed: {error}"), false),
+    };
+    if let InputState::Skipped(reason) = &status.state {
+        return (reason.clone(), false);
+    }
+    let current = match (&status.current_rev, status.current_date) {
+        (Some(rev), Some(date)) => format!("current {}{}", short_rev(rev), format_time(date)),
+        (Some(rev), None) => format!("current {}", short_rev(rev)),
+        (None, _) => "current: not locked".to_string(),
+    };
+    let latest = match (&status.remote_rev, status.remote_date) {
+        (Some(rev), Some(date)) => format!("latest {}{}", short_rev(rev), format_time(date)),
+        (Some(rev), None) => format!("latest {}", short_rev(rev)),
+        (None, _) => "latest: unknown".to_string(),
+    };
+    let suffix = match &status.state {
+        InputState::UpToDate => " · up to date",
+        InputState::UpdateAvailable => " · update available",
+        InputState::NotLocked => " · not locked",
+        InputState::Skipped(_) => "",
+    };
+    let update = matches!(
+        &status.state,
+        InputState::UpdateAvailable | InputState::NotLocked
+    );
+    (format!("{current}  →  {latest}{suffix}"), update)
+}
+
+pub(super) fn update_button(app: &Rc<App>, name: &str) -> gtk::Button {
+    let button = gtk::Button::builder()
+        .label("Update")
+        .tooltip_text(format!("Update {name}"))
+        .build();
+    button.add_css_class("pill");
+    let app = app.clone();
+    let name = name.to_string();
+    button.connect_clicked(move |button| {
+        button.set_sensitive(false);
+        let base = app.base.borrow().clone();
+        let name = name.clone();
+        app.status.set_text(&format!("Updating {name}..."));
+        spawn(&app.tx, move |tx| {
+            let result = flake_update::update(&base, &name).map(|_| name);
+            let _ = tx.send_blocking(Msg::InputUpdated(result));
+        });
+    });
+    button
+}
+
+/// Re-read the current revisions after an update so cached check results do not
+/// keep showing the pre-update lock state.
+pub(super) fn refresh_locked_revisions(app: &Rc<App>) {
+    let base = app.base.borrow().clone();
+    let lock_path = Path::new(&base).join("flake.lock");
+    let mut checks = app.input_checks.borrow_mut();
+    for (name, result) in checks.iter_mut() {
+        let Ok(status) = result else {
+            continue;
+        };
+        let Some(locked) = flake_lock::read_input(&lock_path, name) else {
+            continue;
+        };
+        status.current_rev = locked.rev;
+        status.current_date = locked.last_modified;
+        if let Some(remote) = &status.remote_rev {
+            status.state = match &status.current_rev {
+                Some(current) if current == remote => InputState::UpToDate,
+                Some(_) => InputState::UpdateAvailable,
+                None => InputState::NotLocked,
+            };
+        }
+    }
+}
+
+fn updatable_inputs(app: &Rc<App>, document: &InputDocument) -> Vec<String> {
+    let checks = app.input_checks.borrow();
+    document
+        .inputs
+        .iter()
+        .filter(|input| !nixpkgs_model::is_nixpkgs(&input.name))
+        .filter(|input| {
+            checks
+                .get(&input.name)
+                .and_then(|result| result.as_ref().ok())
+                .map(|status| {
+                    matches!(
+                        &status.state,
+                        InputState::UpdateAvailable | InputState::NotLocked
+                    )
+                })
+                .unwrap_or(false)
+        })
+        .map(|input| input.name.clone())
+        .collect()
+}
+
+fn scan_updates(app: &Rc<App>) {
+    let base = app.base.borrow().clone();
+    if base.is_empty() {
+        app.status.set_text("No flake directory open");
+        return;
+    }
+    let inputs = match flake_inputs::load(&flake_file(app)) {
+        Ok(document) => document.inputs,
+        Err(error) => {
+            show_error(&app.window, &error);
+            return;
+        }
+    };
+    let epoch = app.input_check_epoch.get() + 1;
+    app.input_check_epoch.set(epoch);
+    app.input_checks.borrow_mut().clear();
+    app.input_checking.set(true);
+    app.status.set_text("Checking flake inputs for updates...");
+    let app_for_refresh = app.clone();
+    glib::timeout_add_local_once(Duration::from_millis(0), move || refresh(&app_for_refresh));
+    spawn(&app.tx, move |tx| {
+        let mut results = Vec::new();
+        for input in inputs {
+            let result = flake_update::check(&base, &input);
+            results.push((input.name, result));
+        }
+        let _ = tx.send_blocking(Msg::InputCheckDone { epoch, results });
+    });
+}
+
+fn update_all_inputs(app: &Rc<App>, names: &[String]) {
+    if names.is_empty() {
+        return;
+    }
+    let base = app.base.borrow().clone();
+    let names = names.to_vec();
+    app.status.set_text("Updating flake inputs...");
+    spawn(&app.tx, move |tx| {
+        let result = flake_update::update_all(&base, &names);
+        let _ = tx.send_blocking(Msg::InputsUpdatedAll(result));
+    });
 }
 
 pub(super) fn refresh(app: &Rc<App>) {
@@ -144,6 +289,48 @@ pub(super) fn refresh(app: &Rc<App>) {
 
     content.append(&super::nixpkgs::section(app, &document));
 
+    let updatable = updatable_inputs(app, &document);
+    let scan_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    scan_row.set_halign(gtk::Align::Start);
+    let scan = gtk::Button::with_label("Check for updates");
+    scan.add_css_class("pill");
+    scan.set_sensitive(!app.input_checking.get());
+    {
+        let app = app.clone();
+        scan.connect_clicked(move |_| scan_updates(&app));
+    }
+    let spinner = gtk::Spinner::new();
+    spinner.set_visible(app.input_checking.get());
+    if app.input_checking.get() {
+        spinner.start();
+    }
+    scan_row.append(&scan);
+    scan_row.append(&spinner);
+    if !updatable.is_empty() {
+        let update_all = gtk::Button::with_label("Update all inputs");
+        update_all.add_css_class("suggested-action");
+        let app = app.clone();
+        let names = updatable;
+        update_all.connect_clicked(move |button| {
+            button.set_sensitive(false);
+            update_all_inputs(&app, &names);
+        });
+        scan_row.append(&update_all);
+    }
+    if !missing.is_empty() {
+        let add_missing =
+            gtk::Button::with_label(&format!("Add {} missing input(s)", missing.len()));
+        add_missing.add_css_class("suggested-action");
+        let app = app.clone();
+        let missing = missing.clone();
+        add_missing.connect_clicked(move |button| {
+            button.set_sensitive(false);
+            auto_add_missing(&app, &missing);
+        });
+        scan_row.append(&add_missing);
+    }
+    content.append(&scan_row);
+
     let listed: Vec<&FlakeInput> = document
         .inputs
         .iter()
@@ -179,19 +366,6 @@ pub(super) fn refresh(app: &Rc<App>) {
         add.connect_clicked(move |_| open_dialog(&app, None));
     }
     content.append(&add);
-
-    if !missing.is_empty() {
-        let add_missing =
-            gtk::Button::with_label(&format!("Add {} missing input(s)", missing.len()));
-        add_missing.add_css_class("suggested-action");
-        add_missing.set_halign(gtk::Align::Start);
-        let app = app.clone();
-        add_missing.connect_clicked(move |button| {
-            button.set_sensitive(false);
-            auto_add_missing(&app, &missing);
-        });
-        content.append(&add_missing);
-    }
 
     app.inputs_page.append(&scrolled(content));
 }
@@ -233,7 +407,33 @@ fn input_row(app: &Rc<App>, input: &FlakeInput) -> gtk::Box {
         .build();
     text.append(&name);
     text.append(&subtitle);
+    if let Some(status) = app.input_checks.borrow().get(&input.name).cloned() {
+        let (summary, _) = update_summary(&status);
+        let update_label = gtk::Label::builder()
+            .label(&summary)
+            .xalign(0.0)
+            .wrap(true)
+            .css_classes(["dim-label"])
+            .build();
+        text.append(&update_label);
+    }
     row.append(&text);
+
+    let has_update = app
+        .input_checks
+        .borrow()
+        .get(&input.name)
+        .and_then(|result| result.as_ref().ok())
+        .map(|status| {
+            matches!(
+                &status.state,
+                InputState::UpdateAvailable | InputState::NotLocked
+            )
+        })
+        .unwrap_or(false);
+    if has_update {
+        row.append(&update_button(app, &input.name));
+    }
 
     let cog = gtk::Button::builder()
         .icon_name("emblem-system-symbolic")
@@ -621,6 +821,9 @@ fn auto_add_missing(app: &Rc<App>, missing: &[DeclaredInput]) {
 
 pub(super) fn save_edits(app: &Rc<App>, edits: Vec<edit::PendingEdit>) {
     let root = app.base.borrow().clone();
+    app.input_checks.borrow_mut().clear();
+    app.input_check_epoch.set(app.input_check_epoch.get() + 1);
+    app.input_checking.set(false);
     app.status.set_text("Saving flake inputs...");
     spawn(&app.tx, move |tx| {
         let result = edit::apply(&edits, &root).map(|_| ());

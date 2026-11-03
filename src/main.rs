@@ -14,6 +14,7 @@ mod error_dialog;
 mod flake_inputs;
 mod flake_lock;
 mod flake_ref;
+mod flake_update;
 #[allow(dead_code)]
 mod metadata;
 #[allow(dead_code)]

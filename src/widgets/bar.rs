@@ -243,7 +243,11 @@ pub(crate) fn build_dock(record: &Record, ctx: &BuildContext) -> Editor {
             presets.extend(
                 file_presets
                     .iter()
-                    .filter(|(spec, _)| spec.sections.iter().any(|section| section.as_str() == "dock"))
+                    .filter(|(spec, _)| {
+                        spec.sections
+                            .iter()
+                            .any(|section| section.as_str() == "dock")
+                    })
                     .cloned(),
             );
         }

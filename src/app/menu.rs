@@ -17,6 +17,9 @@ use super::state::{App, ControlRow, InsertButton, MenuPage, Tx};
 pub(super) fn open_flake(app: &Rc<App>, tx: &Tx, path: &str) {
     *app.base.borrow_mut() = path.to_string();
     app.plugin_registry.reset();
+    app.input_checks.borrow_mut().clear();
+    app.input_checking.set(false);
+    app.input_check_epoch.set(app.input_check_epoch.get() + 1);
     app.invalidate_wallpaper();
     app.config.borrow_mut().remember(path);
     let _ = app.config.borrow().save();
