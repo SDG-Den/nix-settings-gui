@@ -1,0 +1,91 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to create, for example v0.1.0
+        required: true
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      # nix bundle includes the full closure, so the asset runs on a plain
+      # system without a binary cache or a local nix store.
+      - name: Build bundled binary
+        run: |
+          mkdir -p dist
+          nix bundle .#default -o dist/nix-settings-gui
+          cp -L dist/nix-settings-gui dist/nix-settings-gui.bin
+          rm dist/nix-settings-gui
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum nix-settings-gui.bin > SHA256SUMS
+
+      # The release also publishes a small flake. Add it as an input and use
+      # packages.<system>.nix-settings-gui. The fetchurl hash pins the
+      # downloaded bundle, so the package is reproducible without a cache.
+      - name: Generate release flake
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          sha=$(sha256sum dist/nix-settings-gui.bin | cut -d' ' -f1)
+          base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}"
+          mkdir -p dist/flake
+          cat > dist/flake/flake.nix <<EOF
+          {
+            inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+
+            outputs = { self, nixpkgs }:
+              let
+                systems = [ "x86_64-linux" ];
+                forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.\${system});
+                mk = pkgs: pkgs.stdenvNoCC.mkDerivation {
+                  pname = "nix-settings-gui";
+                  version = "${TAG}";
+                  src = pkgs.fetchurl {
+                    url = "${base}/nix-settings-gui.bin";
+                    sha256 = "${sha}";
+                  };
+                  dontUnpack = true;
+                  installPhase = "install -Dm755 \$src \$out/bin/nix-settings-gui";
+                };
+              in {
+                packages = forAllSystems (pkgs: {
+                  nix-settings-gui = mk pkgs;
+                  default = mk pkgs;
+                });
+              };
+          }
+          EOF
+          tar -czf dist/nix-settings-gui-flake.tar.gz -C dist/flake flake.nix
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          files: |
+            dist/nix-settings-gui.bin
+            dist/nix-settings-gui-flake.tar.gz
+            dist/SHA256SUMS

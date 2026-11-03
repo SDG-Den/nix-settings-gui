@@ -307,7 +307,7 @@ which file or module the option is added to.
 ## 11. Discovery rules
 
 - Skip `flake.nix`, files whose name starts with `_`, and hidden directories.
-- A file without an `@menu` header still becomes a menu, named after the file.
+- A file without an `@menu` header is not listed as a menu.
 - Files that fail to parse are listed with an error and skipped.
 
 ## 12. Keyboard shortcuts

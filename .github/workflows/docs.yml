@@ -1,0 +1,32 @@
+name: docs
+
+on:
+  pull_request:
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check links
+        uses: lycheeverse/lychee-action@v2
+        with:
+          args: --offline --no-progress README.md docs
+      - name: Fail on placeholder strings
+        run: |
+          paths="README.md"
+          if [ -d docs ]; then
+            paths="$paths docs"
+          fi
+          if command -v rg >/dev/null 2>&1; then
+            matches=$(rg -n --no-heading -g '!notes/**' \
+              -e 'your-org' -e 'github:you/' -e 'TODO' -e 'TBD' \
+              -e 'coming soon' -e 'see defaults/schema' $paths || true)
+          else
+            matches=$(grep -RInE --exclude-dir=notes \
+              'your-org|github:you/|TODO|TBD|coming soon|see defaults/schema' $paths || true)
+          fi
+          if [ -n "$matches" ]; then
+            printf '%s\n' "$matches"
+            exit 1
+          fi

@@ -9,3 +9,7 @@ result-*
 **/.nixos-test-history
 
 target
+
+review-4*
+
+notes/

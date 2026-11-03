@@ -35,12 +35,15 @@ touches GTK widgets; everything below it is plain data.
 `scan.rs` walks the configuration root and parses each `.nix` file with `rnix`.
 It skips `flake.nix`, names starting with `_`, and hidden directories. For every
 file it finds the `@menu` header and the `@option` comments with `dsl.rs`, and
-records the source span of each value. A file with no `@menu` header still
-becomes a menu named after the file. Files that fail to parse are listed with an
-error and skipped. For dendritic files it also records which
-`flake.modules.<kind>.<name>` origins the file defines and which module origins
-it imports, plus the modules each `flake.nixosConfigurations.<host>` pulls in,
-so host filtering can follow the import graph.
+records the source span of each value. A file without an `@menu` header is not
+listed as a menu: `src/app/menu.rs` filters on `has_menu`, which `src/scan.rs`
+sets only when the header is found. A descriptor sidecar can still attach a
+record to such a file and create its menu entry (`src/descriptors.rs`). Files
+that fail to parse are listed with an error and skipped. For dendritic files it
+also records which `flake.modules.<kind>.<name>` origins the file defines and
+which module origins it imports, plus the modules each
+`flake.nixosConfigurations.<host>` pulls in, so host filtering can follow the
+import graph.
 
 Two helpers support add-option: `scan_value` reads the inner bindings of an
 attribute set so a submodule control can be built from a value, and
@@ -88,10 +91,9 @@ should read the enable flag from `osConfig` instead of redeclaring it.
 `@option` metadata has the same shape requirement. The scanner binds a comment to
 the next assignment in the same container and does not descend into a list of
 attribute sets. An annotation inside `lib.mkMerge [...]`, a list literal, `map`,
-`forEach` or `lib.optionalAttrs` is ignored. This is intentional, not a scanner
-TODO. Do not add list or apply-node descent to `scan.rs` to support it. The fix
-belongs in the module: move the assignment into a plain attribute set or a
-`lib.mkIf`-wrapped attribute set and keep lists for gated install logic only.
+`forEach` or `lib.optionalAttrs` is ignored. The fix belongs in the module: move
+the assignment into a plain attribute set or a `lib.mkIf`-wrapped attribute set
+and keep lists for gated install logic only.
 
 ## 5. Widgets
 

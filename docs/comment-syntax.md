@@ -1,13 +1,13 @@
 # Comment syntax
 
 nix-settings-gui renders a Nix configuration directory as a settings UI. Each
-`.nix` file becomes one menu. The GUI is configured entirely by ordinary Nix
-block comments, so every annotated file stays valid Nix and keeps working in any
-other Nix tooling.
+`.nix` file with an `@menu` header becomes one menu. The GUI is configured
+entirely by ordinary Nix block comments, so every annotated file stays valid Nix
+and keeps working in any other Nix tooling.
 
 There are six markers:
 
-- `/* @menu ... */` once at the top of a file, describing the menu.
+- `/* @menu ... */` once in a file, describing the menu.
 - `/* @option ... */` directly above an assignment, describing how that option
   is rendered.
 - `/* @table-item ... */` directly above a row assignment inside a table.
@@ -24,9 +24,10 @@ the file, so bodies use real Nix literals (`"strings"`, `[ lists ]`, numbers,
 
 ## 1. Menu header (`@menu`)
 
-The first `@menu` comment in a file is the menu header. It must appear before
-the module body. If a file has no header, the menu is named after the file and
-sorted alphabetically.
+A file becomes a menu only when it contains a `@menu` comment. The first
+`@menu` comment is the header, wherever it sits in the file. A file without a
+header is not listed. When the header omits `displayname`, the menu title is the
+file stem.
 
 ```nix
 /* @menu
@@ -155,14 +156,11 @@ flag from `osConfig`.
 ### Annotated assignments must not be nested inside lists
 
 `@option` binds to the assignment directly below it in the same attribute set.
-The scanner does not descend into a list of attribute sets. An annotation inside
+The scanner supports assignments in a plain attribute set. An annotation inside
 `lib.mkMerge [...]`, a list literal, `map`, `forEach` or `lib.optionalAttrs` is
 dropped, so the control is missing or renders without its label, group, order or
-gate.
-
-This is intentional. Do not add list support to the scanner, do not change
-`src/scan.rs` to accommodate it, and do not file it as a scanner bug. The
-supported fix is to change the module shape.
+gate. Change the module shape instead. The supported fix is to move the
+assignment into a plain attribute set or a `lib.mkIf`-wrapped attribute set.
 
 This fails:
 
@@ -387,7 +385,7 @@ in the application.
 | `cursor-theme` | `stylix.cursor.name` | An inline search list with decoded cursor previews for installed themes and baked preview sheets for uninstalled themes. An `Installed only` toggle hides entries that are not installed. Selecting an entry writes the theme and the package named by `packageOption`. |
 | `wallpaper` | the wallpaper option | `null` for the default themed preset, a preset name, or a path to an image. With `presetSource`, the strip starts with the themed generated presets, then the images in `wallpaperDir`. Added files are copied into `wallpaperDir` and staged with `git add`; preset tiles are not removable. |
 | `menu` | `dankMenu.menu` | an attribute set keyed by dotted id. Splits the id on `.` and renders a nestable tree; leaves are editable rows. |
-| `plugins` | `dms.plugins` | a name-keyed attribute set of `{ enable; src; settings; dir; config; }`. `settings` renders as `raw` unless annotated as a typed submodule. |
+| `plugins` | `desktop.ojuny.dux.plugins` | a name-keyed attribute set of `{ enable; src; settings; dir; config; }`. `settings` renders as `raw` unless annotated as a typed submodule. |
 | `bar` | `barConfigs` | a name-keyed attribute set with id-keyed `left`/`center`/`right` widget lists plus layout and appearance. |
 | `dock` | `dockConfigs` | the same shape as `bar`, in its own control. |
 | `users` | `users.users` | a name-keyed attribute set of accounts. Edits `description`, `hashedPassword`, `extraGroups`, `uid`, `shell`, `openssh.authorizedKeys.keys`, and an extra-options field. `wheel` is a separate sudo toggle. The add and remove actions keep at least one normal account with sudo and a password. |
