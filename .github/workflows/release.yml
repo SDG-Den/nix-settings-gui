@@ -51,6 +51,24 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Create release tag before building
+        env:
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          remote_tag=$(git ls-remote --tags origin "refs/tags/$TAG" | cut -f1)
+          if [ -n "$remote_tag" ]; then
+            git fetch origin "refs/tags/$TAG:refs/tags/$TAG"
+            existing=$(git rev-parse "$TAG^{commit}")
+            if [ "$existing" != "$GITHUB_SHA" ]; then
+              echo "Tag $TAG already points to $existing, not $GITHUB_SHA" >&2
+              exit 1
+            fi
+          else
+            git tag "$TAG" "$GITHUB_SHA"
+            git push origin "refs/tags/$TAG"
+          fi
+
+
       - uses: cachix/install-nix-action@v31
         with:
           extra_nix_config: |
@@ -117,7 +135,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.prepare.outputs.tag }}
-          target_commitish: ${{ github.sha }}
           files: |
             dist/nix-settings-gui.bin
             dist/nix-settings-gui-flake.tar.gz
