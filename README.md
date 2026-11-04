@@ -2,28 +2,15 @@
 
 ## Purpose
 
-nix-settings-gui renders an annotated Nix configuration as a GTK4 and
-libadwaita settings window. A `@menu` comment defines a menu and an `@option`
-comment defines one control, so annotated files stay valid Nix. Saves are
+nix-settings-gui renders an annotated Nix configuration as a graphical settings window. A `@menu` comment defines a menu and an `@option` comment defines one control, so annotated files stay valid Nix. Saves are
 written back as span patches, checked with `nixd`, and formatted with `nixfmt`.
-It runs on Linux and targets Dux Shell configurations, accepting the
-`desktop.ojuny.dux` and legacy `desktop.ojuny.dms` namespaces.
 
-## Status
+nix-settings-gui contains multiple custom components for ojuny, but is entirely useable on non-ojuny devices, supporting a wide variety of general modules. 
 
-Version 0.1.0. The repository has no release tag, so `Cargo.toml` and the flake
-are the only version identifiers. Linux is the only declared platform, and we
-have not verified it against a matrix of NixOS releases.
 
 ## Requirements
 
 - Nix with flakes enabled, on Linux.
-- GTK 4.10 and libadwaita 1.4 or newer, which the flake package supplies.
-- `nixd` for option types, descriptions, defaults, and enum choices.
-- `nixfmt` on `PATH` for formatting after a save.
-
-Without `nixd` the app falls back to `nix eval` and renders untyped options as
-`raw`.
 
 ## Install
 
@@ -81,12 +68,27 @@ The marker reference covers widgets, choices, tables, and templates in
   list of attribute sets, `map`, or `forEach` are dropped.
 - Freeform settings need a descriptor sidecar.
 - Changes are staged until Save, and a parse failure aborts the whole save.
-- Privilege escalation is expressed in the configured rebuild command; the app
-  does not prompt for it.
-- Files under `/nix/store` are read-only. No Home Manager module exists, and
-  the tool is Linux-only.
+
+## Releases
+
+A `v*` tag, a manual workflow run, or a commit on `main` whose title starts with
+a version such as `v0.1.0` builds `nix-settings-gui.bin` and `nix-settings-gui-flake.tar.gz`.
+
+The release flake installs the prebuilt bundle without compiling:
+
+```nix
+inputs.nix-settings-gui.url =
+  "tarball+https://github.com/ojuny-project/nix-settings-gui/releases/download/vX.Y.Z/nix-settings-gui-flake.tar.gz";
+```
+
+Then add `inputs.nix-settings-gui.packages.${pkgs.system}.nix-settings-gui` to `environment.systemPackages`.
+
+The generated flake exposes packages only. Use the source flake when you need
+the NixOS module.
+
 
 ## Documentation
+- [OPTIONS.md](OPTIONS.md) is the generated options reference.
 
 - [docs/usage.md](docs/usage.md): how to open a configuration and change values.
 - [docs/comment-syntax.md](docs/comment-syntax.md): which comments exist and what they accept.
