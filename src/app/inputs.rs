@@ -114,6 +114,7 @@ pub(super) fn update_button(app: &Rc<App>, name: &str) -> gtk::Button {
     let button = gtk::Button::builder()
         .label("Update")
         .tooltip_text(format!("Update {name}"))
+        .valign(gtk::Align::Center)
         .build();
     button.add_css_class("pill");
     let app = app.clone();
@@ -222,6 +223,12 @@ fn update_all_inputs(app: &Rc<App>, names: &[String]) {
 }
 
 pub(super) fn refresh(app: &Rc<App>) {
+    let scroll_position = app
+        .inputs_page
+        .first_child()
+        .and_then(|child| child.downcast::<gtk::ScrolledWindow>().ok())
+        .map(|window| window.vadjustment().value())
+        .unwrap_or(0.0);
     update_warning(app);
     while let Some(child) = app.inputs_page.first_child() {
         app.inputs_page.remove(&child);
@@ -367,7 +374,13 @@ pub(super) fn refresh(app: &Rc<App>) {
     }
     content.append(&add);
 
-    app.inputs_page.append(&scrolled(content));
+    let window = scrolled(content);
+    app.inputs_page.append(&window);
+    if scroll_position > 0.0 {
+        glib::timeout_add_local_once(Duration::from_millis(0), move || {
+            window.vadjustment().set_value(scroll_position);
+        });
+    }
 }
 
 fn scrolled(content: gtk::Box) -> gtk::ScrolledWindow {

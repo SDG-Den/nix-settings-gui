@@ -396,7 +396,9 @@ pub fn build(record: &Record, ctx: &BuildContext) -> Editor {
                                 picker.refresh();
                             }
                             Err(error) => {
-                                status.set_label("Could not load the Dux Modular Shell plugin registry");
+                                status.set_label(
+                                    "Could not load the Dux Modular Shell plugin registry",
+                                );
                                 status.set_tooltip_text(Some(&error));
                                 status.set_visible(true);
                                 retry.set_visible(true);
