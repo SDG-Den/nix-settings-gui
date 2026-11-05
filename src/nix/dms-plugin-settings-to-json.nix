@@ -1,4 +1,4 @@
-# Emits one Dux Shell plugin's declarative settings QML as JSON:
+# Emits one Dux Modular Shell plugin's declarative settings QML as JSON:
 # { id, settings = <text or null> }.
 # Only the requested plugin's package is read, so adding one plugin does not
 # instantiate the whole registry. The registry is found by its current name

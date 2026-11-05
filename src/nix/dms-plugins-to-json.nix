@@ -1,4 +1,4 @@
-# Emits the Dux Shell plugin registry's ids (plus metadata when available) as
+# Emits the Dux Modular Shell plugin registry's ids (plus metadata when available) as
 # JSON: { plugins = [ { id, name, description, category, repo } ]; }.
 # The registry is reached through the config flake's `dux-plugin-registry`
 # input, falling back to the legacy `dms-plugin-registry` and `dms-plugins`

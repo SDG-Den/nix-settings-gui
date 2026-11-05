@@ -193,7 +193,7 @@ pub(crate) fn widget_icon(id: &str) -> &'static str {
     }
 }
 
-/// Captions for Dux Shell 2.0 settings keys that are rendered from freeform or
+/// Captions for Dux Modular Shell 2.0 settings keys that are rendered from freeform or
 /// generated submodules and therefore have no `@option` label of their own.
 pub(crate) const SETTINGS_KEY_LABELS: &[(&str, &str)] = &[
     ("density", "Density"),

@@ -259,7 +259,7 @@ command runs.
 What the command does is up to the command. Applying a setting this way only
 changes the running session: the file is untouched until it is saved, and the
 change is gone after a reboot. Use it for settings that a service exposes over
-its own interface, such as a Dux Shell or mango IPC call.
+its own interface, such as a Dux Modular Shell or mango IPC call.
 
 ## 3. Widgets
 
@@ -483,7 +483,7 @@ dropping them. They can be re-enabled or removed from the editor. Each widget id
 appears once because the convenience options are id-keyed attrsets.
 
 Grid controls for control center widgets, dashboard cards, and weather widgets
-use the same editor. New cards use the Dux Shell default size for their id, and the
+use the same editor. New cards use the Dux Modular Shell default size for their id, and the
 editor supports add, remove, move, resize, enable, quick-tile grouping, reset
 sizes, reset selected, and clear all. `gridColumns` fixes the column count for
 the control; panel column and row counts are not stored in the card collection.

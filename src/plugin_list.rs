@@ -390,13 +390,13 @@ pub fn build(record: &Record, ctx: &BuildContext) -> Editor {
                                 fetch_registry_schemas(&picker, &ctx, &on_change);
                             }
                             Ok(_) => {
-                                status.set_label("No Dux Shell plugin registry found");
+                                status.set_label("No Dux Modular Shell plugin registry found");
                                 status.set_visible(true);
                                 retry.set_visible(true);
                                 picker.refresh();
                             }
                             Err(error) => {
-                                status.set_label("Could not load the Dux Shell plugin registry");
+                                status.set_label("Could not load the Dux Modular Shell plugin registry");
                                 status.set_tooltip_text(Some(&error));
                                 status.set_visible(true);
                                 retry.set_visible(true);

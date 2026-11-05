@@ -37,12 +37,12 @@ impl ModuleKind {
 /// Supplied by the app so the widgets stay free of nixd plumbing.
 pub type PackageSearch = Rc<dyn Fn(String, Box<dyn FnOnce(Vec<String>)>)>;
 
-/// Fetches the Dux Shell plugin registry and hands the result back on the main
+/// Fetches the Dux Modular Shell plugin registry and hands the result back on the main
 /// thread. Supplied by the app so the widget stays free of nix plumbing.
 pub type PluginRegistryHook =
     Rc<dyn Fn(Box<dyn FnOnce(Result<Vec<crate::metadata::RegistryPlugin>, String>)>)>;
 
-/// Fetches one Dux Shell plugin's declarative settings QML and hands it back on the
+/// Fetches one Dux Modular Shell plugin's declarative settings QML and hands it back on the
 /// main thread. `None` means the plugin ships no settings file.
 pub type PluginSettingsHook = Rc<dyn Fn(String, Box<dyn FnOnce(Result<Option<String>, String>)>)>;
 
@@ -125,7 +125,7 @@ pub struct BuildContext {
     pub nixos_modules: Vec<String>,
     pub hm_modules: Vec<String>,
     pub search: Option<PackageSearch>,
-    /// Fetches the Dux Shell plugin registry ids for the plugins picker.
+    /// Fetches the Dux Modular Shell plugin registry ids for the plugins picker.
     pub plugin_registry: Option<PluginRegistryHook>,
     /// Fetches one plugin's declarative settings QML.
     pub plugin_settings: Option<PluginSettingsHook>,

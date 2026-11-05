@@ -6,7 +6,7 @@ use serde::Deserialize;
 /// `nix eval` and returns one level of a flake's option set as JSON.
 const OPTIONS_TO_JSON: &str = include_str!("nix/options-to-json.nix");
 
-/// An embedded copy of the Dux Shell plugin registry extractor. It is evaluated
+/// An embedded copy of the Dux Modular Shell plugin registry extractor. It is evaluated
 /// with `nix eval` and returns the registry's plugin ids as JSON.
 const DUX_PLUGINS_TO_JSON: &str = include_str!("nix/dms-plugins-to-json.nix");
 
@@ -203,7 +203,7 @@ fn script_path() -> std::path::PathBuf {
     path
 }
 
-/// One plugin of the upstream Dux Shell plugin registry: the id as written in
+/// One plugin of the upstream Dux Modular Shell plugin registry: the id as written in
 /// configuration, plus the registry's display metadata when available.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct RegistryPlugin {
@@ -226,7 +226,7 @@ struct PluginsPayload {
     plugins: Vec<RegistryPlugin>,
 }
 
-/// The ids (and metadata) of the config flake's Dux Shell plugin registry, via
+/// The ids (and metadata) of the config flake's Dux Modular Shell plugin registry, via
 /// `nix eval` of the embedded extractor. Reads `dux-plugin-registry` first,
 /// then the legacy `dms-plugin-registry` and `dms-plugins` inputs. Empty/error
 /// when the flake has no desktop shell input.

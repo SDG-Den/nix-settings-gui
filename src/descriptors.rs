@@ -526,7 +526,7 @@ fn attach(scan: &mut ScanResult, descriptor: &Descriptor, location: AssignmentLo
             .group
             .clone()
             .filter(|group| !group.trim().is_empty())
-            .unwrap_or_else(|| "Dux Shell".to_string()),
+            .unwrap_or_else(|| "Dux Modular Shell".to_string()),
     );
     menu.spec.order = descriptor.order;
     menu.records.push(record);
