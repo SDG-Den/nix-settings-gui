@@ -1,0 +1,18 @@
+{
+  "repo": "ojuny-project/nix-settings-gui",
+  "system": "x86_64-linux",
+  "latest": "v0.1.0-hotfix-1",
+  "releases": {
+    "v0.1.0-hotfix-1": {
+      "tag": "v0.1.0-hotfix-1",
+      "version": "0.1.0-hotfix-1",
+      "packages": {
+        "nix-settings-gui": {
+          "file": "nix-settings-gui.bin",
+          "url": "https://github.com/ojuny-project/nix-settings-gui/releases/download/v0.1.0-hotfix-1/nix-settings-gui.bin",
+          "hash": "sha256-4fiCRNFKzcHcHU5r3jCi8r+OG7EtfhnZCFSwlJAfazA="
+        }
+      }
+    }
+  }
+}

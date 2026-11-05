@@ -16,7 +16,39 @@
     flake-utils,
     tinted-theming,
     ...
-  }:
+  }: let
+    binaryInfo =
+      if builtins.pathExists ./binary-url.json
+      then builtins.fromJSON (builtins.readFile ./binary-url.json)
+      else null;
+
+    desktopPostInstall = ''
+      install -Dm644 ${./org.nix_settings_gui.NixSettingsGui.desktop} "$out/share/applications/org.nix_settings_gui.NixSettingsGui.desktop"
+    '';
+
+    mkBinary = {
+      system,
+      tag ? (if binaryInfo == null then throw "nix-settings-gui: binary-url.json is missing" else binaryInfo.latest),
+      package ? "nix-settings-gui",
+    }: let
+      release =
+        if binaryInfo == null
+        then throw "nix-settings-gui: binary-url.json is missing"
+        else binaryInfo.releases.${tag} or (throw "nix-settings-gui: release '${tag}' is not recorded in binary-url.json");
+      packageInfo = release.packages.${package} or (throw "nix-settings-gui: package '${package}' is not recorded in release '${tag}'");
+      pkgs = import nixpkgs {inherit system;};
+    in
+      pkgs.callPackage ./nix/binary.nix {
+        name = package;
+        inherit (packageInfo) file;
+        info = {
+          inherit (binaryInfo) repo system;
+          inherit (release) tag version;
+          inherit (packageInfo) url hash;
+        };
+        postInstall = desktopPostInstall;
+      };
+  in
     flake-utils.lib.eachDefaultSystem (
       system: let
         pkgs = import nixpkgs {inherit system;};
@@ -91,7 +123,9 @@
         packages = {
           inherit nix-settings-gui;
           default = nix-settings-gui;
-        };
+        } // (if binaryInfo != null && binaryInfo.system == system then {
+          nix-settings-gui-binary = mkBinary {inherit system;};
+        } else {});
 
         apps.default = {
           type = "app";
@@ -128,6 +162,7 @@
       }
     )
     // {
+      lib.mkBinary = mkBinary;
       nixosModules.default = import ./modules/nixos.nix self;
       nixosModules.nix-settings-gui = import ./modules/nixos.nix self;
     };
