@@ -44,6 +44,10 @@ fn main() -> glib::ExitCode {
             return glib::ExitCode::from(2);
         }
     };
+    if args.help {
+        println!("{}", cli::HELP);
+        return glib::ExitCode::from(0);
+    }
     let application = adw::Application::builder()
         .application_id(app::APP_ID)
         .build();

@@ -339,6 +339,8 @@ fn build_ui(
         .content(&toolbar_view)
         .build();
 
+    let show_inputs_by_default = page_pattern.is_none();
+
     let app_state = Rc::new(App {
         window,
         title,
@@ -351,7 +353,7 @@ fn build_ui(
         inputs_list,
         inputs_page,
         inputs_warning,
-        showing_inputs: Cell::new(false),
+        showing_inputs: Cell::new(show_inputs_by_default),
         stack,
         nixd_banner,
         status,
@@ -434,10 +436,7 @@ fn build_ui(
         app_state
             .inputs_list
             .clone()
-            .connect_row_selected(move |_, row| {
-                if row.is_none() {
-                    return;
-                }
+            .connect_row_activated(move |_, _| {
                 app.showing_inputs.set(true);
                 app.list.unselect_all();
                 app.stack.set_visible_child_name(inputs::INPUTS_PAGE);

@@ -228,6 +228,7 @@ fn rebuild_pages(app: &Rc<App>) {
             pages.push(page);
         }
         if !app.showing_inputs.get() {
+            app.inputs_list.unselect_all();
             app.stack.set_visible_child_name(&file);
         }
         *app.current_file.borrow_mut() = file.clone();
