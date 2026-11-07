@@ -1,0 +1,23 @@
+name: ojuny-ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fast:
+    uses: ojuny-project/ojuny-ci-workflows/.github/workflows/reusable-ci.yml@main
+    with:
+      tier: fast
+      repo: nix-settings-gui
+
+  nix:
+    uses: ojuny-project/ojuny-ci-workflows/.github/workflows/reusable-ci.yml@main
+    with:
+      tier: nix
+      repo: nix-settings-gui
