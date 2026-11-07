@@ -3,7 +3,10 @@
   lib,
   stdenv,
   fetchurl,
+  bzip2,
+  gnutar,
   name,
+  program ? name,
   file,
   info,
   postInstall ? "",
@@ -27,10 +30,46 @@ stdenv.mkDerivation {
   dontUnpack = true;
   dontFixup = true;
 
+  nativeBuildInputs = [
+    bzip2
+    gnutar
+  ];
+
   installPhase = ''
     runHook preInstall
-    install -Dm755 $src $out/bin/${name}
+
+    mkdir -p "$out/libexec/${name}" "$out/bin"
+    (
+      cd "$out/libexec/${name}"
+      sh "$src" --extract >/dev/null
+    )
+
+    app_path="$(
+      sed -n 's|.* \(/nix/store/[^ ]*\)/bin/[^ ]*.*|\1|p' \
+        "$out/libexec/${name}/dat/nix/store/"*-startup | head -n1
+    )"
+    [ -n "$app_path" ] || {
+      echo "binary: could not find the bundled application path" >&2
+      exit 1
+    }
+
+    if [ -d "$out/libexec/${name}/dat$app_path/share" ]; then
+      mkdir -p "$out/share"
+      cp -r "$out/libexec/${name}/dat$app_path/share/." "$out/share/"
+      chmod -R u+w "$out/share"
+    fi
+
+    cat > "$out/bin/${program}" <<EOF
+    #!${stdenv.shell}
+    set -eu
+    cd "$out/libexec/${name}/dat"
+    . ../env
+    exec ../run "\$@"
+    EOF
+    chmod 755 "$out/bin/${program}"
+
     ${postInstall}
+
     runHook postInstall
   '';
 
@@ -38,7 +77,7 @@ stdenv.mkDerivation {
     description = "${info.repo} pre-built Linux binary (${info.tag})";
     homepage = "https://github.com/${info.repo}";
     sourceProvenance = [ lib.sourceTypes.binaryNativeCode ];
-    mainProgram = name;
+    mainProgram = program;
     platforms = [ system ];
   };
 }

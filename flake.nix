@@ -54,6 +54,7 @@
         in
         pkgs.callPackage ./nix/binary.nix {
           name = package;
+          program = packageInfo.program or package;
           inherit (packageInfo) file;
           info = {
             inherit (binaryInfo) repo system;

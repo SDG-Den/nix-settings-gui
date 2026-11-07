@@ -34,6 +34,7 @@ pub(crate) fn build_field_cell(source: &str, ctx: &BuildContext) -> Editor {
     let kind = match value::classify(source) {
         value::ValueKind::Bool => WidgetKind::Switch,
         value::ValueKind::Int | value::ValueKind::Float => WidgetKind::Spin,
+        value::ValueKind::List => WidgetKind::List,
         _ => WidgetKind::Text,
     };
     let spec = OptionSpec {
@@ -108,13 +109,27 @@ pub(crate) fn field_has_content(editor: &Editor) -> bool {
 pub(crate) fn field_nix(
     name: &str,
     editor: &Editor,
-    _orig_value: &str,
+    orig_value: &str,
     orig_present: bool,
 ) -> Option<String> {
     if !orig_present && !field_has_content(editor) {
         return None;
     }
-    Some(format!("{} = {};", attr_key(name), editor.to_nix()))
+    let value = match editor {
+        Editor::Text(entry) => match unchanged_source(orig_value, &entry.text()) {
+            Some(source) => source.to_string(),
+            None => editor.to_nix(),
+        },
+        _ => editor.to_nix(),
+    };
+    Some(format!("{} = {};", attr_key(name), value))
+}
+
+/// Reuse the original source text when a freeform field was not edited. This
+/// keeps expressions such as `config.ojuny.browser.command` and list literals
+/// from being rewritten as quoted strings.
+fn unchanged_source<'a>(orig_value: &'a str, current: &str) -> Option<&'a str> {
+    (current.trim() == orig_value.trim()).then_some(orig_value)
 }
 
 pub(crate) fn attrset_field_nix(field: &AttrsetField) -> Option<String> {
@@ -224,4 +239,23 @@ pub(crate) fn popout_button_bar() -> (gtk::Box, gtk::Button, gtk::Button) {
     bar.append(&cancel);
     bar.append(&apply);
     (bar, cancel, apply)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::unchanged_source;
+
+    #[test]
+    fn keeps_list_and_expression_sources() {
+        assert_eq!(
+            unchanged_source("[ \"brightnessctl set 5%-\" ]", "[ \"brightnessctl set 5%-\" ]"),
+            Some("[ \"brightnessctl set 5%-\" ]")
+        );
+        assert_eq!(
+            unchanged_source("config.ojuny.browser.command", "config.ojuny.browser.command"),
+            Some("config.ojuny.browser.command")
+        );
+        assert_eq!(unchanged_source("\"firefox --new-window\"", "firefox --new-window"), None);
+        assert_eq!(unchanged_source("config.ojuny.browser.command", "firefox"), None);
+    }
 }
